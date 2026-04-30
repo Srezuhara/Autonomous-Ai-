@@ -79,3 +79,5 @@ def validate():
         )
     if LLM_PROVIDER in ("ollama", "both") and not OLLAMA_BASE_URL:
         raise EnvironmentError("OLLAMA_BASE_URL is not set.")
+
+OLLAMA_MAX_TOKENS = 600

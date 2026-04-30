@@ -1,28 +1,42 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Download, RefreshCw, Trash2, FileCode2, Star, Shield, FlaskConical, Clock, Calendar
+  ArrowLeft, Download, RefreshCw, Trash2, FileCode2,
+  Star, Shield, FlaskConical, Clock, Calendar
 } from 'lucide-react';
 import { useProjectDetail } from '../hooks/useQueries';
 import { api } from '../api/client';
-import { StatusBadge } from '../components/BuildCard';
+import { StatusBadge } from '../components/shared/StatusBadge';
 import './ProjectDetail.css';
 
-function ScoreGauge({ label, value, icon }: { label: string; value: string | number | undefined; icon: React.ReactNode }) {
-  const num = typeof value === 'string' ? parseFloat(value.split('/')[0]) : (value ?? 0);
-  const max = typeof value === 'string' && value.includes('/10') ? 10 : 10;
-  const pct = Math.min(100, (num / max) * 100);
-
-  const color = pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--error)';
+function ScoreGauge({ label, value, icon }: {
+  label: string;
+  value: string | number | undefined;
+  icon: React.ReactNode;
+}) {
+  const raw = typeof value === 'string' ? parseFloat(value.split('/')[0]) : (value ?? 0);
+  const pct = Math.min(100, ((raw || 0) / 10) * 100);
+  const color = pct >= 70
+    ? 'var(--color-success)'
+    : pct >= 40
+    ? 'var(--color-warning)'
+    : 'var(--color-error)';
 
   return (
-    <div className="score-gauge glass-panel">
+    <div className="score-gauge card">
       <div className="score-gauge-header">
         {icon}
         <span>{label}</span>
       </div>
       <div className="score-gauge-value" style={{ color }}>{value ?? '—'}</div>
       <div className="score-gauge-bar">
-        <div className="score-gauge-fill" style={{ width: `${pct}%`, background: color }} />
+        <div
+          className="score-gauge-fill"
+          style={{ width: `${pct}%`, background: color }}
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        />
       </div>
     </div>
   );
@@ -47,71 +61,75 @@ export default function ProjectDetail() {
 
   if (isLoading) {
     return (
-      <div className="project-detail-container animate-fade-in">
-        <div className="skeleton-card glass-panel" style={{ height: 180 }} />
-        <div className="skeleton-card glass-panel" style={{ height: 120 }} />
-        <div className="skeleton-card glass-panel" style={{ height: 300 }} />
+      <div className="project-detail page-wrapper animate-in">
+        <div className="skeleton" style={{ height: 180 }} />
+        <div className="skeleton" style={{ height: 80 }} />
+        <div className="skeleton" style={{ height: 200 }} />
       </div>
     );
   }
 
   if (isError || !project) {
     return (
-      <div className="project-detail-container animate-fade-in">
-        <div className="empty-state glass-panel">
+      <div className="project-detail page-wrapper animate-in">
+        <div className="empty-state card">
           <h3>Project not found</h3>
-          <Link to="/dashboard" className="btn-secondary"><ArrowLeft size={16}/> Back</Link>
+          <Link to="/dashboard" className="btn btn-secondary">
+            <ArrowLeft size={15} /> Back to Dashboard
+          </Link>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="project-detail-container animate-fade-in">
+    <div className="project-detail page-wrapper animate-in">
       {/* Back */}
-      <Link to="/dashboard" className="back-link"><ArrowLeft size={16}/> Dashboard</Link>
+      <Link to="/dashboard" className="back-link">
+        <ArrowLeft size={15} /> Dashboard
+      </Link>
 
-      {/* Hero Card */}
-      <div className="pd-hero glass-panel">
+      {/* Hero */}
+      <div className="pd-hero card">
         <div className="pd-hero-left">
-          <div className="pd-app-name">{project.app_name || 'Unnamed App'}</div>
+          <h1 className="pd-app-name">{project.app_name || 'Unnamed App'}</h1>
           <p className="pd-prompt">{project.prompt}</p>
-          <div className="pd-meta-row">
+          <div className="pd-tags">
             <StatusBadge status={project.status} />
-            {project.app_type && <span className="meta-tag">{project.app_type}</span>}
-            {project.complexity && <span className="meta-tag">{project.complexity}</span>}
+            {project.app_type && <span className="tag">{project.app_type}</span>}
+            {project.complexity && <span className="tag">{project.complexity}</span>}
           </div>
         </div>
-        <div className="pd-hero-actions">
+        <div className="pd-actions">
           {project.status === 'done' && (
-            <button className="btn-primary" onClick={() => api.downloadZip(id!)} id="download-zip-btn">
-              <Download size={16} /> Download ZIP
+            <button className="btn btn-primary" onClick={() => api.downloadZip(id!)} id="download-zip-btn">
+              <Download size={15} /> Download ZIP
             </button>
           )}
-          <button className="btn-secondary" onClick={handleRebuild}>
-            <RefreshCw size={16} /> Rebuild
+          <button className="btn btn-secondary" onClick={handleRebuild}>
+            <RefreshCw size={15} /> Rebuild
           </button>
-          <button className="btn-secondary danger-btn" onClick={handleDelete}>
-            <Trash2 size={16} /> Delete
+          <button className="btn btn-danger" onClick={handleDelete}>
+            <Trash2 size={15} /> Delete
           </button>
         </div>
       </div>
 
-      {/* Time Info */}
+      {/* Time info */}
       <div className="pd-time-row">
-        <div className="glass-panel pd-time-card">
-          <Calendar size={16} className="text-muted-icon" />
+        <div className="pd-time-item card">
+          <Calendar size={14} className="pd-time-icon" />
           <span>Created: {new Date(project.created_at).toLocaleString()}</span>
         </div>
         {project.completed_at && (
-          <div className="glass-panel pd-time-card">
-            <Clock size={16} className="text-muted-icon" />
+          <div className="pd-time-item card">
+            <Clock size={14} className="pd-time-icon" />
             <span>Completed: {new Date(project.completed_at).toLocaleString()}</span>
           </div>
         )}
         {project.duration_seconds && (
-          <div className="glass-panel pd-time-card">
-            <Clock size={16} className="text-muted-icon" />
+          <div className="pd-time-item card">
+            <Clock size={14} className="pd-time-icon" />
             <span>Duration: {Math.round(project.duration_seconds)}s</span>
           </div>
         )}
@@ -119,26 +137,30 @@ export default function ProjectDetail() {
 
       {/* Scores */}
       {project.status === 'done' && (
-        <div className="pd-scores-grid">
-          <ScoreGauge label="Review Score" value={project.review_score} icon={<Star size={16} />} />
-          <ScoreGauge label="Debug Score" value={project.debug_score} icon={<Shield size={16} />} />
-          <ScoreGauge label="Test Score" value={project.test_score} icon={<FlaskConical size={16} />} />
+        <div className="pd-scores">
+          <ScoreGauge label="Review Score"  value={project.review_score}  icon={<Star size={14} />}         />
+          <ScoreGauge label="Debug Score"   value={project.debug_score}   icon={<Shield size={14} />}       />
+          <ScoreGauge label="Test Score"    value={project.test_score}    icon={<FlaskConical size={14} />} />
         </div>
       )}
 
       {/* File Tree */}
       {project.files && project.files.length > 0 && (
-        <div className="glass-panel pd-files">
-          <div className="pd-section-title">
-            <FileCode2 size={16} />
-            Generated Files <span className="file-count">{project.files.length}</span>
+        <div className="pd-files card">
+          <div className="pd-files-header">
+            <FileCode2 size={15} />
+            <span>Generated Files</span>
+            <span className="pd-file-count">{project.files.length}</span>
           </div>
           <div className="file-tree">
             {project.files.map((f, i) => (
-              <div key={i} className="file-row" style={{ animationDelay: `${i * 20}ms` }}>
-                <FileCode2 size={14} className="file-icon" />
-                <code>{f.file_path}</code>
-                {f.file_type && <span className="meta-tag">{f.file_type}</span>}
+              <div
+                key={i}
+                className="file-row"
+                style={{ animationDelay: `${i * 18}ms` }}
+              >
+                <FileCode2 size={13} className="file-row-icon" />
+                <code className="file-row-path">{f}</code>
               </div>
             ))}
           </div>

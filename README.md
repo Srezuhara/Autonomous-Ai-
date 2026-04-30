@@ -1,105 +1,92 @@
-# AI App Builder — Stage 1, Phase 1 & 2
+# AI App Builder
 
-> CLI AI system that generates full applications from a prompt.
+An intelligent full-stack application generator that uses AI agents to automatically design, develop, test, and deploy web applications from natural language prompts.
 
----
+## 🚀 Features
 
-## Project Structure
+- **Multi-Agent Pipeline:** Intent analysis, planning, architecture design, code generation
+- **Full-Stack Generation:** FastAPI backend + React frontend with Tailwind CSS
+- **Quality Assurance:** Autonomous debugging, code review, and testing
+- **Real-Time Progress:** WebSocket updates and build status tracking
+- **Project Management:** ZIP downloads, statistics, and project history
 
-```
-ai_app_builder/
-├── agents/             # AI agents (planner, coder, reviewer…)
-├── tools/              # File writer, code executor, installer
-├── memory/             # ChromaDB vector memory
-├── prompts/            # System prompt templates
-├── generated_projects/ # All AI-generated apps land here
-├── main.py             # CLI entry point
-├── config.py           # Central config (reads .env)
-├── llm_client.py       # Unified Groq + Ollama interface
-├── requirements.txt
-└── .env.example
-```
+## 📦 Tech Stack
 
----
+**Backend:**
+- FastAPI (Python 3.10+)
+- SQLite with SQLAlchemy
+- LLM Integration (Groq API)
 
-## Setup (do this once)
+**Frontend:**
+- React 19 with TypeScript
+- Tailwind CSS 4
+- React Router v7
+- Vite (build tool)
 
-### 1 — Clone / create folder
+## 🛠️ Setup
+
+### Backend Setup
 ```bash
-cd ai_app_builder
-```
-
-### 2 — Python virtual environment
-```bash
+cd backend
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-```
-
-### 3 — Install dependencies
-```bash
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-### 4 — Configure environment
-```bash
+# Configure environment
 cp .env.example .env
-# Open .env and add your GROQ_API_KEY
-# Get one free at https://console.groq.com
+# Edit .env with your Groq API key
+
+# Start server
+uvicorn main:app --reload
 ```
 
-### 5 — (Optional) Install local Ollama model for fallback
+### Frontend Setup
 ```bash
-# Install Ollama: https://ollama.com
-ollama pull deepseek-coder:6.7b
+cd frontend
+npm install
+npm run dev
 ```
+
+Server: `http://localhost:8000`
+Frontend: `http://localhost:5173`
+
+## 📚 Project Structure
+
+## 🔑 Environment Variables
+
+Create `.env`:
+
+## 🔄 Build Pipeline (9 Steps)
+
+1. Intent Analysis → Parse user requirements
+2. Planning → Create build roadmap
+3. Architecture → Design folder structure
+4. Backend Dev → Generate FastAPI code
+5. Frontend Dev → Generate React code
+6. Debugging → Fix import errors
+7. Review → Code quality check
+8. Testing → Generate & run pytest
+9. Documentation → README generation
+
+## 📡 API Endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST   | `/projects/` | Start new build |
+| GET    | `/projects/` | List all projects |
+| GET    | `/projects/{id}` | Project details |
+| GET    | `/jobs/{id}/status` | Build progress |
+| WS     | `/ws/jobs/{id}` | Real-time updates |
+| GET    | `/projects/{id}/download` | ZIP download |
+| GET    | `/stats` | Platform statistics |
+
+## 📝 License
+
+MIT
+
+## 🤝 Contributing
+
+Contributions welcome! Please follow the coding standards and include tests.
 
 ---
 
-## Verify Setup
-
-```bash
-# Check config loads correctly
-python main.py
-
-# Smoke-test the LLM client (calls the real API)
-python llm_client.py
-```
-
-Expected output:
-```
-=== Text test ===
-Hello! How can I assist you today?
-
-=== Code test ===
-def fibonacci(n):
-    ...
-```
-
----
-
-## LLM Provider Modes
-
-Set `LLM_PROVIDER` in your `.env`:
-
-| Value    | Behaviour                              |
-|----------|----------------------------------------|
-| `groq`   | Groq only (fast, requires API key)     |
-| `ollama` | Ollama only (local, no key needed)     |
-| `both`   | Groq first → falls back to Ollama      |
-
----
-
-## What's Next
-
-| Phase | Description |
-|-------|-------------|
-| ✅ 1 | Environment setup |
-| ✅ 2 | Project structure |
-| ✅ 3 | LLM interface (llm_client.py) |
-| ⬜ 4 | Tool system (file writer, code executor) |
-| ⬜ 5 | Planning agents |
-| ⬜ 6 | Code generation agents |
-| ⬜ 7 | Autonomous debugging loop |
-| ⬜ 8 | Testing & review agents |
-| ⬜ 9 | Documentation agent |
-| ⬜ 10 | Rich CLI interface |

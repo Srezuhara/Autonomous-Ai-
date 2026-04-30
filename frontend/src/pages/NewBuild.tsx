@@ -1,15 +1,15 @@
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Send, X, Lightbulb, Code2, Globe, Terminal, Database } from 'lucide-react';
+import { Sparkles, Send, X, Lightbulb, Globe, Terminal, Code2, Database } from 'lucide-react';
 import { api } from '../api/client';
 import './NewBuild.css';
 
-const EXAMPLE_PROMPTS = [
-  { icon: <Globe size={16} />, label: 'Web App', text: 'A React task manager app with drag-and-drop boards, due dates, and local storage persistence.' },
-  { icon: <Terminal size={16} />, label: 'CLI Tool', text: 'A Python CLI tool that renames files in bulk using regex patterns with a dry-run preview mode.' },
-  { icon: <Code2 size={16} />, label: 'API', text: 'A FastAPI REST service for a URL shortener with SQLite storage, analytics, and custom slugs.' },
-  { icon: <Database size={16} />, label: 'Data Script', text: 'A Python script that fetches stock prices from Yahoo Finance and generates a CSV report with charts.' },
-];
+const EXAMPLES = [
+  { icon: Globe,    label: 'Web App',     text: 'A React task manager app with drag-and-drop boards, due dates, and local storage persistence.' },
+  { icon: Terminal, label: 'CLI Tool',    text: 'A Python CLI tool that renames files in bulk using regex patterns with a dry-run preview mode.' },
+  { icon: Code2,    label: 'REST API',    text: 'A FastAPI URL shortener with SQLite storage, analytics dashboard, and custom slug support.' },
+  { icon: Database, label: 'Data Script', text: 'A Python script that fetches stock prices from Yahoo Finance and generates a CSV report with charts.' },
+] as const;
 
 const MAX_CHARS = 2000;
 
@@ -31,103 +31,104 @@ export default function NewBuild() {
     try {
       const res = await api.createProject(prompt.trim());
       navigate(`/build/${res.build_id}`);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to start build. Is the backend running?');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to start build. Is the backend running?';
+      setError(message);
       setIsSubmitting(false);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      handleSubmit();
-    }
-  };
-
-  const applyExample = (text: string) => {
-    setPrompt(text);
-    textareaRef.current?.focus();
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSubmit();
   };
 
   return (
-    <div className="new-build-container animate-fade-in">
+    <div className="new-build page-wrapper animate-in">
+      {/* Header */}
       <div className="new-build-header">
-        <div className="nb-badge">
-          <Sparkles size={14} /> AI App Builder
+        <div className="new-build-badge">
+          <Sparkles size={13} />
+          9-Agent AI Pipeline
         </div>
-        <h1>Describe your application</h1>
-        <p className="page-subtitle">
-          The 9-agent pipeline will architect, code, review, and test your app autonomously.
+        <h1 className="new-build-title">Describe your application</h1>
+        <p className="new-build-subtitle">
+          The pipeline will architect, code, review, debug, and test your app autonomously.
         </p>
       </div>
 
       {/* Prompt Area */}
-      <div className={`prompt-card glass-panel ${isOverLimit ? 'over-limit' : ''}`}>
+      <div className={`prompt-card card${isOverLimit ? ' prompt-card--over' : ''}`}>
         <textarea
           ref={textareaRef}
           className="prompt-textarea"
-          placeholder="e.g. A Python FastAPI backend for a blog platform with user auth, posts, comments and a SQLite database..."
+          placeholder="e.g. A FastAPI backend for a blog platform with user auth, posts, comments, and a SQLite database..."
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
-          rows={8}
-          maxLength={MAX_CHARS + 50}
+          rows={7}
           disabled={isSubmitting}
+          aria-label="App description prompt"
           id="build-prompt-input"
         />
         <div className="prompt-footer">
-          <span className={`char-count ${charsLeft < 100 ? 'warn' : ''} ${isOverLimit ? 'error' : ''}`}>
-            {charsLeft < 0 ? `${Math.abs(charsLeft)} over limit` : `${charsLeft} chars left`}
+          <span className={`char-count${charsLeft < 100 ? ' char-count--warn' : ''}${isOverLimit ? ' char-count--error' : ''}`}>
+            {isOverLimit ? `${Math.abs(charsLeft)} over limit` : `${charsLeft} chars left`}
           </span>
           <div className="prompt-actions">
             {prompt && (
-              <button className="btn-secondary icon-btn" onClick={() => setPrompt('')} title="Clear">
-                <X size={16} />
+              <button
+                className="btn btn-ghost btn-icon"
+                onClick={() => { setPrompt(''); textareaRef.current?.focus(); }}
+                aria-label="Clear prompt"
+              >
+                <X size={15} />
               </button>
             )}
             <button
-              className="btn-primary submit-btn"
+              className="btn btn-primary"
               onClick={handleSubmit}
               disabled={!canSubmit}
               id="start-build-btn"
             >
-              {isSubmitting ? (
-                <span className="submitting-inner">
-                  <span className="spinner" />
-                  Launching agents…
-                </span>
-              ) : (
-                <><Send size={16} /> Build App</>
-              )}
+              {isSubmitting
+                ? <><div className="spinner" /> Launching agents…</>
+                : <><Send size={15} /> Build App</>
+              }
             </button>
           </div>
         </div>
       </div>
 
+      {/* Error */}
       {error && (
-        <div className="error-banner glass-panel">
-          <X size={16} className="text-error" />
+        <div className="new-build-error card" role="alert">
+          <X size={15} style={{ color: 'var(--color-error)', flexShrink: 0 }} />
           <span>{error}</span>
         </div>
       )}
 
-      <div className="hint-row">
-        <span><strong>Tip:</strong> Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span>
-      </div>
+      <p className="new-build-hint">
+        Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit
+      </p>
 
-      {/* Example Prompts */}
+      {/* Examples */}
       <div className="examples-section">
         <div className="examples-heading">
-          <Lightbulb size={16} className="text-warning" />
+          <Lightbulb size={14} style={{ color: 'var(--color-warning)' }} />
           <span>Example prompts</span>
         </div>
         <div className="examples-grid">
-          {EXAMPLE_PROMPTS.map((ex) => (
-            <button key={ex.label} className="example-card glass-panel" onClick={() => applyExample(ex.text)}>
-              <div className="example-label">
-                {ex.icon}
-                <span>{ex.label}</span>
+          {EXAMPLES.map(({ icon: Icon, label, text }) => (
+            <button
+              key={label}
+              className="example-card card"
+              onClick={() => { setPrompt(text); textareaRef.current?.focus(); }}
+            >
+              <div className="example-card-label">
+                <Icon size={14} />
+                <span>{label}</span>
               </div>
-              <p>{ex.text}</p>
+              <p className="example-card-text">{text}</p>
             </button>
           ))}
         </div>
