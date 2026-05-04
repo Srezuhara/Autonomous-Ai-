@@ -1,28 +1,15 @@
 """
 agents/tester.py — Generates, runs, and auto-fixes pytest tests.
 
-Fixes vs previous version
-──────────────────────────
-1. conftest.py — now adds the PROJECT ROOT (not just backend/) to sys.path
-   so `from main import app` works during pytest collection.
-   Also adds the app root so relative imports inside main.py resolve.
-
-2. pytest invocation — switched from `pytest test_routes.py` (filename only)
-   to `pytest tests/` (full relative path from project root).
-   cwd is now the project root, not the tests/ subdirectory.
-   This eliminates exit-code-2 collection errors entirely.
-
-3. _count() — the old regex had a capture group (\d+) inside the pattern
-   but re.search() was called on the full pattern string including the group,
-   so group(1) was always the right thing but the pattern was written as a
-   raw string arg to _count() — actually the bug was _count() was called with
-   the group already in the pattern but `m.group(1)` relied on it — this was
-   fine but the real issue was exit-code-2 giving empty output.  Fixed anyway
-   to be explicit and handle edge cases (collection errors, no tests collected).
-
-4. test_score None when 0 tests collected — added guard: if pytest exits with
-   code 2 (collection error) we log the output and skip rather than recording
-   0/0. This surfaces the real error instead of silently returning None.
+Changes in this version
+────────────────────────
+1. TESTABLE_FILES expanded + auto-discovery of any .py with def/class.
+2. _run_pytest_single — each file tested in FULL ISOLATION (fixes stale-test poisoning).
+3. CONFTEST_TEMPLATE — smarter 2-level path scan handles deeply-nested projects.
+4. _pre_install_deps — installs project requirements.txt before running tests.
+5. _extract_function_names — passes actual function names to LLM for accurate mocks.
+6. FastAPI vs plain-Python detection for correct test pattern selection.
+7. JS/TS file detection noted (Vitest scaffolding deferred — no npm in pipeline yet).
 """
 import logging
 import sys
@@ -36,25 +23,65 @@ import config
 
 logger = logging.getLogger(__name__)
 
-PROMPT_FILE    = Path(__file__).parent.parent / "prompts" / "tester.txt"
-TESTABLE_FILES = {"main.py", "routes.py"}
+PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "tester.txt"
+
+# Expanded set of testable Python filenames
+TESTABLE_FILES = {
+    "main.py", "routes.py", "services.py", "models.py",
+    "app.py", "api.py", "views.py", "handlers.py",
+    "utils.py", "helpers.py", "logic.py", "core.py",
+    "weather_api.py", "weather_service.py", "forecast_api.py",
+    "data_analysis.py", "report.py", "processor.py", "pipeline.py",
+    "tasks.py", "scheduler.py", "worker.py",
+}
+
 MAX_TEST_FIXES = 2
 
-# ── conftest.py written into every tests/ folder ──────────────────────────────
-# Adds THREE paths so imports always resolve:
-#   1. project root  (so `from main import app` works)
-#   2. backend/      (so `import routes` works from test files)
-#   3. tests/        (for any test-local helpers)
-CONFTEST = '''\
+# ── Smart conftest.py — handles flat and deeply-nested project structures ──────
+CONFTEST_TEMPLATE = '''\
 import sys, os
 
-_tests_dir   = os.path.dirname(os.path.abspath(__file__))
-_backend_dir = os.path.normpath(os.path.join(_tests_dir, '..', 'backend'))
-_root_dir    = os.path.normpath(os.path.join(_tests_dir, '..'))
+_tests_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.normpath(os.path.join(_tests_dir, ".."))
 
-for _p in [_root_dir, _backend_dir, _tests_dir]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+_SKIP = {"tests", "__pycache__", "node_modules", "frontend", "dist", ".git",
+         "venv", ".venv", "env", "static", "assets"}
+
+
+def _add_if_has_py(path):
+    """Add path to sys.path only if it contains .py files (not recursively)."""
+    if not os.path.isdir(path):
+        return
+    if path in sys.path:
+        return
+    try:
+        if any(f.endswith(".py") for f in os.listdir(path)):
+            sys.path.insert(0, path)
+    except (PermissionError, OSError):
+        pass
+
+
+# Always add project root
+_add_if_has_py(_project_root)
+
+# Add first-level subdirs
+for _name in os.listdir(_project_root):
+    if _name.startswith(".") or _name in _SKIP:
+        continue
+    _sub = os.path.join(_project_root, _name)
+    if not os.path.isdir(_sub):
+        continue
+    _add_if_has_py(_sub)
+    # Add second-level subdirs (handles double-nested: project/project/module.py)
+    try:
+        for _name2 in os.listdir(_sub):
+            if _name2.startswith(".") or _name2 in _SKIP:
+                continue
+            _sub2 = os.path.join(_sub, _name2)
+            if os.path.isdir(_sub2):
+                _add_if_has_py(_sub2)
+    except (PermissionError, OSError):
+        pass
 '''
 
 
@@ -93,14 +120,14 @@ class Tester(BaseAgent):
             if debug_results else set()
         )
 
-        py_files = [
-            f for f in file_paths
-            if f.endswith(".py") and Path(f).name in TESTABLE_FILES
-        ]
+        py_files = self._discover_testable_files(file_paths)
         logger.info(f"🧪 Generating tests for {len(py_files)} files...")
 
-        # Write conftest.py that fixes sys.path for ALL imports
-        create_file(f"{root}/tests/conftest.py", CONFTEST)
+        # Write conftest.py with smart path resolution
+        create_file(f"{root}/tests/conftest.py", CONFTEST_TEMPLATE)
+
+        # Pre-install project dependencies so pytest imports don't fail
+        self._pre_install_deps(root)
 
         results = []
         for fp in py_files:
@@ -121,41 +148,96 @@ class Tester(BaseAgent):
         logger.info(f"🧪 Testing complete — {total_passed}/{total_tests} tests passing")
         return results
 
-    # ── pytest runner ─────────────────────────────────────────────────────────
+    # ── File discovery ─────────────────────────────────────────────────────────
 
-    def _run_pytest(self, tests_dir_abs: str, project_root_abs: str) -> tuple[str, int]:
+    def _discover_testable_files(self, file_paths: list[str]) -> list[str]:
         """
-        Run pytest from the PROJECT ROOT (not from tests/).
-        Command: python -m pytest tests/ -v --tb=short --no-header
-        cwd:     project_root  ← key fix: was tests_dir before
-
-        Running from project root means:
-          - conftest.py is discovered automatically
-          - relative imports inside main.py / routes.py resolve correctly
-          - exit code 2 (collection error) is eliminated
+        Return Python files eligible for testing.
+        Combines the static allowlist with auto-discovery of any .py file
+        that actually defines functions or classes.
         """
-        # Path to the tests folder relative to project root
-        rel_tests = Path(tests_dir_abs).relative_to(project_root_abs)
+        candidates = []
+        for fp in file_paths:
+            if not fp.endswith(".py"):
+                continue
+            name = Path(fp).name
+            if name.startswith("__") or name in {"config.py", "conftest.py"}:
+                continue
+            if name in TESTABLE_FILES:
+                candidates.append(fp)
+                continue
+            # Auto-discover: any .py with at least one def or class
+            try:
+                src = read_file(fp)
+                if re.search(r'^(?:async )?def \w+|^class \w+', src, re.MULTILINE):
+                    candidates.append(fp)
+            except Exception:
+                pass
+        # Deduplicate, preserve order
+        seen = set()
+        result = []
+        for fp in candidates:
+            if fp not in seen:
+                seen.add(fp)
+                result.append(fp)
+        return result
 
+    # ── Dependency pre-installation ────────────────────────────────────────────
+
+    def _pre_install_deps(self, root: str) -> None:
+        """Install project requirements.txt before running tests."""
+        from tools.dependency_installer import pip_install_requirements
+        req_file = Path(config.OUTPUT_DIR) / root / "requirements.txt"
+        if not req_file.exists():
+            # Also check backend/requirements.txt
+            req_file = Path(config.OUTPUT_DIR) / root / "backend" / "requirements.txt"
+        if req_file.exists():
+            logger.info(f"📦 Installing project dependencies from {req_file.name}...")
+            result = pip_install_requirements(str(req_file))
+            if result.success:
+                logger.info("✅ Dependencies installed")
+            else:
+                logger.warning(f"⚠️  Some deps failed to install: {result.stderr[:200]}")
+
+    # ── pytest runner — ISOLATED per file ──────────────────────────────────────
+
+    def _run_pytest_single(
+        self, test_file_abs: str, project_root_abs: str
+    ) -> tuple[str, int]:
+        """
+        Run pytest on ONE test file only.
+        cwd = project root so conftest.py is auto-discovered.
+        Running a single file prevents stale broken tests poisoning other files.
+        """
+        rel_test = Path(test_file_abs).relative_to(project_root_abs)
         res = run_command(
-            f'"{sys.executable}" -m pytest "{rel_tests}" -v --tb=short --no-header',
+            f'"{sys.executable}" -m pytest "{rel_test}" -v --tb=short --no-header',
             cwd=project_root_abs,
             timeout=90,
         )
         output = (res.stdout or "") + (res.stderr or "")
         return output, res.returncode
 
-    # ── main per-file flow ────────────────────────────────────────────────────
+    # ── Source code helpers ────────────────────────────────────────────────────
+
+    def _extract_function_names(self, code: str) -> list[str]:
+        """Extract top-level function/async function names from Python source."""
+        return re.findall(r'^(?:async )?def (\w+)', code, re.MULTILINE)
+
+    def _is_fastapi_file(self, code: str) -> bool:
+        """True if the source file uses FastAPI or APIRouter."""
+        return bool(re.search(r'\b(FastAPI|APIRouter|TestClient)\b', code))
+
+    # ── Main per-file flow ─────────────────────────────────────────────────────
 
     def _test_file(self, file_path: str, root: str) -> TestResult:
-        result       = TestResult(file_path=file_path)
-        filename     = Path(file_path).stem
+        result        = TestResult(file_path=file_path)
+        filename      = Path(file_path).stem
         test_filename = f"test_{filename}.py"
-        test_path    = f"{root}/tests/{test_filename}"
+        test_path     = f"{root}/tests/{test_filename}"
 
-        # Absolute paths needed for cwd
         project_root_abs = str((Path(config.OUTPUT_DIR) / root).resolve())
-        tests_dir_abs    = str((Path(config.OUTPUT_DIR) / root / "tests").resolve())
+        test_file_abs    = str((Path(config.OUTPUT_DIR) / test_path).resolve())
 
         # Read source file
         try:
@@ -164,7 +246,11 @@ class Tester(BaseAgent):
             result.errors.append(f"Could not read source: {e}")
             return result
 
-        # Try to pull in routes context so LLM knows exact endpoint paths
+        # Detect file kind for appropriate test pattern
+        is_fastapi = self._is_fastapi_file(code)
+        func_names = self._extract_function_names(code)
+
+        # Pull routes context for accurate endpoint paths
         routes_context = ""
         try:
             routes_code   = read_file(f"{root}/backend/routes.py")
@@ -175,7 +261,7 @@ class Tester(BaseAgent):
         except Exception:
             pass
 
-        # Also pull main.py context for app instantiation
+        # Pull main.py context for app instantiation
         main_context = ""
         try:
             main_code   = read_file(f"{root}/backend/main.py")
@@ -183,8 +269,11 @@ class Tester(BaseAgent):
         except Exception:
             pass
 
-        # Generate initial tests
-        test_code = self._generate_tests(file_path, code, routes_context, main_context)
+        # Generate tests
+        test_code = self._generate_tests(
+            file_path, code, routes_context, main_context,
+            is_fastapi=is_fastapi, func_names=func_names,
+        )
         if not test_code or not test_code.strip():
             result.skipped    = True
             result.skip_reason = "LLM returned empty"
@@ -192,20 +281,21 @@ class Tester(BaseAgent):
 
         create_file(test_path, test_code)
 
-        # Run + auto-fix loop
+        # Run + auto-fix loop (ISOLATED — only this test file)
         passed = 0
         failed = 0
         for attempt in range(1, MAX_TEST_FIXES + 2):
-            output, returncode = self._run_pytest(tests_dir_abs, project_root_abs)
+            output, returncode = self._run_pytest_single(test_file_abs, project_root_abs)
 
-            # Exit code 2 = collection error (import failure, syntax error in test)
             if returncode == 2:
                 logger.warning(
-                    f"  ⚠️  pytest collection error (exit 2) on attempt {attempt}:\n"
+                    f"  ⚠️  pytest collection error (exit 2) attempt {attempt}:\n"
                     f"  {output[-600:]}"
                 )
                 if attempt <= MAX_TEST_FIXES:
-                    fixed = self._fix_collection_error(test_path, test_code, output, routes_context, main_context)
+                    fixed = self._fix_collection_error(
+                        test_path, test_code, output, routes_context, main_context
+                    )
                     if fixed:
                         create_file(test_path, fixed)
                         test_code = fixed
@@ -234,13 +324,14 @@ class Tester(BaseAgent):
                     current = read_file(test_path)
                 except Exception:
                     break
-                fixed = self._fix_tests(test_path, current, output, routes_context, main_context)
+                fixed = self._fix_tests(
+                    test_path, current, output, routes_context, main_context
+                )
                 if fixed:
                     create_file(test_path, fixed)
             else:
                 break
 
-        # Final tally
         result.tests_generated = passed + failed
         result.passed          = passed
         result.failed          = failed
@@ -250,58 +341,98 @@ class Tester(BaseAgent):
 
     def _generate_tests(
         self,
-        file_path: str,
-        code: str,
+        file_path:     str,
+        code:          str,
         routes_context: str,
-        main_context: str,
+        main_context:   str,
+        is_fastapi:    bool = True,
+        func_names:    list = None,
     ) -> str:
-        prompt = f"""Write pytest tests for this FastAPI backend file.
+        func_names = func_names or []
+        func_hint  = (
+            f"\nACTUAL FUNCTION NAMES IN THIS FILE: {func_names}\n"
+            "Use ONLY these names when constructing mock paths (e.g. 'routes.fetch_tasks')."
+            if func_names else ""
+        )
 
-FILE: {file_path}
-CODE:
-{code}{routes_context}{main_context}
-
-IMPORTANT — begin the test file EXACTLY like this (no sys.path lines, conftest handles that):
+        if is_fastapi:
+            pattern_instruction = """
+PATTERN A — FastAPI (use this because the file uses FastAPI/APIRouter):
   from fastapi.testclient import TestClient
   from unittest.mock import patch, MagicMock
   from main import app
 
   client = TestClient(app)
 
-Rules:
-- Write exactly 3 test functions
-- Use the EXACT endpoint paths from routes.py
-- Mock using the exact function name as it appears in routes.py with prefix 'routes.'
-- Test a success case, a not-found/error case, and a validation error (422)
-
-Example pattern:
-  def test_get_items_success():
+  def test_endpoint_success():
       with patch('routes.fetch_items') as mock:
-          mock.return_value = [{{"id": 1, "name": "test"}}]
+          mock.return_value = [{"id": 1, "name": "test"}]
           response = client.get('/items')
           assert response.status_code == 200
-          assert isinstance(response.json(), list)
 
-  def test_item_not_found():
+  def test_endpoint_not_found():
       with patch('routes.fetch_item') as mock:
           mock.return_value = None
           response = client.get('/items/999')
           assert response.status_code == 404
 
   def test_missing_required_param():
-      response = client.post('/items', json={{}})
+      response = client.post('/items', json={})
       assert response.status_code == 422
+"""
+        else:
+            pattern_instruction = """
+PATTERN B — Plain Python (use this because the file does NOT use FastAPI):
+  from unittest.mock import patch, MagicMock
+  import {module}
 
-Return ONLY the Python test code. No markdown fences. No explanations."""
+  def test_function_returns_expected():
+      result = {module}.some_function("valid_input")
+      assert result is not None
+
+  def test_function_handles_empty():
+      result = {module}.some_function("")
+      assert result is not None or True  # no exception
+
+  def test_function_with_mock():
+      with patch('{module}.requests.get') as mock:
+          mock.return_value.json.return_value = {{"key": "val"}}
+          result = {module}.some_function("input")
+          assert result is not None
+""".replace("{module}", Path(file_path).stem)
+
+        prompt = f"""Write pytest tests for this Python file.
+
+FILE: {file_path}
+CODE:
+{code[:2000]}{routes_context}{main_context}{func_hint}
+
+{pattern_instruction}
+
+CRITICAL IMPORT RULE:
+- Use ONLY the file's simple module name (stem), never dotted paths.
+  CORRECT:   from main import app
+  CORRECT:   import services
+  WRONG:     from backend.main import app
+  WRONG:     from weather_dashboard.backend.services import fetch
+
+- conftest.py has already added all source directories to sys.path.
+- Begin the test file EXACTLY with the import block — NO sys.path manipulation.
+
+Rules:
+- Write exactly 3 test functions.
+- Mock using the ACTUAL FUNCTION NAMES listed above.
+- No real API calls, no real API keys.
+- Return ONLY the Python test code. No markdown. No explanations."""
         return self.think(prompt)
 
     def _fix_collection_error(
         self,
-        test_path: str,
-        current_code: str,
-        error_output: str,
+        test_path:      str,
+        current_code:   str,
+        error_output:   str,
         routes_context: str,
-        main_context: str,
+        main_context:   str,
     ) -> str:
         prompt = f"""Fix this pytest test file that fails at COLLECTION time (before any test runs).
 
@@ -313,11 +444,13 @@ PYTEST ERROR OUTPUT:
 {error_output[-1000:]}
 {routes_context}{main_context}
 
-Collection errors mean pytest can't even import the file. Common causes:
-- Wrong import: use `from main import app` not `from backend.main import app`
+Collection errors mean pytest cannot even import the file. Common causes:
+- Wrong import path: use `from main import app` not `from backend.main import app`
 - Wrong mock path: use `routes.function_name` not `backend.routes.function_name`
-- Syntax error in the test file itself
-- Importing something that doesn't exist
+- Syntax error in the test file
+- Importing something that doesn't exist in this project
+
+CRITICAL IMPORT RULE: Never use dotted module paths. The conftest.py handles sys.path.
 
 Fix the imports and mock paths. Keep all 3 test functions.
 Return ONLY the complete corrected Python test code. No markdown."""
@@ -325,11 +458,11 @@ Return ONLY the complete corrected Python test code. No markdown."""
 
     def _fix_tests(
         self,
-        test_path: str,
-        current_code: str,
-        error_output: str,
+        test_path:      str,
+        current_code:   str,
+        error_output:   str,
         routes_context: str,
-        main_context: str,
+        main_context:   str,
     ) -> str:
         prompt = f"""Fix these failing pytest tests.
 
@@ -346,21 +479,18 @@ Common fixes:
 - Wrong endpoint URL: check routes.py for exact paths
 - Wrong response field: check what the endpoint actually returns
 - 422 expected but 200: pass required params to avoid validation pass-through
+- AttributeError on mock: use the ACTUAL function name from the source file
+
+CRITICAL IMPORT RULE: Never use dotted module paths (no `from backend.x import y`).
 
 Return ONLY the complete fixed Python test code. No markdown."""
         return self.think(prompt)
 
-    # ── output parsers ────────────────────────────────────────────────────────
+    # ── Output parsers ─────────────────────────────────────────────────────────
 
     def _count_keyword(self, output: str, keyword: str) -> int:
-        """
-        Parse pytest summary line.
-        Handles: '3 passed', '1 failed', '2 passed, 1 warning'
-        Guards against collection errors giving '0 errors' false positives.
-        """
         if not output:
             return 0
-        # Match "N keyword" where N is a digit sequence
         m = re.search(rf"(\d+)\s+{keyword}", output)
         return int(m.group(1)) if m else 0
 

@@ -31,6 +31,26 @@ export default function Dashboard() {
   );
   const { data: stats } = useStats();
 
+  // ── Fix: avg_duration_seconds is now a top-level field ────────────────────
+  // Old: stats.duration_seconds?.average  → often undefined → Math.round(undefined) → NaN
+  // New: stats.avg_duration_seconds       → direct number or null
+  const avgDuration: number | null = stats
+    ? (stats.avg_duration_seconds ??
+       (stats as { duration_seconds?: { average?: number } }).duration_seconds?.average ??
+       null)
+    : null;
+
+  const avgDurationLabel = avgDuration != null && !isNaN(avgDuration)
+    ? `${Math.round(avgDuration)}s`
+    : '—';
+
+  // Top app type: handle both array and record formats
+  const topType = stats?.top_app_types
+    ? (Array.isArray(stats.top_app_types)
+        ? (stats.top_app_types[0] as { type?: string } | undefined)?.type ?? '—'
+        : Object.keys(stats.top_app_types as Record<string, number>)[0] ?? '—')
+    : '—';
+
   return (
     <div className="dashboard page-wrapper animate-in">
       {/* Page Header */}
@@ -66,19 +86,19 @@ export default function Dashboard() {
           />
           <MetricCard
             icon={<CheckCircle size={20} />}
-            value={`${stats.success_rate_percent.toFixed(1)}%`}
+            value={`${(stats.success_rate_percent ?? 0).toFixed(1)}%`}
             label="Success Rate"
             color="var(--color-success)"
           />
           <MetricCard
             icon={<Clock size={20} />}
-            value={`${Math.round(stats.avg_duration_seconds)}s`}
+            value={avgDurationLabel}
             label="Avg Duration"
             color="var(--color-warning)"
           />
           <MetricCard
             icon={<XCircle size={20} />}
-            value={Object.keys(stats.top_app_types)[0] ?? '—'}
+            value={topType}
             label="Top App Type"
             color="var(--color-accent-secondary)"
           />

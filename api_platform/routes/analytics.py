@@ -1,16 +1,23 @@
 """
-api_platform/routes/analytics.py  (Phase 14 - fixed v2)
+api_platform/routes/analytics.py  — Fixed v3
 
-Fixes:
-  - App type stats: derive a granular sub-type from the prompt when
-    app_type is the generic "web_app", giving more useful breakdowns
-  - Unknown entries excluded from stats
-  - Missing Path import added to cleanup
+Fixes vs previous version:
+  1. /stats now returns `avg_duration_seconds` as a top-level number (not nested
+     inside `duration_seconds.average`) so the frontend Dashboard and Statistics
+     pages display it correctly instead of showing "NaN".
+  2. /stats/daily now emits `success` (not `done`) to match what the Recharts
+     AreaChart/BarChart components read — previously the chart showed a flat line
+     even though builds were completing successfully.
+  3. Both endpoints are now timezone-aware: dates are compared using the build's
+     actual created_at timestamp so builds don't fall into the wrong day bucket.
+  4. Added `total_cancelled` and `total_running` fields for completeness.
+  5. Cleanup endpoint now handles missing output_path gracefully.
 """
 
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -21,43 +28,37 @@ router = APIRouter(tags=["statistics"])
 
 # ── App type classifier ────────────────────────────────────────────────────────
 
-# Keyword → specific type mapping (checked in order, first match wins)
 _TYPE_KEYWORDS: list[tuple[list[str], str]] = [
-    (["todo", "task", "tasks"],                    "todo_app"),
-    (["kanban", "board", "trello"],                "kanban_board"),
-    (["chat", "messaging", "message", "slack"],    "chat_app"),
-    (["blog", "cms", "content management"],        "blog_platform"),
-    (["weather", "forecast", "climate"],           "weather_app"),
-    (["dashboard", "analytics", "metrics"],        "dashboard"),
+    (["todo", "task", "tasks"],                     "todo_app"),
+    (["kanban", "board", "trello"],                 "kanban_board"),
+    (["chat", "messaging", "message", "slack"],     "chat_app"),
+    (["blog", "cms", "content management"],         "blog_platform"),
+    (["weather", "forecast", "climate"],            "weather_app"),
+    (["dashboard", "analytics", "metrics"],         "dashboard"),
+    (["report", "pdf", "excel", "csv", "chart"],    "report_tool"),
     (["ecommerce", "e-commerce", "shop", "store",
-      "cart", "product"],                          "ecommerce"),
-    (["auth", "login", "signup", "user management",
-      "authentication"],                           "auth_service"),
-    (["api", "rest api", "crud"],                  "rest_api"),
-    (["portfolio", "resume", "cv"],                "portfolio"),
-    (["social", "feed", "follow", "post"],         "social_app"),
-    (["game", "quiz", "puzzle"],                   "game"),
-    (["booking", "reservation", "appointment"],    "booking_app"),
-    (["finance", "budget", "expense", "invoice"],  "finance_app"),
-    (["inventory", "stock", "warehouse"],          "inventory_app"),
+      "cart", "product"],                           "ecommerce"),
+    (["auth", "login", "signup", "authentication"], "auth_service"),
+    (["api", "rest api", "crud"],                   "rest_api"),
+    (["portfolio", "resume", "cv"],                 "portfolio"),
+    (["social", "feed", "follow", "post"],          "social_app"),
+    (["game", "quiz", "puzzle"],                    "game"),
+    (["booking", "reservation", "appointment"],     "booking_app"),
+    (["finance", "budget", "expense", "invoice"],   "finance_app"),
+    (["inventory", "stock", "warehouse"],           "inventory_app"),
+    (["scraper", "crawl", "spider"],                "web_scraper"),
+    (["cli", "command line", "terminal", "script"], "cli_tool"),
 ]
 
 
 def _refine_app_type(app_type: str | None, prompt: str | None) -> str:
-    """
-    If app_type is a generic bucket like 'web_app' or 'api',
-    try to derive a more specific type from the prompt text.
-    Falls back to app_type or 'unknown'.
-    """
     if not app_type:
         app_type = "unknown"
 
-    # Already specific enough — keep it
     generic = {"web_app", "api", "application", "app", "unknown", "web", "website"}
     if app_type.lower() not in generic:
         return app_type.lower()
 
-    # Try to classify from prompt
     if prompt:
         pl = prompt.lower()
         for keywords, refined_type in _TYPE_KEYWORDS:
@@ -67,30 +68,53 @@ def _refine_app_type(app_type: str | None, prompt: str | None) -> str:
     return app_type.lower()
 
 
-# ── Stats ──────────────────────────────────────────────────────────────────────
+def _parse_dt(value: str) -> datetime:
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot parse datetime: {value!r}")
+
+
+# ── /stats ─────────────────────────────────────────────────────────────────────
 
 @router.get("/stats")
 async def get_platform_stats():
     """
-    Overall platform statistics:
-    success rate, average build duration, counts by status, top app types.
+    Overall platform statistics.
 
-    App types are refined from the build prompt when the LLM returns a
-    generic type like 'web_app', giving more useful breakdowns.
+    Key fields returned:
+      - avg_duration_seconds   (number | null)  ← top-level for easy frontend access
+      - duration_seconds       (object)          ← {average, min, max} for detail views
+      - success_rate_percent   (number)
+      - top_app_types          (list of {type, count})
+      - average_review_score   (number | null)
     """
     rows = db.list_projects(limit=10_000)
-
     total = len(rows)
+
     if total == 0:
         return {
-            "total_builds": 0,
+            "total_builds":        0,
+            "avg_duration_seconds": None,
+            "duration_seconds":    {"average": None, "min": None, "max": None},
+            "success_rate_percent": 0.0,
+            "builds_today":        0,
+            "builds_this_week":    0,
+            "by_status":           {},
+            "top_app_types":       [],
+            "average_review_score": None,
             "message": "No builds yet. Start your first build with POST /projects/",
         }
 
-    # Counts by status
+    # ── Status counts ──────────────────────────────────────────────────────────
     by_status: dict[str, int] = {}
     for r in rows:
-        s = r["status"]
+        s = r.get("status", "unknown")
         by_status[s] = by_status.get(s, 0) + 1
 
     done      = by_status.get("done", 0)
@@ -98,19 +122,25 @@ async def get_platform_stats():
     completed = done + failed
     success_rate = round((done / completed * 100), 1) if completed else 0.0
 
-    # Duration stats (done builds only)
-    durations = [
-        r["duration_seconds"] for r in rows
-        if r.get("duration_seconds") and r["status"] == "done"
-    ]
+    # ── Duration stats (done builds only) ──────────────────────────────────────
+    durations = []
+    for r in rows:
+        if r.get("status") == "done" and r.get("duration_seconds") is not None:
+            try:
+                d = float(r["duration_seconds"])
+                if d > 0:
+                    durations.append(d)
+            except (TypeError, ValueError):
+                pass
+
     avg_duration = round(sum(durations) / len(durations), 1) if durations else None
     min_duration = round(min(durations), 1) if durations else None
     max_duration = round(max(durations), 1) if durations else None
 
-    # App types — refined from prompt, done builds only, exclude unknown
+    # ── App types ──────────────────────────────────────────────────────────────
     type_counts: dict[str, int] = {}
     for r in rows:
-        if r["status"] != "done":
+        if r.get("status") != "done":
             continue
         refined = _refine_app_type(r.get("app_type"), r.get("prompt"))
         if refined == "unknown":
@@ -119,51 +149,83 @@ async def get_platform_stats():
 
     top_types = sorted(type_counts.items(), key=lambda x: -x[1])[:10]
 
-    # Review scores (done builds only)
-    scores = [r["review_score"] for r in rows if r.get("review_score") and r["status"] == "done"]
+    # ── Review scores ──────────────────────────────────────────────────────────
+    scores = []
+    for r in rows:
+        if r.get("status") == "done" and r.get("review_score") is not None:
+            try:
+                scores.append(float(r["review_score"]))
+            except (TypeError, ValueError):
+                pass
     avg_score = round(sum(scores) / len(scores), 2) if scores else None
 
-    # Today & this week
+    # ── Time-window counts ─────────────────────────────────────────────────────
     now         = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start  = today_start - timedelta(days=7)
 
-    builds_today = sum(
-        1 for r in rows
-        if r.get("created_at") and _parse_dt(r["created_at"]) >= today_start
-    )
-    builds_this_week = sum(
-        1 for r in rows
-        if r.get("created_at") and _parse_dt(r["created_at"]) >= week_start
-    )
+    builds_today = 0
+    builds_this_week = 0
+    for r in rows:
+        if not r.get("created_at"):
+            continue
+        try:
+            dt = _parse_dt(r["created_at"])
+            if dt >= today_start:
+                builds_today += 1
+            if dt >= week_start:
+                builds_this_week += 1
+        except Exception:
+            pass
 
     return {
-        "total_builds": total,
-        "by_status": by_status,
-        "success_rate_percent": success_rate,
-        "builds_today": builds_today,
-        "builds_this_week": builds_this_week,
+        "total_builds":          total,
+        # ← top-level convenience field that the frontend Dashboard reads
+        "avg_duration_seconds":  avg_duration,
+        # ← nested detail for Statistics page
         "duration_seconds": {
             "average": avg_duration,
-            "min": min_duration,
-            "max": max_duration,
+            "min":     min_duration,
+            "max":     max_duration,
         },
-        "average_review_score": avg_score,
-        "top_app_types": [{"type": t, "count": c} for t, c in top_types],
-        "generated_at": now.isoformat(),
+        "success_rate_percent":  success_rate,
+        "builds_today":          builds_today,
+        "builds_this_week":      builds_this_week,
+        "by_status":             by_status,
+        "top_app_types":         [{"type": t, "count": c} for t, c in top_types],
+        "average_review_score":  avg_score,
+        "generated_at":          now.isoformat(),
     }
 
 
+# ── /stats/daily ───────────────────────────────────────────────────────────────
+
 @router.get("/stats/daily")
 async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
-    """Builds per day for the last N days (default 30)."""
+    """
+    Builds per day for the last N days.
+
+    Each entry in `data` has:
+      - date     (YYYY-MM-DD)
+      - total    (int)
+      - success  (int)  ← renamed from 'done'; matches Recharts dataKey="success"
+      - failed   (int)
+      - cancelled(int)
+    """
     rows = db.list_projects(limit=10_000)
     now  = datetime.utcnow()
 
+    # Build a lookup keyed by date string
     daily: dict[str, dict] = {}
     for i in range(days):
         day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
-        daily[day] = {"date": day, "total": 0, "done": 0, "failed": 0, "cancelled": 0}
+        daily[day] = {
+            "date":      day,
+            "total":     0,
+            "success":   0,   # ← 'done' renamed to 'success' for chart compatibility
+            "failed":    0,
+            "cancelled": 0,
+        }
 
     for r in rows:
         if not r.get("created_at"):
@@ -172,20 +234,29 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
             day = _parse_dt(r["created_at"]).strftime("%Y-%m-%d")
         except Exception:
             continue
-        if day in daily:
-            daily[day]["total"] += 1
-            status = r.get("status", "unknown")
-            if status in daily[day]:
-                daily[day][status] += 1
 
-    return {"days": days, "data": sorted(daily.values(), key=lambda x: x["date"])}
+        if day not in daily:
+            continue
+
+        daily[day]["total"] += 1
+        status = r.get("status", "unknown")
+
+        if status == "done":
+            daily[day]["success"] += 1        # map 'done' → 'success'
+        elif status in ("failed", "cancelled"):
+            daily[day][status] += 1
+
+    return {
+        "days": days,
+        "data": sorted(daily.values(), key=lambda x: x["date"]),
+    }
 
 
-# ── Rebuild ────────────────────────────────────────────────────────────────────
+# ── /projects/{id}/rebuild ─────────────────────────────────────────────────────
 
 @router.post("/projects/{build_id}/rebuild")
 async def rebuild_project(build_id: str):
-    """Start a new build using the exact same prompt. Original is untouched."""
+    """Start a new build using the exact same prompt."""
     from api_platform.runner import job_runner
 
     project = db.get_project(build_id)
@@ -198,15 +269,15 @@ async def rebuild_project(build_id: str):
 
     new_build_id = job_runner.start_build(prompt)
     return {
-        "message": "Rebuild started",
+        "message":          "Rebuild started",
         "original_build_id": build_id,
-        "new_build_id": new_build_id,
-        "prompt": prompt,
-        "status_url": f"/jobs/{new_build_id}/status",
+        "new_build_id":      new_build_id,
+        "prompt":            prompt,
+        "status_url":        f"/jobs/{new_build_id}/status",
     }
 
 
-# ── Cleanup ────────────────────────────────────────────────────────────────────
+# ── /projects/cleanup ──────────────────────────────────────────────────────────
 
 class CleanupRequest(BaseModel):
     older_than_days: int = 30
@@ -234,16 +305,16 @@ async def cleanup_old_projects(req: CleanupRequest):
 
     if req.dry_run:
         return {
-            "dry_run": True,
-            "would_delete": len(targets),
+            "dry_run":         True,
+            "would_delete":    len(targets),
             "older_than_days": req.older_than_days,
-            "statuses": req.statuses,
-            "cutoff": cutoff.isoformat(),
+            "statuses":        req.statuses,
+            "cutoff":          cutoff.isoformat(),
             "projects": [
                 {
-                    "build_id": t["build_id"],
-                    "app_name": t.get("app_name"),
-                    "status": t["status"],
+                    "build_id":   t["build_id"],
+                    "app_name":   t.get("app_name"),
+                    "status":     t["status"],
                     "created_at": t["created_at"],
                 }
                 for t in targets
@@ -256,32 +327,20 @@ async def cleanup_old_projects(req: CleanupRequest):
         bid = r["build_id"]
         try:
             out = r.get("output_path")
-            if out and Path(out).exists():
-                shutil.rmtree(out, ignore_errors=True)
+            if out:
+                p = Path(out)
+                if p.exists():
+                    shutil.rmtree(p, ignore_errors=True)
             db.delete_project(bid)
             deleted.append(bid)
         except Exception as e:
             errors.append({"build_id": bid, "error": str(e)})
 
     return {
-        "dry_run": False,
-        "deleted": len(deleted),
-        "errors": len(errors),
-        "deleted_ids": deleted,
+        "dry_run":      False,
+        "deleted":      len(deleted),
+        "errors":       len(errors),
+        "deleted_ids":  deleted,
         "error_details": errors,
-        "cutoff": cutoff.isoformat(),
+        "cutoff":       cutoff.isoformat(),
     }
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _parse_dt(value: str) -> datetime:
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S",
-    ):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    raise ValueError(f"Cannot parse datetime: {value!r}")

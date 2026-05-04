@@ -46,10 +46,19 @@ export default function Statistics() {
 
   const isLoading = statsLoading || dailyLoading;
 
-  // useDailyStats may return { days, data } or array — handle both
-  const daily = Array.isArray(dailyRaw)
+  // API returns { days, data: [...] } — handle both array and wrapped object
+  const daily: object[] = Array.isArray(dailyRaw)
     ? dailyRaw
-    : (dailyRaw as { data?: unknown[] } | null)?.data ?? [];
+    : (dailyRaw as { data?: object[] } | null)?.data ?? [];
+
+  // Filter out days with zero builds so the chart isn't a flat zero line
+  const dailyWithData = daily.filter((d: object) => {
+    const row = d as { total?: number };
+    return (row.total ?? 0) > 0;
+  });
+
+  // Show all days in chart (including zeros) but use dailyWithData for "empty" check
+  const chartData = daily;
 
   const appTypeData = stats
     ? (Array.isArray(stats.top_app_types)
@@ -58,12 +67,42 @@ export default function Statistics() {
       )
     : [];
 
+  // ── Fix: read avg_duration_seconds from top-level field (not nested) ─────────
+  // Old API: stats.duration_seconds.average  → showed NaN
+  // New API: stats.avg_duration_seconds      → correct number
+  const avgDuration = stats
+    ? (stats.avg_duration_seconds ?? (stats as { duration_seconds?: { average?: number } }).duration_seconds?.average ?? null)
+    : null;
+
   const METRICS = stats
     ? [
-        { icon: <Layers size={18} />, value: stats.total_builds, label: 'Total Builds', color: 'var(--color-info)' },
-        { icon: <CheckCircle size={18} />, value: `${stats.success_rate_percent.toFixed(1)}%`, label: 'Success Rate', color: 'var(--color-success)' },
-        { icon: <Clock size={18} />, value: `${Math.round(stats.avg_duration_seconds)}s`, label: 'Avg Duration', color: 'var(--color-warning)' },
-        { icon: <TrendingUp size={18} />, value: appTypeData.length, label: 'App Types Built', color: 'var(--color-accent-secondary)' },
+        {
+          icon:  <Layers size={18} />,
+          value: stats.total_builds,
+          label: 'Total Builds',
+          color: 'var(--color-info)',
+        },
+        {
+          icon:  <CheckCircle size={18} />,
+          value: `${(stats.success_rate_percent ?? 0).toFixed(1)}%`,
+          label: 'Success Rate',
+          color: 'var(--color-success)',
+        },
+        {
+          icon:  <Clock size={18} />,
+          // Guard against null/undefined/NaN before calling Math.round
+          value: avgDuration != null && !isNaN(avgDuration)
+            ? `${Math.round(avgDuration)}s`
+            : '—',
+          label: 'Avg Duration',
+          color: 'var(--color-warning)',
+        },
+        {
+          icon:  <TrendingUp size={18} />,
+          value: appTypeData.length,
+          label: 'App Types Built',
+          color: 'var(--color-accent-secondary)',
+        },
       ]
     : [];
 
@@ -109,52 +148,80 @@ export default function Statistics() {
 
       {/* Charts */}
       <div className="charts-grid">
-        {/* Area — daily builds */}
+        {/* Area — daily builds over time */}
         <div className="chart-card card chart-card--wide">
           <p className="chart-title">Daily Builds — Last {days} days</p>
-          {daily && daily.length > 0 ? (
+          {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={daily as object[]} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="gSuccess" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#22C55E" stopOpacity={0.25}/>
+                    <stop offset="5%"  stopColor="#22C55E" stopOpacity={0.3}/>
                     <stop offset="95%" stopColor="#22C55E" stopOpacity={0}/>
                   </linearGradient>
                   <linearGradient id="gFailed" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#EF4444" stopOpacity={0.25}/>
+                    <stop offset="5%"  stopColor="#EF4444" stopOpacity={0.3}/>
                     <stop offset="95%" stopColor="#EF4444" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid {...GRID_PROPS} />
-                <XAxis dataKey="date" {...AXIS_PROPS} />
-                <YAxis {...AXIS_PROPS} />
+                <XAxis
+                  dataKey="date"
+                  {...AXIS_PROPS}
+                  tickFormatter={(v: string) => v.slice(5)} // show MM-DD only
+                />
+                <YAxis {...AXIS_PROPS} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: '0.75rem', paddingTop: '12px' }} />
-                <Area type="monotone" dataKey="success" stroke="#22C55E" fill="url(#gSuccess)" strokeWidth={2} />
-                <Area type="monotone" dataKey="failed"  stroke="#EF4444" fill="url(#gFailed)"  strokeWidth={2} />
+                {/* dataKey="success" matches the renamed field in analytics.py */}
+                <Area
+                  type="monotone"
+                  dataKey="success"
+                  name="Success"
+                  stroke="#22C55E"
+                  fill="url(#gSuccess)"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="failed"
+                  name="Failed"
+                  stroke="#EF4444"
+                  fill="url(#gFailed)"
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <div className="chart-empty">No data yet</div>
+            <div className="chart-empty">No data yet — run your first build!</div>
           )}
         </div>
 
         {/* Bar — success vs failed */}
         <div className="chart-card card">
           <p className="chart-title">Success vs Failed</p>
-          {daily && daily.length > 0 ? (
+          {dailyWithData.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={daily as object[]} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+              <BarChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
                 <CartesianGrid {...GRID_PROPS} />
-                <XAxis dataKey="date" {...AXIS_PROPS} />
-                <YAxis {...AXIS_PROPS} />
+                <XAxis
+                  dataKey="date"
+                  {...AXIS_PROPS}
+                  tickFormatter={(v: string) => v.slice(5)}
+                />
+                <YAxis {...AXIS_PROPS} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="success" fill="#22C55E" radius={[4,4,0,0]} />
-                <Bar dataKey="failed"  fill="#EF4444" radius={[4,4,0,0]} />
+                <Legend wrapperStyle={{ fontSize: '0.75rem', paddingTop: '12px' }} />
+                <Bar dataKey="success" name="Success" fill="#22C55E" radius={[4,4,0,0]} />
+                <Bar dataKey="failed"  name="Failed"  fill="#EF4444" radius={[4,4,0,0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="chart-empty">No data yet</div>
+            <div className="chart-empty">No completed builds yet</div>
           )}
         </div>
 
@@ -170,7 +237,11 @@ export default function Statistics() {
                   innerRadius={55} outerRadius={88}
                   paddingAngle={3}
                   dataKey="value"
-                  label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
+                  label={({ name, percent }) =>
+                    percent && percent > 0.05
+                      ? `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
+                      : ''
+                  }
                   labelLine={false}
                 >
                   {appTypeData.map((_, i) => (
@@ -181,7 +252,7 @@ export default function Statistics() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="chart-empty">No data yet</div>
+            <div className="chart-empty">No completed builds yet</div>
           )}
         </div>
       </div>

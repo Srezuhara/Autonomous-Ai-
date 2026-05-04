@@ -2,7 +2,11 @@ import { CheckCircle, Circle, AlertCircle, Loader } from 'lucide-react';
 import type { ProgressStep } from '../../hooks/useBuildProgress';
 import './StepTracker.css';
 
-const STEP_NAMES: Record<number, string> = {
+/**
+ * Fallback step names used ONLY when the server hasn't sent a step_name yet.
+ * Once the server sends a step_name string we always prefer that.
+ */
+const STEP_NAMES_FALLBACK: Record<number, string> = {
   1: 'Intent Analyzer',
   2: 'Planner',
   3: 'Architect',
@@ -14,8 +18,18 @@ const STEP_NAMES: Record<number, string> = {
   9: 'Packager',
 };
 
+/**
+ * Convert snake_case server step name to a readable label.
+ * e.g. "backend_developer" → "Backend Developer"
+ */
+function formatStepName(raw: string): string {
+  return raw
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
 interface StepTrackerProps {
-  steps: ProgressStep[];
+  steps:      ProgressStep[];
   totalSteps?: number;
 }
 
@@ -27,9 +41,9 @@ function StepIcon({ status }: { status: string }) {
 }
 
 export function StepTracker({ steps, totalSteps = 9 }: StepTrackerProps) {
-  const stepsMap = new Map(steps.map(s => [s.step, s]));
+  const stepsMap       = new Map(steps.map(s => [s.step, s]));
   const completedCount = steps.filter(s => s.status === 'done').length;
-  const progressPct = Math.round((completedCount / totalSteps) * 100);
+  const progressPct    = Math.round((completedCount / totalSteps) * 100);
 
   return (
     <div className="step-tracker">
@@ -51,10 +65,16 @@ export function StepTracker({ steps, totalSteps = 9 }: StepTrackerProps) {
 
       {/* Steps list */}
       <div className="step-list">
-        {Array.from({ length: totalSteps }, (_, i) => i + 1).map((stepNum) => {
-          const step = stepsMap.get(stepNum);
+        {Array.from({ length: totalSteps }, (_, i) => i + 1).map(stepNum => {
+          const step   = stepsMap.get(stepNum);
           const status = step?.status ?? 'pending';
-          const name = step?.step_name ?? STEP_NAMES[stepNum] ?? `Step ${stepNum}`;
+
+          // Prefer live step_name from server; format it if it's snake_case;
+          // fall back to hardcoded map only when no server data yet.
+          const rawName   = step?.step_name ?? '';
+          const name      = rawName
+            ? formatStepName(rawName)
+            : (STEP_NAMES_FALLBACK[stepNum] ?? `Step ${stepNum}`);
 
           return (
             <div key={stepNum} className={`step-row step-row--${status}`}>

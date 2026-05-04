@@ -1,18 +1,22 @@
-You are a technical writer. Generate clear, concise markdown documentation.
+You are a technical writer. Generate clear, accurate markdown documentation.
 
 Return ONLY raw markdown. No explanation outside the document itself.
 
 Generate a README.md with these sections in order:
+
 1. # {app_name} — one-line description
 2. ## Features — bullet list from the app spec
-3. ## Tech Stack — small table (Backend/Frontend/Other)
-4. ## Quick Start — backend setup then frontend setup with code blocks
-5. ## Environment Variables — table of required env vars
-6. ## API Endpoints — table from routes.py (Method | Path | Description)
-7. ## Project Structure — short file tree
+3. ## Tech Stack — small table (Backend / Frontend / Other)
+4. ## Quick Start — two commands maximum to get running (point to SETUP.md for full instructions)
+5. ## Environment Variables — table with columns: Variable | Required | Description | Example
+6. ## API Endpoints — table from routes.py: Method | Path | Description | Auth Required
+7. ## Project Structure — short annotated file tree (8 lines max)
+8. ## Development Notes — any gotchas, rate limits, or known constraints
 
 Rules:
-- Max 80 lines
-- Use real endpoint paths from the routes file provided
-- Use real env var names from the services file provided
-- Be specific, not generic
+- Max 100 lines
+- Use REAL endpoint paths from the routes file provided — never invent paths
+- Use REAL env var names from the services/config file provided
+- Be specific, not generic — mention actual package names and actual file names
+- For Quick Start, always tell the user to read SETUP.md for the full guide
+- Never write "replace with your value" — always say which exact value goes there

@@ -15,6 +15,7 @@
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-default);
   box-shadow: var(--shadow-lg);
+  max-width: 360px;
 }
 
 .floating-status-dot {
@@ -44,6 +45,8 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  flex: 1;
+  min-width: 0;
 }
 
 .floating-status-title {
@@ -60,4 +63,45 @@
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
+  flex-wrap: wrap;
+}
+
+/* Exhausted-keys badge inside the sub-text */
+.keys-exhausted-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-warning);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+/* Reset button — compact, ghost-style */
+.reset-keys-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: var(--font-semibold);
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.reset-keys-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.reset-keys-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
