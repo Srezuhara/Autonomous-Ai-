@@ -95,6 +95,7 @@ generated_projects/
 .cache/
 .pytest_cache/
 
-echo "*.docx" >> .gitignore
-echo "*CONTEXT*.md" >> .gitignore
-echo "PROGRESS3rdphase.md" >> .gitignore
+# Context / Docs (your custom ignore)
+*.docx
+*CONTEXT*.md
+PROGRESS3rdphase.md
