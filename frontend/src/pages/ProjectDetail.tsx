@@ -2,11 +2,15 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import {
   ArrowLeft, Download, RefreshCw, Trash2, FileCode2,
-  Star, Shield, FlaskConical, Clock, Calendar
+  Star, Shield, FlaskConical, Clock, Calendar,
+  ChevronDown, ChevronUp, Terminal
 } from 'lucide-react';
 import { useProjectDetail } from '../hooks/useQueries';
 import { api } from '../api/client';
 import { StatusBadge } from '../components/shared/StatusBadge';
+import { RebuildModal } from '../components/shared/RebuildModal';
+import { BuildLogsPanel } from '../components/shared/BuildLogsPanel';
+import { useBuildProgress } from '../hooks/useBuildProgress';
 import './ProjectDetail.css';
 
 /**
@@ -22,7 +26,6 @@ function parseScorePct(value: string | number | undefined): number {
   const str = String(value).trim();
   if (!str || str === '—') return 0;
 
-  // Fraction: "N/M ..."  (handles "3/5" and "0/0 (collection errors)")
   const fracMatch = str.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
   if (fracMatch) {
     const num = parseFloat(fracMatch[1]);
@@ -31,7 +34,6 @@ function parseScorePct(value: string | number | undefined): number {
     return 0;
   }
 
-  // Plain number (treat as out of 10)
   const n = parseFloat(str);
   if (!isNaN(n)) return Math.min(100, (n / 10) * 100);
   return 0;
@@ -49,7 +51,6 @@ function ScoreGauge({ label, value, icon }: {
     ? 'var(--color-warning)'
     : 'var(--color-error)';
 
-  // Display value: keep original string, but show "—" when absent
   const display = value != null && value !== '' ? String(value) : '—';
 
   return (
@@ -77,7 +78,45 @@ export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const { data: project, isLoading, isError } = useProjectDetail(id);
   const navigate = useNavigate();
-  const [isRebuilding, setIsRebuilding] = useState(false);
+
+  const [isRebuildModalOpen, setIsRebuildModalOpen] = useState(false);
+  const [isRebuilding,       setIsRebuilding]       = useState(false);
+  const [showLogs,           setShowLogs]           = useState(false);
+
+  // Use build progress hook to get live step data for logs panel
+  // Only active if build is currently running
+  const isRunning = project?.status === 'running';
+  const { steps, buildDone, buildStatus } = useBuildProgress(
+    isRunning ? id : undefined
+  );
+
+  // For completed projects, reconstruct steps from progress endpoint
+  const [historicSteps, setHistoricSteps] = useState<import('../hooks/useBuildProgress').ProgressStep[]>([]);
+  const [logsLoaded,    setLogsLoaded]    = useState(false);
+
+  const loadHistoricLogs = async () => {
+    if (!id || logsLoaded) return;
+    try {
+      const logs = await api.getBuildLogs(id);
+      const mapped = logs.map(l => ({
+        step:      l.step,
+        step_name: l.step_name,
+        status:    l.status as 'running' | 'done' | 'failed',
+        timestamp: l.timestamp,
+        data:      l.data ? JSON.parse(l.data) : undefined,
+      }));
+      setHistoricSteps(mapped);
+      setLogsLoaded(true);
+    } catch {
+      setLogsLoaded(true); // don't retry
+    }
+  };
+
+  const handleToggleLogs = () => {
+    const next = !showLogs;
+    setShowLogs(next);
+    if (next && !isRunning) loadHistoricLogs();
+  };
 
   const handleDelete = async () => {
     if (!id || !confirm('Delete this project permanently?')) return;
@@ -85,17 +124,23 @@ export default function ProjectDetail() {
     navigate('/dashboard');
   };
 
-  const handleRebuild = async () => {
+  const handleRebuild = async (customPrompt: string) => {
     if (!id || isRebuilding) return;
     setIsRebuilding(true);
     try {
-      const res = await api.rebuildProject(id);
+      const res = await api.rebuildProject(id, customPrompt || undefined);
+      setIsRebuildModalOpen(false);
       navigate(`/build/${res.new_build_id}`);
     } catch (err) {
       console.error('Rebuild failed:', err);
       setIsRebuilding(false);
     }
   };
+
+  // Determine which steps to show in logs
+  const displaySteps = isRunning ? steps : historicSteps;
+  const displayStatus = isRunning ? buildStatus : (project?.status ?? '');
+  const displayDone   = isRunning ? buildDone   : (project?.status !== 'running');
 
   if (isLoading) {
     return (
@@ -150,7 +195,7 @@ export default function ProjectDetail() {
           )}
           <button
             className="btn btn-secondary"
-            onClick={handleRebuild}
+            onClick={() => setIsRebuildModalOpen(true)}
             disabled={isRebuilding}
           >
             {isRebuilding
@@ -185,7 +230,7 @@ export default function ProjectDetail() {
       </div>
 
       {/* Scores */}
-      {project.status === 'done' && (
+      {(project.status === 'done' || project.status === 'failed') && (
         <div className="pd-scores">
           <ScoreGauge
             label="Review Score"
@@ -205,6 +250,40 @@ export default function ProjectDetail() {
         </div>
       )}
 
+      {/* ── Build Logs Panel ── */}
+      <div className="pd-logs card">
+        <button className="pd-logs-toggle" onClick={handleToggleLogs}>
+          <div className="pd-logs-toggle-left">
+            <Terminal size={15} />
+            <span>Pipeline Logs</span>
+            {project.status === 'failed' && (
+              <span className="pd-logs-failed-hint">— click to see what went wrong</span>
+            )}
+          </div>
+          <div className="pd-logs-toggle-right">
+            {!isRunning && (
+              <span className="pd-logs-step-count">
+                {logsLoaded ? `${historicSteps.length}/9 steps` : 'View details'}
+              </span>
+            )}
+            {showLogs
+              ? <ChevronUp size={15} style={{ color: 'var(--text-tertiary)' }} />
+              : <ChevronDown size={15} style={{ color: 'var(--text-tertiary)' }} />
+            }
+          </div>
+        </button>
+
+        {showLogs && (
+          <div className="pd-logs-content">
+            <BuildLogsPanel
+              steps={displaySteps}
+              buildStatus={displayStatus}
+              buildDone={displayDone}
+            />
+          </div>
+        )}
+      </div>
+
       {/* File Tree */}
       {project.files && project.files.length > 0 && (
         <div className="pd-files card">
@@ -221,12 +300,24 @@ export default function ProjectDetail() {
                 style={{ animationDelay: `${i * 18}ms` }}
               >
                 <FileCode2 size={13} className="file-row-icon" />
-                <code className="file-row-path">{typeof f === 'string' ? f : (f as any).file_path ?? String(f)}</code>
+                <code className="file-row-path">
+                  {typeof f === 'string' ? f : (f as { file_path?: string }).file_path ?? String(f)}
+                </code>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      {/* Rebuild Modal */}
+      <RebuildModal
+        isOpen={isRebuildModalOpen}
+        onClose={() => setIsRebuildModalOpen(false)}
+        onRebuild={handleRebuild}
+        originalPrompt={project.prompt}
+        appName={project.app_name || 'App'}
+        isRebuilding={isRebuilding}
+      />
     </div>
   );
 }

@@ -25,10 +25,6 @@ export interface ProjectList {
 }
 
 export interface ProjectDetail extends Project {
-    // Bug fix: the API (projects.py line 83) returns files as a plain
-    // string[] — `project["files"] = [f["file_path"] for f in files]`
-    // The old type `Array<{file_path, file_type}>` caused undefined errors
-    // whenever any component did `f.file_path` on the items.
     files:      string[];
     file_count: number;
     output_path?: string;
@@ -38,19 +34,14 @@ export interface ProjectDetail extends Project {
 // ── Build / job types ──────────────────────────────────────────────────────────
 
 export interface BuildResponse {
-    // POST /projects/ returns { build_id, status, ... }
     build_id: string;
     status:   string;
 }
 
 export interface RebuildResponse {
-    // POST /projects/{id}/rebuild returns a DIFFERENT shape to BuildResponse.
-    // The field is `new_build_id`, NOT `build_id`.
-    // This was the root cause of the rebuild bug: res.build_id was always
-    // undefined, navigating to /build/undefined.
     message:            string;
     original_build_id:  string;
-    new_build_id:       string;   // ← the field that actually exists
+    new_build_id:       string;
     prompt:             string;
     status_url:         string;
 }
@@ -77,7 +68,6 @@ export interface JobStatus {
         }>;
         remaining_steps: string[];
     };
-    // Result fields (populated when done)
     app_name?:     string;
     app_type?:     string;
     complexity?:   string;
@@ -114,14 +104,32 @@ export interface ActiveJobs {
     total_active: number;
 }
 
+// ── Build logs ─────────────────────────────────────────────────────────────────
+
+export interface BuildLog {
+    step:      number;
+    step_name: string;
+    status:    string;
+    timestamp: string;
+    data?:     string | null;  // JSON string from DB
+}
+
+export interface StepLogDetail {
+    step:      number;
+    step_name: string;
+    status:    string;
+    timestamp: string;
+    message?:  string;
+    error?:    string;
+    files?:    string[];
+    score?:    number | string;
+    count?:    number;
+}
+
 // ── Stats types ────────────────────────────────────────────────────────────────
 
 export interface PlatformStats {
     total_builds:           number;
-    // Bug fix: the old interface was missing avg_duration_seconds which is
-    // the top-level convenience field the fixed analytics.py now returns.
-    // Components were falling back to duration_seconds.average which was
-    // undefined → Math.round(undefined) → NaN displayed on screen.
     avg_duration_seconds:   number | null;
     duration_seconds: {
         average: number | null;
@@ -132,8 +140,6 @@ export interface PlatformStats {
     builds_today:           number;
     builds_this_week:       number;
     by_status:              Record<string, number>;
-    // Bug fix: the old type was `Record<string, number>` (a plain object).
-    // The fixed analytics.py returns an array of {type, count} objects.
     top_app_types:          Array<{ type: string; count: number }>;
     average_review_score:   number | null;
     generated_at:           string;
@@ -142,17 +148,12 @@ export interface PlatformStats {
 export interface DailyStatsEntry {
     date:      string;
     total:     number;
-    // Bug fix: the chart uses dataKey="success" but old type had no `success`
-    // field — it only had `done`. The fixed analytics.py renames done→success.
     success:   number;
     failed:    number;
     cancelled: number;
 }
 
 export interface DailyStatsResponse {
-    // Bug fix: the API returns { days, data: [...] }, NOT a bare array.
-    // The old type `DailyStats[]` caused Statistics.tsx to try to map over
-    // the wrapper object, getting undefined for all values.
     days: number;
     data: DailyStatsEntry[];
 }
@@ -190,12 +191,11 @@ async function fetchAPI<T>(endpoint: string, options: RequestInit = {}): Promise
     });
 
     if (!res.ok) {
-        // Try to extract FastAPI's detail message for better error display
         let detail = `${res.status} ${res.statusText}`;
         try {
             const body = await res.json();
             if (body?.detail) detail = body.detail;
-        } catch { /* ignore parse errors */ }
+        } catch { /* ignore */ }
         throw new Error(`API Error: ${detail}`);
     }
 
@@ -230,12 +230,12 @@ export const api = {
             { method: 'DELETE' }
         ),
 
-    // Bug fix: return type is now RebuildResponse (has new_build_id)
-    // NOT BuildResponse (which has build_id).
-    // The old typing caused ProjectDetail.tsx to read res.build_id → undefined
-    // → navigated to /build/undefined → WebSocket /ws/jobs/undefined → stuck.
-    rebuildProject: (id: string) =>
-        fetchAPI<RebuildResponse>(`/projects/${id}/rebuild`, { method: 'POST' }),
+    // Enhanced rebuild — accepts optional custom instructions
+    rebuildProject: (id: string, customPrompt?: string) =>
+        fetchAPI<RebuildResponse>(`/projects/${id}/rebuild`, {
+            method: 'POST',
+            body:   JSON.stringify(customPrompt ? { custom_prompt: customPrompt } : {}),
+        }),
 
     downloadZip: (id: string) => {
         window.open(`${BASE_URL}/projects/${id}/download`, '_blank');
@@ -245,6 +245,10 @@ export const api = {
 
     getJobStatus: (id: string) =>
         fetchAPI<JobStatus>(`/jobs/${id}/status`),
+
+    // Get detailed build logs for a project
+    getBuildLogs: (id: string) =>
+        fetchAPI<BuildLog[]>(`/jobs/${id}/logs`),
 
     getQueue: () =>
         fetchAPI<QueueStats>('/jobs/queue'),
@@ -260,7 +264,6 @@ export const api = {
     getStats: () =>
         fetchAPI<PlatformStats>('/stats'),
 
-    // Bug fix: return type is DailyStatsResponse (wrapped), not DailyStats[].
     getDailyStats: (days = 30) =>
         fetchAPI<DailyStatsResponse>(`/stats/daily?days=${days}`),
 
@@ -273,9 +276,10 @@ export const api = {
         ),
 
     resetKeys: () =>
-        fetchAPI<{ message: string; keys_available: number; keys: Array<{ suffix: string; status: string }> }>('/admin/reset-keys', {
-            method: 'POST',
-        }),
+        fetchAPI<{ message: string; keys_available: number; keys: Array<{ suffix: string; status: string }> }>(
+            '/admin/reset-keys',
+            { method: 'POST' }
+        ),
 
     // ── Health ─────────────────────────────────────────────────────────────────
 

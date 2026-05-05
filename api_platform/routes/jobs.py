@@ -1,8 +1,5 @@
 """
-api_platform/routes/jobs.py  (Phase 14 - fixed)
-
-Fix: status endpoint now shows live elapsed_seconds and estimated_remaining
-     for running builds, so polling every few seconds shows visible progress.
+api_platform/routes/jobs.py  (Phase 14 - fixed + logs endpoint added)
 """
 
 from datetime import datetime
@@ -12,7 +9,6 @@ from api_platform.database import get_project, get_build_progress
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
-# Average step durations in seconds (rough estimates for progress display)
 STEP_NAMES = [
     "intent_analyzer",
     "planner",
@@ -45,38 +41,22 @@ def _elapsed(created_at: str) -> float:
 async def get_job_status(build_id: str):
     """
     Get real-time job status and progress.
-
-    For running builds, returns:
-    - elapsed_seconds: how long the build has been running
-    - current_step / step_name: the most recently started agent
-    - completed_steps: all steps recorded so far
-
     Poll every 5-10 seconds to watch progress live.
     Use WS /ws/jobs/{build_id} for push-based updates.
-
-    Status values:
-    - pending:   created, not yet queued
-    - queued:    waiting for a free worker
-    - running:   build in progress
-    - done:      completed successfully
-    - failed:    build failed
-    - cancelled: cancelled by user
     """
     project = get_project(build_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Build {build_id} not found")
 
     status = project["status"]
-
-    # Get all recorded progress steps
-    steps = get_build_progress(build_id)
+    steps  = get_build_progress(build_id)
 
     current_step = 0
     step_name    = "pending"
     step_status  = "pending"
 
     if steps:
-        latest      = steps[-1]
+        latest       = steps[-1]
         current_step = latest["step"]
         step_name    = latest["step_name"]
         step_status  = latest["status"]
@@ -109,7 +89,6 @@ async def get_job_status(build_id: str):
         "started_at":        project.get("created_at"),
         "completed_at":      project.get("completed_at"),
         "duration_seconds":  project.get("duration_seconds"),
-        # Result fields (populated when done)
         "app_name":     project.get("app_name"),
         "app_type":     project.get("app_type"),
         "complexity":   project.get("complexity"),
@@ -119,18 +98,15 @@ async def get_job_status(build_id: str):
         "output_path":  project.get("output_path"),
     }
 
-    # Add live timing info for running builds
     if status == "running":
         elapsed = _elapsed(project["created_at"])
         response["elapsed_seconds"] = elapsed
-        # Estimate remaining based on average build time (~90s per step seen so far)
         if current_step > 0:
             secs_per_step = elapsed / current_step
             remaining_steps = 9 - current_step
             response["estimated_remaining_seconds"] = round(secs_per_step * remaining_steps)
         response["poll_hint"] = "Poll this endpoint every 5-10s to see progress, or use WS /ws/jobs/{build_id}"
 
-    # Add queue position for queued builds
     if status == "queued":
         active = job_runner.get_active_jobs()
         queued_ids = [j["build_id"] for j in active.get("queued", [])]
@@ -139,6 +115,30 @@ async def get_job_status(build_id: str):
             response["poll_hint"] = "Build is queued. Poll to see when it starts running."
 
     return response
+
+
+@router.get("/{build_id}/logs")
+async def get_build_logs(build_id: str):
+    """
+    Get detailed per-step build logs for a completed or running build.
+    Returns all recorded pipeline steps with timestamps and data payloads.
+    """
+    project = get_project(build_id)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Build {build_id} not found")
+
+    steps = get_build_progress(build_id)
+
+    return [
+        {
+            "step":      s["step"],
+            "step_name": s["step_name"],
+            "status":    s["status"],
+            "timestamp": s["timestamp"],
+            "data":      s.get("data"),   # raw JSON string from DB
+        }
+        for s in steps
+    ]
 
 
 @router.get("/queue")

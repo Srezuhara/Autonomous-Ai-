@@ -45,8 +45,7 @@ const fadeIn: Variants = {
 };
 
 /* ─────────────────────────────────────────────
-   Shared section wrapper — handles centering +
-   consistent vertical rhythm across all sections
+   Shared section wrapper
 ───────────────────────────────────────────── */
 function Section({
   children,
@@ -129,12 +128,9 @@ function HeroSection() {
 
   return (
     <section className="hero-section">
-      {/* Shader background */}
       <div className="hero-shader">
         <ShaderAnimation />
       </div>
-
-      {/* Gradient overlays */}
       <div className="hero-overlay-1" />
       <motion.div
         className="hero-blob hero-blob--left"
@@ -150,7 +146,6 @@ function HeroSection() {
       />
       <Spotlight className="hero-spotlight" fill="#FFD700" />
 
-      {/* Content */}
       <div className="hero-content">
         <motion.div className="hero-badge" variants={fadeUp} initial="hidden" animate="visible" custom={0}>
           <Sparkles size={14} />
@@ -181,10 +176,10 @@ function HeroSection() {
 
         <motion.div className="hero-stats" variants={fadeUp} initial="hidden" animate="visible" custom={4}>
           {[
-            { value: '9', label: 'AI Agents' },
-            { value: '18', label: 'Endpoints' },
-            { value: '<8min', label: 'Avg Build' },
-            { value: '24/7', label: 'Available' },
+            { value: '9',     label: 'AI Agents'  },
+            { value: '18',    label: 'Endpoints'  },
+            { value: '<8min', label: 'Avg Build'  },
+            { value: '24/7',  label: 'Available'  },
           ].map(s => (
             <div key={s.label} className="hero-stat">
               <span className="hero-stat-value">{s.value}</span>
@@ -193,7 +188,6 @@ function HeroSection() {
           ))}
         </motion.div>
 
-        {/* Scroll cue */}
         <motion.div
           className="hero-scroll-cue"
           initial={{ opacity: 0 }}
@@ -209,8 +203,12 @@ function HeroSection() {
 
 /* ─────────────────────────────────────────────
    2. INTERACTIVE SHOWCASE (3-D Spline)
+   FIX: "Explore Pipeline" button now navigates
+   to /build instead of doing nothing.
 ───────────────────────────────────────────── */
 function ShowcaseSection() {
+  const navigate = useNavigate(); // ← FIXED: was missing, button did nothing
+
   return (
     <Section bg="linear-gradient(180deg,#2C1810 0%,#3E2723 100%)">
       <Card className="showcase-card">
@@ -235,7 +233,8 @@ function ShowcaseSection() {
               Watch as your ideas transform into production-ready code in real-time with
               immersive 3D visualisation and cutting-edge technology.
             </p>
-            <button className="btn-showcase" onClick={() => {}}>
+            {/* ← FIXED: was onClick={() => {} — now navigates to /build */}
+            <button className="btn-showcase" onClick={() => navigate('/build')}>
               Explore Pipeline
             </button>
           </motion.div>
@@ -260,17 +259,17 @@ function ShowcaseSection() {
 }
 
 /* ─────────────────────────────────────────────
-   3. PIPELINE VISUALISER  ← MORE SPACE HERE
+   3. PIPELINE VISUALISER
 ───────────────────────────────────────────── */
 const PIPELINE_AGENTS = [
-  { name: 'Analyzer',  icon: Activity   },
-  { name: 'Planner',   icon: FileText   },
-  { name: 'Frontend',  icon: Code       },
-  { name: 'Backend',   icon: Server     },
+  { name: 'Analyzer',  icon: Activity    },
+  { name: 'Planner',   icon: FileText    },
+  { name: 'Frontend',  icon: Code        },
+  { name: 'Backend',   icon: Server      },
   { name: 'Reviewer',  icon: CheckCircle2 },
-  { name: 'Debugger',  icon: Terminal   },
-  { name: 'Tester',    icon: BarChart3  },
-  { name: 'Packager',  icon: Database   },
+  { name: 'Debugger',  icon: Terminal    },
+  { name: 'Tester',    icon: BarChart3   },
+  { name: 'Packager',  icon: Database    },
 ];
 
 function PipelineSection() {
@@ -287,7 +286,6 @@ function PipelineSection() {
           production-ready, tested, and documented applications."
       />
 
-      {/* Agent row */}
       <div className="pipeline-agents">
         {PIPELINE_AGENTS.map((agent, idx) => (
           <React.Fragment key={agent.name}>
@@ -313,7 +311,6 @@ function PipelineSection() {
         ))}
       </div>
 
-      {/* Step descriptions */}
       <div className="pipeline-steps">
         {[
           { num: '01', title: 'Analyze & Plan',    desc: 'The Intent Analyzer extracts structured requirements from your prompt and the Planner breaks it into ordered build steps.' },
@@ -341,7 +338,7 @@ function PipelineSection() {
 }
 
 /* ─────────────────────────────────────────────
-   4. FEATURES  ← MORE SPACE, CENTERED
+   4. FEATURES
 ───────────────────────────────────────────── */
 const FEATURES = [
   {
@@ -402,13 +399,13 @@ function FeaturesSection() {
 }
 
 /* ─────────────────────────────────────────────
-   5. SOCIAL PROOF / STATS  ← MORE SPACE
+   5. SOCIAL PROOF / STATS
 ───────────────────────────────────────────── */
 const PROOF_STATS = [
-  { value: '150+',  label: 'Projects Built',   icon: CheckCircle2 },
-  { value: '98%',   label: 'Success Rate',      icon: TrendingUp   },
-  { value: '7.5m',  label: 'Avg Build Time',    icon: Clock        },
-  { value: '24/7',  label: 'Uptime',            icon: Activity     },
+  { value: '150+',  label: 'Projects Built',  icon: CheckCircle2 },
+  { value: '98%',   label: 'Success Rate',     icon: TrendingUp   },
+  { value: '7.5m',  label: 'Avg Build Time',   icon: Clock        },
+  { value: '24/7',  label: 'Uptime',           icon: Activity     },
 ];
 
 function ProofSection() {
@@ -446,7 +443,7 @@ function ProofSection() {
 }
 
 /* ─────────────────────────────────────────────
-   6. FAQ  ← MORE SPACE
+   6. FAQ
 ───────────────────────────────────────────── */
 const FAQS = [
   { q: 'How long does it take to build an application?', a: 'The 9-agent pipeline typically completes a full-stack application in under 8 minutes, including code generation, review, debugging, testing, and packaging.' },
@@ -555,7 +552,6 @@ function CTASection() {
 export default function Landing() {
   return (
     <div className="landing-root">
-      {/* Scoped styles injected as a <style> tag so they don't leak */}
       <style>{LANDING_CSS}</style>
 
       <HeroSection />
@@ -570,11 +566,9 @@ export default function Landing() {
 }
 
 /* ─────────────────────────────────────────────
-   ALL LANDING CSS — scoped under .landing-root
-   so it cannot conflict with app shell styles.
+   ALL LANDING CSS
 ───────────────────────────────────────────── */
 const LANDING_CSS = `
-/* ── Root ───────────────────────────────── */
 .landing-root {
   width: 100%;
   min-height: 100vh;
@@ -584,10 +578,6 @@ const LANDING_CSS = `
   overflow-x: hidden;
 }
 
-/* ── Section rhythm ─────────────────────── */
-/*  Every content section gets the same wrapper.
-    Vertical padding is generous (120px top/bottom)
-    so sections breathe independently. */
 .landing-section {
   width: 100%;
   padding: 120px 24px;
@@ -598,18 +588,17 @@ const LANDING_CSS = `
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  align-items: center;   /* ← centred horizontally */
+  align-items: center;
   gap: 0;
 }
 
-/* ── Section heading block ──────────────── */
 .section-heading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  text-align: center;    /* ← all heading text centred */
+  text-align: center;
   gap: 18px;
-  margin-bottom: 80px;   /* ← generous space below heading before content */
+  margin-bottom: 80px;
   max-width: 680px;
 }
 
@@ -903,10 +892,15 @@ const LANDING_CSS = `
   border: none;
   border-radius: 9999px;
   cursor: pointer;
-  transition: box-shadow 0.2s;
+  transition: box-shadow 0.2s, transform 0.15s;
 }
 
-.btn-showcase:hover { box-shadow: 0 4px 20px rgba(255,215,0,0.4); }
+.btn-showcase:hover {
+  box-shadow: 0 4px 20px rgba(255,215,0,0.4);
+  transform: translateY(-1px);
+}
+
+.btn-showcase:active { transform: scale(0.97); }
 
 .showcase-3d {
   flex: 1;
@@ -918,7 +912,6 @@ const LANDING_CSS = `
 /* ── PIPELINE ───────────────────────────── */
 .pipeline-section .section-inner { gap: 0; }
 
-/* Agent row */
 .pipeline-agents {
   display: flex;
   align-items: center;
@@ -926,7 +919,7 @@ const LANDING_CSS = `
   flex-wrap: wrap;
   gap: 12px;
   width: 100%;
-  margin-bottom: 80px;   /* ← space before step cards */
+  margin-bottom: 80px;
 }
 
 .pipeline-agent {
@@ -975,10 +968,9 @@ const LANDING_CSS = `
 .pipeline-connector {
   color: rgba(255,140,66,0.5);
   flex-shrink: 0;
-  margin-top: -20px; /* align with icon centres */
+  margin-top: -20px;
 }
 
-/* Step cards */
 .pipeline-steps {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1052,11 +1044,11 @@ const LANDING_CSS = `
   background: linear-gradient(135deg,rgba(26,15,10,0.85),rgba(44,24,16,0.65));
   border: 2px solid rgba(255,140,66,0.2);
   border-radius: 28px;
-  padding: 52px 40px;          /* ← generous internal padding */
+  padding: 52px 40px;
   display: flex;
   flex-direction: column;
-  align-items: center;         /* ← icon + text centred */
-  text-align: center;          /* ← text centred */
+  align-items: center;
+  text-align: center;
   gap: 22px;
   transition: border-color 0.25s, box-shadow 0.25s, transform 0.2s;
   position: relative;
@@ -1131,7 +1123,7 @@ const LANDING_CSS = `
 .proof-card {
   display: flex;
   flex-direction: column;
-  align-items: center;   /* ← centred */
+  align-items: center;
   text-align: center;
   gap: 14px;
   padding: 52px 32px;

@@ -1,22 +1,18 @@
 """
-api_platform/routes/analytics.py  — Fixed v3
+api_platform/routes/analytics.py  — Fixed v4
 
-Fixes vs previous version:
-  1. /stats now returns `avg_duration_seconds` as a top-level number (not nested
-     inside `duration_seconds.average`) so the frontend Dashboard and Statistics
-     pages display it correctly instead of showing "NaN".
-  2. /stats/daily now emits `success` (not `done`) to match what the Recharts
-     AreaChart/BarChart components read — previously the chart showed a flat line
-     even though builds were completing successfully.
-  3. Both endpoints are now timezone-aware: dates are compared using the build's
-     actual created_at timestamp so builds don't fall into the wrong day bucket.
-  4. Added `total_cancelled` and `total_running` fields for completeness.
-  5. Cleanup endpoint now handles missing output_path gracefully.
+Changes vs v3:
+  1. /projects/{id}/rebuild now accepts optional { "custom_prompt": "..." }
+     in the request body. If provided, the new build uses the custom prompt
+     instead of the original. If omitted, original prompt is reused.
+  2. RebuildRequest Pydantic model added.
+  3. response now includes used_custom_prompt boolean flag.
 """
 
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -54,17 +50,14 @@ _TYPE_KEYWORDS: list[tuple[list[str], str]] = [
 def _refine_app_type(app_type: str | None, prompt: str | None) -> str:
     if not app_type:
         app_type = "unknown"
-
     generic = {"web_app", "api", "application", "app", "unknown", "web", "website"}
     if app_type.lower() not in generic:
         return app_type.lower()
-
     if prompt:
         pl = prompt.lower()
         for keywords, refined_type in _TYPE_KEYWORDS:
             if any(kw in pl for kw in keywords):
                 return refined_type
-
     return app_type.lower()
 
 
@@ -84,34 +77,23 @@ def _parse_dt(value: str) -> datetime:
 
 @router.get("/stats")
 async def get_platform_stats():
-    """
-    Overall platform statistics.
-
-    Key fields returned:
-      - avg_duration_seconds   (number | null)  ← top-level for easy frontend access
-      - duration_seconds       (object)          ← {average, min, max} for detail views
-      - success_rate_percent   (number)
-      - top_app_types          (list of {type, count})
-      - average_review_score   (number | null)
-    """
-    rows = db.list_projects(limit=10_000)
+    rows  = db.list_projects(limit=10_000)
     total = len(rows)
 
     if total == 0:
         return {
-            "total_builds":        0,
+            "total_builds":         0,
             "avg_duration_seconds": None,
-            "duration_seconds":    {"average": None, "min": None, "max": None},
+            "duration_seconds":     {"average": None, "min": None, "max": None},
             "success_rate_percent": 0.0,
-            "builds_today":        0,
-            "builds_this_week":    0,
-            "by_status":           {},
-            "top_app_types":       [],
+            "builds_today":         0,
+            "builds_this_week":     0,
+            "by_status":            {},
+            "top_app_types":        [],
             "average_review_score": None,
             "message": "No builds yet. Start your first build with POST /projects/",
         }
 
-    # ── Status counts ──────────────────────────────────────────────────────────
     by_status: dict[str, int] = {}
     for r in rows:
         s = r.get("status", "unknown")
@@ -122,7 +104,6 @@ async def get_platform_stats():
     completed = done + failed
     success_rate = round((done / completed * 100), 1) if completed else 0.0
 
-    # ── Duration stats (done builds only) ──────────────────────────────────────
     durations = []
     for r in rows:
         if r.get("status") == "done" and r.get("duration_seconds") is not None:
@@ -137,7 +118,6 @@ async def get_platform_stats():
     min_duration = round(min(durations), 1) if durations else None
     max_duration = round(max(durations), 1) if durations else None
 
-    # ── App types ──────────────────────────────────────────────────────────────
     type_counts: dict[str, int] = {}
     for r in rows:
         if r.get("status") != "done":
@@ -149,7 +129,6 @@ async def get_platform_stats():
 
     top_types = sorted(type_counts.items(), key=lambda x: -x[1])[:10]
 
-    # ── Review scores ──────────────────────────────────────────────────────────
     scores = []
     for r in rows:
         if r.get("status") == "done" and r.get("review_score") is not None:
@@ -159,7 +138,6 @@ async def get_platform_stats():
                 pass
     avg_score = round(sum(scores) / len(scores), 2) if scores else None
 
-    # ── Time-window counts ─────────────────────────────────────────────────────
     now         = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start  = today_start - timedelta(days=7)
@@ -180,9 +158,7 @@ async def get_platform_stats():
 
     return {
         "total_builds":          total,
-        # ← top-level convenience field that the frontend Dashboard reads
         "avg_duration_seconds":  avg_duration,
-        # ← nested detail for Statistics page
         "duration_seconds": {
             "average": avg_duration,
             "min":     min_duration,
@@ -202,27 +178,16 @@ async def get_platform_stats():
 
 @router.get("/stats/daily")
 async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
-    """
-    Builds per day for the last N days.
-
-    Each entry in `data` has:
-      - date     (YYYY-MM-DD)
-      - total    (int)
-      - success  (int)  ← renamed from 'done'; matches Recharts dataKey="success"
-      - failed   (int)
-      - cancelled(int)
-    """
     rows = db.list_projects(limit=10_000)
     now  = datetime.utcnow()
 
-    # Build a lookup keyed by date string
     daily: dict[str, dict] = {}
     for i in range(days):
         day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
         daily[day] = {
             "date":      day,
             "total":     0,
-            "success":   0,   # ← 'done' renamed to 'success' for chart compatibility
+            "success":   0,
             "failed":    0,
             "cancelled": 0,
         }
@@ -234,15 +199,12 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
             day = _parse_dt(r["created_at"]).strftime("%Y-%m-%d")
         except Exception:
             continue
-
         if day not in daily:
             continue
-
         daily[day]["total"] += 1
         status = r.get("status", "unknown")
-
         if status == "done":
-            daily[day]["success"] += 1        # map 'done' → 'success'
+            daily[day]["success"] += 1
         elif status in ("failed", "cancelled"):
             daily[day][status] += 1
 
@@ -254,26 +216,43 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
 
 # ── /projects/{id}/rebuild ─────────────────────────────────────────────────────
 
+class RebuildRequest(BaseModel):
+    """Optional body for rebuild endpoint."""
+    custom_prompt: Optional[str] = None
+
+
 @router.post("/projects/{build_id}/rebuild")
-async def rebuild_project(build_id: str):
-    """Start a new build using the exact same prompt."""
+async def rebuild_project(build_id: str, req: RebuildRequest = None):
+    """
+    Start a new build using the original prompt, or a custom override.
+
+    Body (optional JSON):
+      { "custom_prompt": "Keep the task manager but add JWT auth and SQLite" }
+
+    If custom_prompt is provided and non-empty, it is used as the build prompt.
+    If omitted or empty, the original prompt is reused exactly.
+    """
     from api_platform.runner import job_runner
 
     project = db.get_project(build_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project {build_id} not found")
 
-    prompt = project.get("prompt")
-    if not prompt:
+    original_prompt = project.get("prompt")
+    if not original_prompt:
         raise HTTPException(status_code=400, detail="Original project has no prompt stored")
 
-    new_build_id = job_runner.start_build(prompt)
+    custom = (req.custom_prompt or "").strip() if req else ""
+    build_prompt = custom if custom else original_prompt
+
+    new_build_id = job_runner.start_build(build_prompt)
     return {
-        "message":          "Rebuild started",
-        "original_build_id": build_id,
-        "new_build_id":      new_build_id,
-        "prompt":            prompt,
-        "status_url":        f"/jobs/{new_build_id}/status",
+        "message":            "Rebuild started",
+        "original_build_id":  build_id,
+        "new_build_id":       new_build_id,
+        "prompt":             build_prompt,
+        "used_custom_prompt": bool(custom),
+        "status_url":         f"/jobs/{new_build_id}/status",
     }
 
 
@@ -337,10 +316,10 @@ async def cleanup_old_projects(req: CleanupRequest):
             errors.append({"build_id": bid, "error": str(e)})
 
     return {
-        "dry_run":      False,
-        "deleted":      len(deleted),
-        "errors":       len(errors),
-        "deleted_ids":  deleted,
+        "dry_run":       False,
+        "deleted":       len(deleted),
+        "errors":        len(errors),
+        "deleted_ids":   deleted,
         "error_details": errors,
-        "cutoff":       cutoff.isoformat(),
+        "cutoff":        cutoff.isoformat(),
     }
