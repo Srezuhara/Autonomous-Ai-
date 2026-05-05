@@ -94,3 +94,7 @@ generated_projects/
 *.tmp
 .cache/
 .pytest_cache/
+
+echo "*.docx" >> .gitignore
+echo "*CONTEXT*.md" >> .gitignore
+echo "PROGRESS3rdphase.md" >> .gitignore
