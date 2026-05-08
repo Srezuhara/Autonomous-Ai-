@@ -13,6 +13,21 @@ This pipeline only supports Python backends. Any other choice will
 cause the entire scoring system to return null.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FORBIDDEN FILES — NEVER generate any of these:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  setup.py     → use requirements.txt only; setup.py breaks pytest collection
+  manage.py    → this is not Django
+  wsgi.py      → not needed for FastAPI/uvicorn
+  asgi.py      → not needed for FastAPI/uvicorn
+  Makefile     → not needed; users follow SETUP.md
+  celery.py    → no task queue in this pipeline
+  migrate.py   → no migration tooling in this pipeline
+  seed.py      → no seed scripts in this pipeline
+
+If you include any of these files the build will fail during the test phase.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MANDATORY RULE — ALWAYS INCLUDE BACKEND (NO EXCEPTIONS):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

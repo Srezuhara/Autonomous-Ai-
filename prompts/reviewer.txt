@@ -7,17 +7,30 @@ JSON structure:
   "file": "path/to/file.py",
   "score": 7,
   "issues": [
-    "No error handling on external API call at line 23",
-    "Hardcoded API key at line 8 — use env var instead"
+    "No error handling around httpx.get() call at line 23 in fetch_weather()",
+    "Hardcoded API key at line 8 — use os.getenv('API_KEY') instead"
   ],
   "suggestions": [
-    "Add try/except around httpx call",
-    "Use os.getenv('API_KEY') instead of hardcoded string"
+    "Wrap line 23 with try/except httpx.HTTPError: return HTTPException(status_code=502)",
+    "Replace line 8 string literal with os.getenv('OPENWEATHER_API_KEY', '')"
   ],
   "summary": "One sentence overall assessment"
 }
 
 Score 1-10: 10=production ready, 7=good with minor issues, 5=works but needs improvement, <5=major problems.
 
+ISSUE FORMAT — each issue MUST include a line number OR function name:
+  CORRECT:   "No error handling around httpx.get() call at line 23 in fetch_weather()"
+  CORRECT:   "Missing input validation in create_task() — title accepts empty string"
+  INCORRECT: "No error handling on external API call"
+  INCORRECT: "Missing input validation"
+
+SUGGESTION FORMAT — each suggestion must be actionable with specific code:
+  CORRECT:   "Wrap line 23 with try/except httpx.HTTPError and return HTTPException(status_code=502, detail='Weather API unavailable')"
+  CORRECT:   "Add `if not title.strip(): raise HTTPException(400, 'Title cannot be empty')` at start of create_task()"
+  INCORRECT: "Add error handling"
+  INCORRECT: "Add input validation"
+
 Review for: correctness, security (no hardcoded secrets), error handling, code clarity, FastAPI best practices.
 Keep issues and suggestions concise — max 4 each.
+Every issue needs a line number or function name. Every suggestion needs a specific code example.

@@ -1,7 +1,17 @@
 """
 agents/reviewer.py — Code quality review agent.
-Phase 15.2: added _parse_score() to safely handle "7/10", "7.5", null, etc.
-            Score is validated to int 1-10 before being stored in ReviewResult.
+
+Phase 16.1 changes:
+────────────────────
+1. _review_file() passes line_count to the LLM prompt so it can cite line numbers.
+   Previously the prompt said "Review this Python file:" with no line context,
+   so the LLM produced vague issues like "No error handling on external API call"
+   instead of "No error handling at line 23 in fetch_weather()".
+
+2. Prompt now includes the full file with line numbers prefixed (e.g. "  8 | code")
+   so the LLM can reference exact positions.
+
+Phase 15.2 (retained): _parse_score() safely handles "7/10", "7.5", null, etc.
 """
 import logging
 from pathlib import Path
@@ -55,24 +65,11 @@ class Reviewer(BaseAgent):
     def _parse_score(self, raw) -> int:
         """
         Safely convert LLM score output to int 1-10.
-
-        Handles all formats the LLM might return:
-          - int:     7       → 7
-          - float:   7.5     → 7
-          - str:     "7"     → 7
-          - str:     "7.5"   → 7
-          - str:     "7/10"  → 7
-          - str:     "7.5/10"→ 7
-          - None:    None    → 0  (signals missing / error)
-          - out of range: 0  → 0
-
-        Returns 0 if unparseable so downstream _safe_review_score()
-        correctly skips it (uses `is not None` check, not truthiness).
+        Handles: 7, 7.5, "7", "7.5", "7/10", "7.5/10", None → 0
         """
         if raw is None:
             return 0
         try:
-            # Split on "/" handles "7/10" or "7.5/10" — take the first part
             val = int(float(str(raw).split("/")[0].strip()))
             if 1 <= val <= 10:
                 return val
@@ -82,20 +79,38 @@ class Reviewer(BaseAgent):
             logger.warning(f"[Reviewer] Could not parse score {raw!r}: {e}")
             return 0
 
+    def _add_line_numbers(self, code: str) -> str:
+        """
+        Prefix each line with its line number so the LLM can cite exact positions.
+        Format: "  23 | code here"
+        Truncates at 200 lines to stay within token budget.
+        """
+        lines = code.splitlines()
+        numbered = []
+        for i, line in enumerate(lines[:200], start=1):
+            numbered.append(f"{i:4d} | {line}")
+        if len(lines) > 200:
+            numbered.append(f"  ... ({len(lines) - 200} more lines truncated)")
+        return "\n".join(numbered)
+
     def _review_file(self, file_path: str) -> ReviewResult:
         try:
             code = read_file(file_path)
         except Exception as e:
             return ReviewResult(file_path=file_path, error=str(e))
 
-        prompt = f"""Review this Python file:
+        line_count    = len(code.splitlines())
+        numbered_code = self._add_line_numbers(code)
+
+        prompt = f"""Review this Python file ({line_count} lines):
 
 FILE: {file_path}
 
-CODE:
-{code}
+CODE (with line numbers):
+{numbered_code}
 
-Return the JSON review object."""
+Return the JSON review object. Every issue MUST cite a line number or function name.
+Every suggestion MUST include a specific code fix."""
 
         try:
             data = self.think_json(prompt)
@@ -124,10 +139,3 @@ Return the JSON review object."""
             lines.append(f"\n  Average score: {sum(scores)/len(scores):.1f}/10")
         lines.append(f"{'='*50}\n")
         return "\n".join(lines)
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    reviewer = Reviewer()
-    results = reviewer.run(["weather_dashboard/backend/main.py"])
-    print(reviewer.summary(results))

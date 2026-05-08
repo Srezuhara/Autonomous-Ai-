@@ -21,3 +21,19 @@ IMPORTS: All backend/ files are siblings.
   from models import WeatherData
   from services.weather_api import get_weather
   NEVER: from backend.x  from ..x  from weather_dashboard.x
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FORBIDDEN FILES — NEVER generate any of these:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  setup.py     → use requirements.txt only; setup.py breaks pytest collection
+  manage.py    → this is not Django
+  wsgi.py      → not needed for FastAPI/uvicorn
+  asgi.py      → not needed for FastAPI/uvicorn
+  Makefile     → not needed; users follow SETUP.md
+  celery.py    → no task queue in this pipeline
+  migrate.py   → no migration tooling in this pipeline
+  seed.py      → no seed scripts in this pipeline
+
+If you generate any of these files the build WILL FAIL during the test phase.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

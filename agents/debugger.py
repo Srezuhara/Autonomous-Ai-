@@ -1,8 +1,10 @@
 """
 agents/debugger.py — Autonomous debugging loop with two-pass cascade fix.
 
-Key improvement: after the first pass fixes dependency files,
-a second pass re-tries any files that failed due to cascade errors.
+Phase 15 changes
+────────────────
+1. SKIP_DEBUG_FILES set — skips setup.py, manage.py, wsgi.py etc. (15.3)
+2. _pre_install_project_deps() — installs requirements.txt before debug loop (15.2)
 """
 import logging
 import re
@@ -31,6 +33,13 @@ LOCAL_MODULE_BLOCKLIST = {
 }
 
 IGNORE_ERRORS = ["uvicorn", "Address already in use", "Timed out after"]
+
+# Phase 15.3 — files that cannot be import-checked via importlib
+SKIP_DEBUG_FILES = {
+    "setup.py", "manage.py", "wsgi.py", "asgi.py",
+    "conftest.py", "migrate.py", "seed.py",
+    "celery.py", "gunicorn.conf.py",
+}
 
 SYSPATH_BLOCK = """\
 import sys as _sys, os as _os
@@ -62,8 +71,19 @@ class Debugger(BaseAgent):
         super().__init__("Debugger", system_prompt)
 
     def run(self, file_paths: list[str]) -> list[FileDebugResult]:
-        py_files = [f for f in file_paths if f.endswith(".py")]
+        # Phase 15.3 — filter out un-debuggable files BEFORE any work
+        py_files = [
+            f for f in file_paths
+            if f.endswith(".py") and Path(f).name not in SKIP_DEBUG_FILES
+        ]
+        skipped = len(file_paths) - len(py_files) - sum(1 for f in file_paths if not f.endswith(".py"))
+        if skipped:
+            logger.info(f"⏭️  Skipped {skipped} un-debuggable file(s) (setup.py, manage.py etc.)")
+
         logger.info(f"🐛 Debugging {len(py_files)} Python files...")
+
+        # Phase 15.2 — pre-install project dependencies before the debug loop
+        self._pre_install_project_deps(py_files)
 
         # Pre-flight: __init__.py + fixes + sys.path injection
         self._ensure_init_files(py_files)
@@ -83,15 +103,12 @@ class Debugger(BaseAgent):
             logger.info(str(r))
 
         # PASS 2: re-try files that failed in pass 1
-        # Their dependencies may have been fixed during pass 1
         failed = [fp for fp, r in results.items() if not r.success]
         if failed:
             logger.info(f"🔁 Pass 2: re-trying {len(failed)} failed files after dependency fixes...")
             for fp in failed:
-                # Reset attempt counter for pass 2
                 r2 = self._debug_file(fp)
                 if r2.success:
-                    # Merge fixes and mark success
                     results[fp].success = True
                     results[fp].fixes_applied.extend(r2.fixes_applied)
                     results[fp].attempts += r2.attempts
@@ -104,10 +121,35 @@ class Debugger(BaseAgent):
         logger.info(f"🐛 Debug complete: {passed}/{len(final)} files passing")
         return final
 
+    # ── Phase 15.2 — Pre-install project dependencies ─────────────────────────
+
+    def _pre_install_project_deps(self, file_paths: list[str]) -> None:
+        """
+        Install the project's requirements.txt before the debug loop starts.
+        Mirrors what tester.py already does — prevents ModuleNotFoundError
+        on packages that are listed in requirements.txt but not yet installed.
+        """
+        from tools.dependency_installer import pip_install_requirements
+        if not file_paths:
+            return
+        root = Path(file_paths[0]).parts[0]
+        for candidate in [
+            f"{root}/requirements.txt",
+            f"{root}/backend/requirements.txt",
+        ]:
+            req = Path(config.OUTPUT_DIR) / candidate
+            if req.exists():
+                logger.info(f"📦 Pre-installing deps from {candidate}...")
+                result = pip_install_requirements(str(req))
+                if result.success:
+                    logger.info("✅ Dependencies installed")
+                else:
+                    logger.warning(f"⚠️  Some deps failed: {result.stderr[:200]}")
+                return  # only install from first found file
+
     # ── Pre-flight fixes ─────────────────────────────────────────
 
     def _preflight_fix(self, file_path: str) -> list[str]:
-        """Deterministic fixes for known-bad generation patterns."""
         try:
             content = read_file(file_path)
         except Exception:
@@ -117,12 +159,10 @@ class Debugger(BaseAgent):
         original = content
         filename = Path(file_path).name
 
-        # Fix 1: rename weather_router → router in routes.py
         if filename == "routes.py" and re.search(r'\bweather_router\s*=\s*APIRouter', content):
             content = re.sub(r'\bweather_router\b', 'router', content)
             fixes.append("renamed weather_router → router")
 
-        # Fix 2: fix router import in main.py
         if filename == "main.py":
             new = re.sub(r'from routes import \w*router\w*', 'from routes import router', content)
             new = re.sub(r'app\.include_router\(\w*router\w*\)', 'app.include_router(router)', new)
@@ -130,14 +170,12 @@ class Debugger(BaseAgent):
                 content = new
                 fixes.append("fixed router import name")
 
-        # Fix 3: disable module-level DB connections
         if re.search(r'^engine\s*=\s*create_engine', content, re.MULTILINE):
             content = re.sub(r'^(engine\s*=\s*create_engine[^\n]+)', r'# \1', content, flags=re.MULTILINE)
             content = re.sub(r'^(Session\s*=\s*sessionmaker[^\n]+)', r'# \1', content, flags=re.MULTILINE)
             content = re.sub(r'^(Base\.metadata\.create_all[^\n]+)', r'# \1', content, flags=re.MULTILINE)
             fixes.append("disabled module-level DB connection")
 
-        # Fix 4: 'from models import X' when models/ is a folder
         project_dir = self._get_project_dir(file_path)
         if project_dir:
             models_file = project_dir / "models.py"
@@ -151,7 +189,6 @@ class Debugger(BaseAgent):
                         content = new
                         fixes.append(f"fixed 'from models import X' → 'from models.{stem} import X'")
 
-        # Fix 5: 'from services.x import Y' when services.py is flat
         if project_dir and (project_dir / "services.py").exists():
             new = re.sub(r'from services\.\w+ import ([^\n]+)', r'from services import \1', content)
             if new != content:
@@ -189,7 +226,6 @@ class Debugger(BaseAgent):
     def _inject_syspath(self, file_path: str) -> bool:
         try:
             content = read_file(file_path)
-            # Remove old sys.path block if present
             if "_here = " in content or "sys.path.insert" in content:
                 lines = content.splitlines(keepends=True)
                 filtered = [l for l in lines if not any(x in l for x in [
@@ -290,7 +326,6 @@ class Debugger(BaseAgent):
 
             if root_cause and root_cause != file_path:
                 logger.info(f"  🔍 Root cause: {root_cause}")
-                # Fix dependency file immediately
                 dep_fixes = self._preflight_fix(root_cause)
                 for fix in dep_fixes:
                     logger.info(f"  🔨 Pre-flight [{root_cause}]: {fix}")

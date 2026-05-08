@@ -1,17 +1,16 @@
 import { useParams, Link } from 'react-router-dom';
 import {
   Wifi, WifiOff, CheckCircle2, XCircle,
-  ArrowLeft, ExternalLink, Loader
+  ArrowLeft, ExternalLink, Loader, X
 } from 'lucide-react';
 import { useBuildProgress } from '../hooks/useBuildProgress';
 import { useProjectDetail } from '../hooks/useQueries';
+import { api } from '../api/client';
 import { StepTracker } from '../components/shared/StepTracker';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import './BuildProgress.css';
 
 // ── WS status pill ─────────────────────────────────────────────────────────────
-// Important: we never show "WS Error" to the user because a WS failure is an
-// implementation detail — the REST polling fallback keeps the UI working.
 function WsStatusPill({ status }: { status: string }) {
   type PillConfig = { label: string; cls: string; icon: React.ReactNode };
 
@@ -31,7 +30,6 @@ function WsStatusPill({ status }: { status: string }) {
       cls:   'ws-pill--done',
       icon:  <CheckCircle2 size={13} />,
     },
-    // 'error' maps to a neutral "polling" indicator, not a red error badge
     error: {
       label: 'Polling…',
       cls:   'ws-pill--connecting',
@@ -52,36 +50,29 @@ function WsStatusPill({ status }: { status: string }) {
 export default function BuildProgress() {
   const { id } = useParams<{ id: string }>();
 
-  // Live progress from WebSocket (+ REST fallback)
   const { steps, wsStatus, buildDone, buildStatus } = useBuildProgress(id);
 
-  // Only fetch the full project record once the build is confirmed done.
-  // Previously this was `wsStatus === 'done'` which never triggered when
-  // WS errored after rebuild (the connect-to-undefined bug).
-  // Now we use `buildDone` which is set by both the WS 'complete' message
-  // AND the REST polling fallback.
   const { data: project } = useProjectDetail(buildDone ? id : undefined);
 
-  // ── Derive display state ───────────────────────────────────────────────────
-  const isFinished = buildDone;
-
-  // Actual build outcome — use REST project data if available, fall back to
-  // the status we got from the WS/polling stream.
+  const isFinished  = buildDone;
   const actualStatus = project?.status ?? buildStatus;
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // IMPORTANT: hasFailed must only be true when the BUILD PIPELINE failed.
-  // Previously `hasFailed = wsStatus === 'error'` which meant ANY WebSocket
-  // connection problem (including the rebuild-to-undefined bug) showed
-  // "Build Failed" permanently — even for builds that succeeded.
-  //
-  // Now: only show failure UI when the build is done AND the actual server
-  // status is 'failed'. A WS drop alone never triggers this.
-  // ─────────────────────────────────────────────────────────────────────────────
   const hasFailed    = isFinished && actualStatus === 'failed';
-  const hasSucceeded = isFinished && (actualStatus === 'done');
+  const hasSucceeded = isFinished && actualStatus === 'done';
 
   const stepsComplete = steps.filter(s => s.status === 'done').length;
+
+  // ── Cancel handler ─────────────────────────────────────────────────────────
+  const handleCancel = async () => {
+    if (!id) return;
+    if (!confirm('Cancel this build? The pipeline will stop at its current step.')) return;
+    try {
+      await api.cancelJob(id);
+      // Build will transition to "cancelled" — WS/polling will pick it up
+    } catch (err) {
+      console.error('Cancel failed:', err);
+      alert('Failed to cancel build. It may have already finished.');
+    }
+  };
 
   return (
     <div className="build-progress page-wrapper animate-in">
@@ -142,7 +133,7 @@ export default function BuildProgress() {
             </div>
           </div>
 
-          {/* View result — only shown when build genuinely succeeded */}
+          {/* View result */}
           {hasSucceeded && (
             <Link
               to={`/projects/${id}`}
@@ -153,7 +144,22 @@ export default function BuildProgress() {
             </Link>
           )}
 
-          {/* Failure card — only shown when build pipeline actually failed */}
+          {/* ── CANCEL BUTTON (Phase 15.6) ──────────────────────────────────
+               Only shown while the build is actively running or queued.
+               Hidden once the build is done, failed, or cancelled.
+          ────────────────────────────────────────────────────────────────── */}
+          {!isFinished && (
+            <button
+              className="btn btn-danger"
+              onClick={handleCancel}
+              style={{ width: '100%', justifyContent: 'center' }}
+              title="Stop the pipeline at its current step"
+            >
+              <X size={15} /> Cancel Build
+            </button>
+          )}
+
+          {/* Failure card */}
           {hasFailed && (
             <div className="bp-error card">
               <XCircle
@@ -196,7 +202,7 @@ export default function BuildProgress() {
             </div>
           )}
 
-          {/* Polling notice — shown when WS dropped but build is still running */}
+          {/* Polling notice */}
           {!isFinished && wsStatus === 'error' && (
             <div
               className="bp-tips card"
