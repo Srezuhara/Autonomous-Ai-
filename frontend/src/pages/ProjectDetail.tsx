@@ -3,21 +3,18 @@ import { useState } from 'react';
 import {
   ArrowLeft, Download, RefreshCw, Trash2, FileCode2,
   Star, Shield, FlaskConical, Clock, Calendar,
-  ChevronDown, ChevronUp, Terminal
+  Zap, ChevronDown, ChevronRight, AlertTriangle
 } from 'lucide-react';
 import { useProjectDetail } from '../hooks/useQueries';
 import { api } from '../api/client';
 import { StatusBadge } from '../components/shared/StatusBadge';
-import { RebuildModal } from '../components/shared/RebuildModal';
-import { BuildLogsPanel } from '../components/shared/BuildLogsPanel';
-import { useBuildProgress } from '../hooks/useBuildProgress';
 import './ProjectDetail.css';
 
 /**
  * Smart score parser — handles all formats the API might return:
  *   "7.5"    → 75%    (numeric out of 10)
- *   "7.5/10" → 75%    (explicit /10 fraction)
- *   "3/5"    → 60%    (arbitrary fraction — test scores)
+ *   "7.5/10" → 75%    (explicit /10)
+ *   "3/5"    → 60%    (test score fraction)
  *   "0/0 (collection errors)" → 0%
  *   7        → 70%    (bare number)
  */
@@ -50,7 +47,6 @@ function ScoreGauge({ label, value, icon }: {
     : pct >= 40
     ? 'var(--color-warning)'
     : 'var(--color-error)';
-
   const display = value != null && value !== '' ? String(value) : '—';
 
   return (
@@ -74,49 +70,144 @@ function ScoreGauge({ label, value, icon }: {
   );
 }
 
+// ── Phase 17: Token usage card ─────────────────────────────────────────────────
+function TokenCard({ promptTokens, completionTokens, totalTokens }: {
+  promptTokens?:     number;
+  completionTokens?: number;
+  totalTokens?:      number;
+}) {
+  const total = totalTokens ?? 0;
+  if (total === 0) return null;
+
+  const fmt = (n: number) =>
+    n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(2)}M`
+      : n >= 1_000
+      ? `${(n / 1_000).toFixed(1)}K`
+      : String(n);
+
+  // Rough cost estimate — Groq llama-3.3-70b pricing (as of 2025)
+  // $0.59 / 1M input tokens, $0.79 / 1M output tokens
+  const inputCost  = ((promptTokens ?? 0)     / 1_000_000) * 0.59;
+  const outputCost = ((completionTokens ?? 0) / 1_000_000) * 0.79;
+  const totalCost  = inputCost + outputCost;
+
+  return (
+    <div className="pd-token-card card">
+      <div className="pd-token-header">
+        <Zap size={15} style={{ color: 'var(--color-warning)' }} />
+        <span>Token Usage</span>
+        <span className="pd-token-model">llama-3.3-70b</span>
+      </div>
+      <div className="pd-token-grid">
+        <div className="pd-token-stat">
+          <span className="pd-token-label">Prompt</span>
+          <span className="pd-token-value">{fmt(promptTokens ?? 0)}</span>
+        </div>
+        <div className="pd-token-stat">
+          <span className="pd-token-label">Completion</span>
+          <span className="pd-token-value">{fmt(completionTokens ?? 0)}</span>
+        </div>
+        <div className="pd-token-stat pd-token-stat--total">
+          <span className="pd-token-label">Total</span>
+          <span className="pd-token-value pd-token-value--total">{fmt(total)}</span>
+        </div>
+        <div className="pd-token-stat">
+          <span className="pd-token-label">Est. Cost</span>
+          <span className="pd-token-value" style={{ color: 'var(--color-success)' }}>
+            ${totalCost < 0.01 ? '<$0.01' : totalCost.toFixed(3)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Phase 17: Build step log panel ────────────────────────────────────────────
+interface StepLog {
+  step:   number;
+  name:   string;
+  status: string;
+  at:     string;
+  data?:  Record<string, unknown>;
+}
+
+function StepLogEntry({ log }: { log: StepLog }) {
+  const [open, setOpen] = useState(false);
+  const hasError  = log.status === 'failed' && log.data?.error;
+  const hasData   = log.data && Object.keys(log.data).length > 0;
+  const elapsed   = log.data?.elapsed_seconds as number | undefined;
+  const timedOut  = log.data?.timed_out as boolean | undefined;
+
+  const statusColor =
+    log.status === 'done'    ? 'var(--color-success)' :
+    log.status === 'failed'  ? 'var(--color-error)'   :
+    log.status === 'running' ? 'var(--color-info)'    :
+    'var(--text-tertiary)';
+
+  return (
+    <div className={`step-log-entry${hasError ? ' step-log-entry--error' : ''}`}>
+      <div
+        className="step-log-header"
+        onClick={() => hasData && setOpen(o => !o)}
+        style={{ cursor: hasData ? 'pointer' : 'default' }}
+      >
+        <span className="step-log-num">{log.step}</span>
+        <span className="step-log-name">{log.name.replace(/_/g, ' ')}</span>
+        {elapsed != null && (
+          <span className="step-log-elapsed">{elapsed}s</span>
+        )}
+        {timedOut && (
+          <span className="step-log-badge step-log-badge--timeout">
+            <AlertTriangle size={10} /> timeout
+          </span>
+        )}
+        <span className="step-log-status" style={{ color: statusColor }}>
+          {log.status}
+        </span>
+        {hasData && (
+          open
+            ? <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', marginLeft: 'auto' }} />
+            : <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', marginLeft: 'auto' }} />
+        )}
+      </div>
+
+      {open && hasData && (
+        <div className="step-log-body">
+          {hasError && (
+            <div className="step-log-error">
+              <strong>{log.data!.error_type as string}:</strong>{' '}
+              {log.data!.error as string}
+              {log.data!.traceback && (
+                <pre className="step-log-traceback">
+                  {(log.data!.traceback as string).slice(-800)}
+                </pre>
+              )}
+            </div>
+          )}
+          {!hasError && (
+            <pre className="step-log-data">
+              {JSON.stringify(
+                Object.fromEntries(
+                  Object.entries(log.data!).filter(([k]) => k !== 'traceback')
+                ),
+                null,
+                2,
+              )}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const { data: project, isLoading, isError } = useProjectDetail(id);
   const navigate = useNavigate();
-
-  const [isRebuildModalOpen, setIsRebuildModalOpen] = useState(false);
-  const [isRebuilding,       setIsRebuilding]       = useState(false);
-  const [showLogs,           setShowLogs]           = useState(false);
-
-  // Use build progress hook to get live step data for logs panel
-  // Only active if build is currently running
-  const isRunning = project?.status === 'running';
-  const { steps, buildDone, buildStatus } = useBuildProgress(
-    isRunning ? id : undefined
-  );
-
-  // For completed projects, reconstruct steps from progress endpoint
-  const [historicSteps, setHistoricSteps] = useState<import('../hooks/useBuildProgress').ProgressStep[]>([]);
-  const [logsLoaded,    setLogsLoaded]    = useState(false);
-
-  const loadHistoricLogs = async () => {
-    if (!id || logsLoaded) return;
-    try {
-      const logs = await api.getBuildLogs(id);
-      const mapped = logs.map(l => ({
-        step:      l.step,
-        step_name: l.step_name,
-        status:    l.status as 'running' | 'done' | 'failed',
-        timestamp: l.timestamp,
-        data:      l.data ? JSON.parse(l.data) : undefined,
-      }));
-      setHistoricSteps(mapped);
-      setLogsLoaded(true);
-    } catch {
-      setLogsLoaded(true); // don't retry
-    }
-  };
-
-  const handleToggleLogs = () => {
-    const next = !showLogs;
-    setShowLogs(next);
-    if (next && !isRunning) loadHistoricLogs();
-  };
+  const [isRebuilding, setIsRebuilding] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
 
   const handleDelete = async () => {
     if (!id || !confirm('Delete this project permanently?')) return;
@@ -124,23 +215,17 @@ export default function ProjectDetail() {
     navigate('/dashboard');
   };
 
-  const handleRebuild = async (customPrompt: string) => {
+  const handleRebuild = async () => {
     if (!id || isRebuilding) return;
     setIsRebuilding(true);
     try {
-      const res = await api.rebuildProject(id, customPrompt || undefined);
-      setIsRebuildModalOpen(false);
+      const res = await api.rebuildProject(id);
       navigate(`/build/${res.new_build_id}`);
     } catch (err) {
       console.error('Rebuild failed:', err);
       setIsRebuilding(false);
     }
   };
-
-  // Determine which steps to show in logs
-  const displaySteps = isRunning ? steps : historicSteps;
-  const displayStatus = isRunning ? buildStatus : (project?.status ?? '');
-  const displayDone   = isRunning ? buildDone   : (project?.status !== 'running');
 
   if (isLoading) {
     return (
@@ -165,6 +250,19 @@ export default function ProjectDetail() {
     );
   }
 
+  // Build step logs from progress (stored in project.progress if available)
+  // The API returns them via useProjectDetail → GET /projects/{id}
+  // For now we read from JobStatus shape if present; extend when API exposes them.
+  const stepLogs: StepLog[] = (project as unknown as {
+    build_steps?: Array<{ step: number; name: string; status: string; timestamp: string; data?: string }>
+  }).build_steps?.map(s => ({
+    step:   s.step,
+    name:   s.name,
+    status: s.status,
+    at:     s.timestamp,
+    data:   s.data ? (() => { try { return JSON.parse(s.data!); } catch { return {}; } })() : undefined,
+  })) ?? [];
+
   return (
     <div className="project-detail page-wrapper animate-in">
       {/* Back */}
@@ -179,7 +277,7 @@ export default function ProjectDetail() {
           <p className="pd-prompt">{project.prompt}</p>
           <div className="pd-tags">
             <StatusBadge status={project.status} />
-            {project.app_type && <span className="tag">{project.app_type}</span>}
+            {project.app_type  && <span className="tag">{project.app_type}</span>}
             {project.complexity && <span className="tag">{project.complexity}</span>}
           </div>
         </div>
@@ -195,7 +293,7 @@ export default function ProjectDetail() {
           )}
           <button
             className="btn btn-secondary"
-            onClick={() => setIsRebuildModalOpen(true)}
+            onClick={handleRebuild}
             disabled={isRebuilding}
           >
             {isRebuilding
@@ -230,7 +328,7 @@ export default function ProjectDetail() {
       </div>
 
       {/* Scores */}
-      {(project.status === 'done' || project.status === 'failed') && (
+      {project.status === 'done' && (
         <div className="pd-scores">
           <ScoreGauge
             label="Review Score"
@@ -250,39 +348,36 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* ── Build Logs Panel ── */}
-      <div className="pd-logs card">
-        <button className="pd-logs-toggle" onClick={handleToggleLogs}>
-          <div className="pd-logs-toggle-left">
-            <Terminal size={15} />
-            <span>Pipeline Logs</span>
-            {project.status === 'failed' && (
-              <span className="pd-logs-failed-hint">— click to see what went wrong</span>
-            )}
-          </div>
-          <div className="pd-logs-toggle-right">
-            {!isRunning && (
-              <span className="pd-logs-step-count">
-                {logsLoaded ? `${historicSteps.length}/9 steps` : 'View details'}
-              </span>
-            )}
-            {showLogs
-              ? <ChevronUp size={15} style={{ color: 'var(--text-tertiary)' }} />
-              : <ChevronDown size={15} style={{ color: 'var(--text-tertiary)' }} />
-            }
-          </div>
-        </button>
+      {/* Phase 17: Token usage */}
+      <TokenCard
+        promptTokens={project.prompt_tokens}
+        completionTokens={project.completion_tokens}
+        totalTokens={project.total_tokens}
+      />
 
-        {showLogs && (
-          <div className="pd-logs-content">
-            <BuildLogsPanel
-              steps={displaySteps}
-              buildStatus={displayStatus}
-              buildDone={displayDone}
-            />
-          </div>
-        )}
-      </div>
+      {/* Phase 17: Build step logs */}
+      {stepLogs.length > 0 && (
+        <div className="pd-step-logs card">
+          <button
+            className="pd-step-logs-toggle"
+            onClick={() => setLogsOpen(o => !o)}
+          >
+            <span className="section-label">Build Step Logs</span>
+            <span className="pd-step-log-count">{stepLogs.length} steps</span>
+            {logsOpen
+              ? <ChevronDown size={15} style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }} />
+              : <ChevronRight size={15} style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }} />
+            }
+          </button>
+          {logsOpen && (
+            <div className="pd-step-logs-body">
+              {stepLogs.map(log => (
+                <StepLogEntry key={log.step} log={log} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* File Tree */}
       {project.files && project.files.length > 0 && (
@@ -308,16 +403,6 @@ export default function ProjectDetail() {
           </div>
         </div>
       )}
-
-      {/* Rebuild Modal */}
-      <RebuildModal
-        isOpen={isRebuildModalOpen}
-        onClose={() => setIsRebuildModalOpen(false)}
-        onRebuild={handleRebuild}
-        originalPrompt={project.prompt}
-        appName={project.app_name || 'App'}
-        isRebuilding={isRebuilding}
-      />
     </div>
   );
 }

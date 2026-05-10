@@ -52,12 +52,15 @@ def main():
         "*.log",
     ]
 
+    import os
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
     # Only watch actual source code directories
     reload_dirs = [
-        "api_platform",
-        "agents",
-        "tools",
-        "prompts",
+        os.path.join(base_dir, "api_platform"),
+        os.path.join(base_dir, "agents"),
+        os.path.join(base_dir, "tools"),
+        os.path.join(base_dir, "prompts"),
     ]
 
     print(f"""

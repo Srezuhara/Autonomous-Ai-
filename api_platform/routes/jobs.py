@@ -78,6 +78,8 @@ async def get_job_status(build_id: str):
                     "name":   s["step_name"],
                     "status": s["status"],
                     "at":     s["timestamp"],
+                    # Phase 17: structured step payload (elapsed_seconds, error, traceback)
+                    "data":   s.get("data"),  # raw JSON string; frontend JSON.parses it
                 }
                 for s in steps
             ],

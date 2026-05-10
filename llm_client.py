@@ -1,15 +1,12 @@
 """
-llm_client.py  v3.2.0
-======================
-Phase 15.4 addition
-────────────────────
-_validate_keys_on_startup() — probes each key with max_tokens=1 in a background
-thread at import time. 401 keys are marked exhausted before any build runs,
-saving 30–60 s of wasted retries on the first build.
-
-Bug fixes from v3.1.0 retained:
-  BUG 1 — last key skipped (index advanced before selection)
-  BUG 2 — Ollama 180s timeout, ReadTimeout not caught
+llm_client.py  v3.2.0  (Phase 17 — token tracking)
+====================================================
+Changes vs v3.1:
+  - Thread-safe per-build token accumulator (_token_store)
+  - set_current_build_id(build_id) — call before pipeline starts
+  - get_and_reset_token_usage(build_id) — call after pipeline ends
+  - _add_tokens() — called inside _call_groq() after every successful response
+  - All other behaviour identical to v3.1
 """
 
 import logging
@@ -24,7 +21,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-# ── Config import (optional) ──────────────────────────────────────────────────
+# ── Config import (optional — graceful fallback if config.py missing) ─────────
 
 def _get_config(attr: str, default):
     try:
@@ -37,6 +34,10 @@ def _get_config(attr: str, default):
 # ── Groq key pool ──────────────────────────────────────────────────────────────
 
 def _load_groq_keys() -> list[str]:
+    """
+    Load all Groq API keys from environment.
+    Reads GROQ_API_KEY (primary) + GROQ_API_KEY_2 through GROQ_API_KEY_20.
+    """
     seen: set[str] = set()
     keys: list[str] = []
 
@@ -65,24 +66,85 @@ _global_key_index: int = -1
 _exhausted: set[int] = set()
 _exhausted_lock = threading.Lock()
 
+# ── Phase 17: Per-build token tracking ────────────────────────────────────────
+# Maps build_id → {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
+# Thread-safe: all reads/writes protected by _token_lock.
+_token_store: dict[str, dict] = {}
+_token_lock   = threading.Lock()
+_current_build_id = threading.local()   # thread-local: which build is this thread serving
+
+
+def set_current_build_id(build_id: str):
+    """
+    Register the build_id for the current thread so token usage is attributed correctly.
+    Call this in runner._run_build() before creating the Pipeline.
+    """
+    _current_build_id.value = build_id
+    with _token_lock:
+        if build_id not in _token_store:
+            _token_store[build_id] = {
+                "prompt_tokens":     0,
+                "completion_tokens": 0,
+                "total_tokens":      0,
+            }
+
+
+def _add_tokens(prompt_tokens: int, completion_tokens: int):
+    """
+    Add token counts to the currently-running build's accumulator.
+    Called after every successful Groq response inside _call_groq().
+    No-op if no build_id is registered for this thread.
+    """
+    bid = getattr(_current_build_id, "value", None)
+    if not bid:
+        return
+    with _token_lock:
+        rec = _token_store.setdefault(
+            bid,
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        )
+        rec["prompt_tokens"]     += prompt_tokens
+        rec["completion_tokens"] += completion_tokens
+        rec["total_tokens"]      += prompt_tokens + completion_tokens
+
+
+def get_and_reset_token_usage(build_id: str) -> dict:
+    """
+    Return the accumulated token usage for a build and remove it from the store.
+    Call this in runner._run_build() after the pipeline completes.
+    Returns zeros if no usage was recorded (e.g. Ollama-only builds).
+    """
+    with _token_lock:
+        return _token_store.pop(
+            build_id,
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        )
+
+
+# ── Key helpers ────────────────────────────────────────────────────────────────
 
 def _get_next_groq_key() -> Optional[str]:
+    """
+    Return the next available (non-exhausted) Groq key.
+    Scans forward from _global_key_index through the full key list.
+    Returns None only when every key is exhausted.
+    Fix for Bug 1 (v3.1): index is advanced AFTER a key is selected.
+    """
     global _global_key_index
     with _exhausted_lock:
         n = len(_groq_keys)
         if n == 0:
             return None
-
         for offset in range(1, n + 1):
             candidate_idx = (_global_key_index + offset) % n
             if candidate_idx not in _exhausted:
                 _global_key_index = candidate_idx
                 return _groq_keys[candidate_idx]
-
         return None
 
 
 def _mark_groq_exhausted(key: str):
+    """Mark a key as daily-limit exhausted so it's skipped on future calls."""
     with _exhausted_lock:
         try:
             idx = _groq_keys.index(key)
@@ -99,13 +161,18 @@ def _mark_groq_exhausted(key: str):
 
 
 def _reset_exhausted():
+    """Reset all exhausted keys (call this after midnight when limits refresh)."""
     with _exhausted_lock:
         count = len(_exhausted)
         _exhausted.clear()
-    logger.info(f"🔑 Reset {count} exhausted Groq key(s) — all {len(_groq_keys)} valid keys available")
+    logger.info(
+        f"🔑 Reset {count} exhausted Groq key(s) — "
+        f"all {len(_groq_keys)} valid keys available"
+    )
 
 
 def get_key_status() -> dict:
+    """Return current key pool health — used by /health and /admin/reset-keys."""
     with _exhausted_lock:
         exhausted_count = len(_exhausted)
         total           = len(_groq_keys)
@@ -117,7 +184,6 @@ def get_key_status() -> dict:
             }
             for i, k in enumerate(_groq_keys)
         ]
-
     return {
         "total_keys":     total,
         "available_keys": available,
@@ -126,62 +192,19 @@ def get_key_status() -> dict:
     }
 
 
-# ── Phase 15.4 — Startup key validation ──────────────────────────────────────
-
-def _validate_keys_on_startup() -> None:
-    """
-    Fire a minimal (max_tokens=1) request against each Groq key in a
-    background daemon thread. Keys returning 401 are marked exhausted
-    immediately so the first real build doesn't waste time on them.
-
-    Does NOT block startup — runs completely in the background.
-    Network failures are silently ignored (key stays valid by default).
-    """
-    def _probe():
-        groq_model = _get_config(
-            "GROQ_MODEL",
-            os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        )
-        for i, key in enumerate(_groq_keys):
-            try:
-                import httpx
-                with httpx.Client(timeout=10) as c:
-                    r = c.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": groq_model,
-                            "messages": [{"role": "user", "content": "hi"}],
-                            "max_tokens": 1,
-                        },
-                    )
-                if r.status_code == 401:
-                    with _exhausted_lock:
-                        _exhausted.add(i)
-                    logger.warning(
-                        f"🔑 Key ...{key[-8:]} is INVALID (401) — marked exhausted at startup"
-                    )
-                elif r.status_code in (200, 429):
-                    # 429 means valid key, just rate-limited (don't mark exhausted here)
-                    logger.info(f"🔑 Key ...{key[-8:]} validated (HTTP {r.status_code})")
-                # Other status codes (500 etc.) — leave key as valid
-            except Exception:
-                # Network issues at startup — don't penalise valid keys
-                pass
-
-    threading.Thread(target=_probe, daemon=True, name="groq-key-validator").start()
-
-
 # ── Groq call ──────────────────────────────────────────────────────────────────
 
 def _call_groq(prompt: str, system: str, max_tokens: int) -> str:
+    """
+    Try every available Groq key in round-robin order.
+    Marks keys exhausted on 429 and retries on the next key immediately.
+    Phase 17: records token usage after every successful response.
+    """
     import httpx
 
-    groq_model = _get_config("GROQ_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
-
+    groq_model = _get_config(
+        "GROQ_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    )
     tried: set[str] = set()
 
     while True:
@@ -226,7 +249,9 @@ def _call_groq(prompt: str, system: str, max_tokens: int) -> str:
 
                 if wait_secs is not None and wait_secs <= 10:
                     import time
-                    logger.info(f"⏳ Key ...{key[-8:]} rate-limited for {wait_secs:.1f}s — waiting...")
+                    logger.info(
+                        f"⏳ Key ...{key[-8:]} rate-limited for {wait_secs:.1f}s — waiting..."
+                    )
                     time.sleep(wait_secs + 0.5)
                     tried.discard(key)
                     continue
@@ -236,13 +261,25 @@ def _call_groq(prompt: str, system: str, max_tokens: int) -> str:
                     continue
 
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            data = resp.json()
+
+            # ── Phase 17: record token usage ──────────────────────────────────
+            usage = data.get("usage", {})
+            if usage:
+                _add_tokens(
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                )
+
+            return data["choices"][0]["message"]["content"]
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429:
                 _mark_groq_exhausted(key)
                 continue
-            logger.warning(f"⚠️  Groq HTTP error ({e.response.status_code}) on key ...{key[-8:]}: {e}")
+            logger.warning(
+                f"⚠️  Groq HTTP error ({e.response.status_code}) on key ...{key[-8:]}: {e}"
+            )
             continue
 
         except httpx.TimeoutException:
@@ -254,17 +291,23 @@ def _call_groq(prompt: str, system: str, max_tokens: int) -> str:
             continue
 
 
-# ── Ollama call ────────────────────────────────────────────────────────────────
+# ── Ollama call (last-resort fallback) ────────────────────────────────────────
 
 def _call_ollama(prompt: str, system: str) -> str:
+    """
+    Call local Ollama instance.
+    Timeout: connect=10s, read=300s (7B q4 on CPU can take 90-300s).
+    """
     import httpx
 
     ollama_url   = os.getenv("OLLAMA_URL", "http://localhost:11434")
-    ollama_model = _get_config("OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b-instruct-q4_K_M"))
-    max_tokens   = _get_config("OLLAMA_MAX_TOKENS", 1500)
+    ollama_model = _get_config(
+        "OLLAMA_MODEL",
+        os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b-instruct-q4_K_M"),
+    )
+    max_tokens = _get_config("OLLAMA_MAX_TOKENS", 1500)
 
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
-
     logger.info(f"🦙 Calling Ollama ({ollama_model}, max_tokens={max_tokens})...")
 
     try:
@@ -291,7 +334,9 @@ def _call_ollama(prompt: str, system: str) -> str:
     except (httpx.ReadTimeout, httpx.TimeoutException) as e:
         raise RuntimeError(
             f"Ollama call timed out after 300s. "
-            "The model may be loading — try again, or set LLM_PROVIDER=groq in .env."
+            "The model may be loading — try again, or increase OLLAMA_MAX_TOKENS "
+            "to a lower value to reduce generation time. "
+            "Alternatively set LLM_PROVIDER=groq in .env to disable Ollama fallback."
         ) from e
 
     except httpx.HTTPStatusError as e:
@@ -324,7 +369,9 @@ def generate_text(prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         except RuntimeError as e:
             err_msg = str(e)
             if "timed out" in err_msg and attempt == 1:
-                logger.warning(f"🦙 Ollama timed out on attempt {attempt}, retrying once...")
+                logger.warning(
+                    f"🦙 Ollama timed out on attempt {attempt}, retrying once..."
+                )
                 continue
             raise RuntimeError(
                 f"Ollama call failed: {err_msg}\n"
@@ -336,11 +383,7 @@ def generate_text(prompt: str, system: str = "", max_tokens: int = 2048) -> str:
 
 
 def _strip_fences(text: str) -> str:
+    """Remove markdown code fences from LLM responses."""
     text = re.sub(r"^```[a-zA-Z]*\s*\n?", "", text, flags=re.MULTILINE)
     text = re.sub(r"\n?```\s*$",          "", text, flags=re.MULTILINE)
     return text.strip()
-
-
-# ── Phase 15.4 — Kick off background key validation at import time ────────────
-if _groq_keys:
-    _validate_keys_on_startup()

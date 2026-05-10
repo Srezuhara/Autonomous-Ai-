@@ -1,12 +1,24 @@
 """
-agents/pipeline.py — Full 9-step build pipeline.
-Enhanced with build IDs and progress callbacks for Stage 2.
+agents/pipeline.py  v2.0.0  (Phase 17 — reliability & observability)
+======================================================================
+Changes vs v1.x:
+  - STEP_TIMEOUT_SECONDS = 240  (configurable hard timeout per step)
+  - STEP_MAX_RETRIES = 1        (each step retried once before failing the build)
+  - _run_step_with_timeout()    — ThreadPoolExecutor-based timeout (works on Windows)
+  - Structured "data" dict emitted on both success AND failure:
+      success: {"elapsed_seconds": N, + step-specific metrics}
+      failure: {"error": "...", "error_type": "...", "traceback": "...",
+                "elapsed_seconds": N, "timed_out": bool}
+  - Token tracking: set_current_build_id() called at pipeline start
+  - _build_step_data() centralises per-step success payload building
 """
 import logging
+import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from uuid import uuid4
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Dict
+from typing import Optional, Callable, Dict, Any
 
 from agents.intent_analyzer import IntentAnalyzer
 from agents.planner import Planner
@@ -19,6 +31,10 @@ from agents.tester import Tester, TestResult
 from agents.documenter import Documenter, DocResult
 
 logger = logging.getLogger(__name__)
+
+# ── Phase 17: configurable per-step limits ─────────────────────────────────────
+STEP_TIMEOUT_SECONDS: int = 240   # seconds before a hung step is cancelled
+STEP_MAX_RETRIES:     int = 1     # extra attempts after the first failure (0 = no retry)
 
 
 @dataclass
@@ -38,31 +54,29 @@ class BuildResult:
     error:          str   = ""
     started_at:     datetime = field(default_factory=datetime.now)
     completed_at:   Optional[datetime] = None
-    current_step:   int   = 0  # Track current step (1-9)
+    current_step:   int   = 0
 
     @property
     def all_files(self):
         return self.backend_files + self.frontend_files
-    
+
     @property
     def duration_seconds(self) -> float:
-        """Calculate build duration in seconds."""
         if not self.completed_at:
             return (datetime.now() - self.started_at).total_seconds()
         return (self.completed_at - self.started_at).total_seconds()
-    
+
     def complete(self, success: bool):
-        """Mark build as complete."""
         self.success = success
         self.completed_at = datetime.now()
 
     def summary(self) -> str:
         debug_passed = sum(1 for r in self.debug_results if r.success)
-        scores = [r.score for r in self.review_results if r.score]
-        avg_score = sum(scores) / len(scores) if scores else 0
+        scores       = [r.score for r in self.review_results if r.score]
+        avg_score    = sum(scores) / len(scores) if scores else 0
         total_tests  = sum(r.tests_generated for r in self.test_results)
         tests_passed = sum(r.passed for r in self.test_results)
-        doc_status = str(self.doc_result) if self.doc_result else "not run"
+        doc_status   = str(self.doc_result) if self.doc_result else "not run"
 
         lines = [
             f"\n{'='*50}",
@@ -105,24 +119,22 @@ class BuildResult:
 class Pipeline:
     def __init__(self, build_id: str = None, progress_callback: Callable = None):
         """
-        Initialize pipeline with optional build ID and progress callback.
-        
         Args:
-            build_id: Unique build identifier (auto-generated if not provided)
-            progress_callback: Function to call with progress updates
-                              callback(progress: Dict) where progress contains:
-                              {
-                                  "build_id": str,
-                                  "step": int,
-                                  "step_name": str,
-                                  "status": "running" | "done" | "failed",
-                                  "timestamp": str (ISO format),
-                                  "data": dict (optional step-specific data)
-                              }
+            build_id:          Unique build identifier (auto-generated if not provided)
+            progress_callback: Called with a progress dict on every step change.
+                               Dict shape:
+                               {
+                                 "build_id":  str,
+                                 "step":      int,
+                                 "step_name": str,
+                                 "status":    "running" | "done" | "failed",
+                                 "timestamp": str (ISO),
+                                 "data":      dict   ← structured per-step payload
+                               }
         """
-        self.build_id = build_id or str(uuid4())[:8]
+        self.build_id          = build_id or str(uuid4())[:8]
         self.progress_callback = progress_callback
-        
+
         self.intent_analyzer    = IntentAnalyzer()
         self.planner            = Planner()
         self.architect          = Architect()
@@ -133,136 +145,257 @@ class Pipeline:
         self.tester             = Tester()
         self.documenter         = Documenter()
 
-    def _emit_progress(self, step: int, step_name: str, status: str, data: Dict = None):
-        """Emit progress event to callback if registered."""
+    # ── Phase 17: step runner with timeout + retry ─────────────────────────────
+
+    def _run_step_with_timeout(
+        self,
+        step_num:  int,
+        step_name: str,
+        fn:        Callable,
+        timeout:   int = STEP_TIMEOUT_SECONDS,
+        retries:   int = STEP_MAX_RETRIES,
+    ) -> Any:
+        """
+        Run fn() in a worker thread with a hard wall-clock timeout.
+
+        Uses ThreadPoolExecutor.submit() + Future.result(timeout=N) so it works
+        cross-platform (no signal.alarm, which is Unix-only).
+
+        On timeout or exception, retries up to `retries` additional times.
+        Raises the last exception if all attempts fail.
+
+        Note: the worker thread continues running after a timeout (Python threads
+        cannot be forcibly killed). The future is cancelled so the result is ignored,
+        but the thread will still complete in the background. This is the standard
+        Python trade-off for cross-platform timeouts.
+        """
+        last_exc: Optional[Exception] = None
+        total_attempts = retries + 1
+
+        for attempt in range(1, total_attempts + 1):
+            attempt_label = f"attempt {attempt}/{total_attempts}"
+            logger.info(
+                f"  ⏱️  [{step_name}] Starting ({attempt_label}, timeout={timeout}s)"
+            )
+
+            # Each attempt gets its own single-worker pool so threads don't accumulate
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"step_{step_name}") as executor:
+                future = executor.submit(fn)
+                try:
+                    result = future.result(timeout=timeout)
+                    if attempt > 1:
+                        logger.info(
+                            f"  ✅ [{step_name}] Succeeded on {attempt_label}"
+                        )
+                    return result
+
+                except FuturesTimeoutError:
+                    # future.cancel() is a best-effort hint; the thread may still run
+                    future.cancel()
+                    last_exc = TimeoutError(
+                        f"Step '{step_name}' timed out after {timeout}s. "
+                        f"The step was taking too long — check Ollama/Groq connectivity."
+                    )
+                    logger.warning(
+                        f"  ⏰ [{step_name}] Timed out after {timeout}s ({attempt_label})"
+                    )
+
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(
+                        f"  ❌ [{step_name}] Failed ({attempt_label}): "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+
+            if attempt < total_attempts:
+                logger.info(f"  🔁 [{step_name}] Retrying ({attempt + 1}/{total_attempts})…")
+
+        # All attempts exhausted — propagate the last exception
+        raise last_exc  # type: ignore[misc]
+
+    # ── Progress emitter ────────────────────────────────────────────────────────
+
+    def _emit_progress(
+        self,
+        step:      int,
+        step_name: str,
+        status:    str,
+        data:      Dict = None,
+    ):
+        """Emit a progress event via the registered callback."""
         if self.progress_callback:
             self.progress_callback({
-                "build_id": self.build_id,
-                "step": step,
+                "build_id":  self.build_id,
+                "step":      step,
                 "step_name": step_name,
-                "status": status,  # "running" | "done" | "failed"
+                "status":    status,
                 "timestamp": datetime.now().isoformat(),
-                "data": data or {},
+                "data":      data or {},
             })
+
+    # ── Per-step success data builders ─────────────────────────────────────────
+
+    def _build_step_data(self, step_name: str, val: Any) -> dict:
+        """
+        Build a structured data dict for a step's success outcome.
+        These are stored in build_progress.data (JSON) and shown in the
+        BuildLogsPanel on the frontend.
+        """
+        try:
+            if step_name == "intent_analyzer" and isinstance(val, dict):
+                return {
+                    "intent":     val,
+                    "app_name":   val.get("app_name"),
+                    "app_type":   val.get("app_type"),
+                    "complexity": val.get("complexity"),
+                }
+            if step_name == "planner" and isinstance(val, list):
+                return {"steps_count": len(val)}
+            if step_name == "architect" and isinstance(val, dict):
+                return {"files_count": len(val.get("files", []))}
+            if step_name in ("backend_developer", "frontend_generator") and isinstance(val, list):
+                return {"files_generated": len(val)}
+            if step_name == "debugger" and isinstance(val, list):
+                passed = sum(1 for r in val if r.success)
+                return {"passed": passed, "total": len(val)}
+            if step_name == "reviewer" and isinstance(val, list):
+                scores = [r.score for r in val if r.score]
+                avg    = round(sum(scores) / len(scores), 2) if scores else 0
+                return {"avg_score": avg, "files_reviewed": len(val)}
+            if step_name == "tester" and isinstance(val, list):
+                passed = sum(r.passed for r in val)
+                total  = sum(r.tests_generated for r in val)
+                return {"passed": passed, "total": total}
+            if step_name == "documenter" and val is not None:
+                return {"readme_path": getattr(val, "readme_path", None)}
+        except Exception:
+            pass
+        return {}
+
+    # ── Main pipeline ───────────────────────────────────────────────────────────
 
     def run(self, user_prompt: str) -> BuildResult:
-        result = BuildResult(user_prompt=user_prompt, build_id=self.build_id)
-        
+        # ── Phase 17: register build for token tracking ───────────────────────
         try:
-            # Step 1: Intent Analysis
-            result.current_step = 1
-            self._emit_progress(1, "intent_analyzer", "running")
-            logger.info("🔍 [1/9] Analyzing intent...")
-            result.intent = self.intent_analyzer.run(user_prompt)
-            self._emit_progress(1, "intent_analyzer", "done", {"intent": result.intent})
+            import llm_client
+            llm_client.set_current_build_id(self.build_id)
+        except Exception:
+            pass  # token tracking is best-effort; never crash the pipeline
 
-            # Step 2: Planning
-            result.current_step = 2
-            self._emit_progress(2, "planner", "running")
-            logger.info("📋 [2/9] Planning build steps...")
-            result.steps = self.planner.run(result.intent)
-            self._emit_progress(2, "planner", "done", {"steps_count": len(result.steps)})
+        result = BuildResult(user_prompt=user_prompt, build_id=self.build_id)
 
-            # Step 3: Architecture
-            result.current_step = 3
-            self._emit_progress(3, "architect", "running")
-            logger.info("🏗️  [3/9] Designing architecture...")
-            result.architecture = self.architect.run(result.intent, result.steps)
-            self._emit_progress(3, "architect", "done", {
-                "files_count": len(result.architecture.get("files", []))
-            })
+        # ── Step definitions ───────────────────────────────────────────────────
+        # Each entry: (step_num, step_name, zero-arg lambda)
+        # Lambdas close over `result` so they always use the latest partial results.
+        steps_def = [
+            (1, "intent_analyzer",
+             lambda: self.intent_analyzer.run(user_prompt)),
+            (2, "planner",
+             lambda: self.planner.run(result.intent)),
+            (3, "architect",
+             lambda: self.architect.run(result.intent, result.steps)),
+            (4, "backend_developer",
+             lambda: self.backend_developer.run(result.intent, result.architecture)),
+            (5, "frontend_generator",
+             lambda: self.frontend_generator.run(result.intent, result.architecture)),
+            (6, "debugger",
+             lambda: self.debugger.run(result.backend_files)),
+            (7, "reviewer",
+             lambda: self.reviewer.run(result.backend_files)),
+            (8, "tester",
+             lambda: self.tester.run(
+                 result.backend_files,
+                 result.architecture,
+                 debug_results=result.debug_results,
+             )),
+            (9, "documenter",
+             lambda: self.documenter.run(
+                 result.intent,
+                 result.architecture,
+                 result.backend_files,
+                 review_results=result.review_results,
+             )),
+        ]
 
-            # Step 4: Backend Development
-            result.current_step = 4
-            self._emit_progress(4, "backend_developer", "running")
-            logger.info("⚙️  [4/9] Generating backend code...")
-            result.backend_files = self.backend_developer.run(result.intent, result.architecture)
-            self._emit_progress(4, "backend_developer", "done", {
-                "files_generated": len(result.backend_files)
-            })
+        # Attribute names on BuildResult, parallel to steps_def
+        result_attrs = [
+            "intent", "steps", "architecture",
+            "backend_files", "frontend_files",
+            "debug_results", "review_results", "test_results", "doc_result",
+        ]
 
-            # Step 5: Frontend Development
-            result.current_step = 5
-            self._emit_progress(5, "frontend_generator", "running")
-            logger.info("🎨 [5/9] Generating frontend code...")
-            result.frontend_files = self.frontend_generator.run(result.intent, result.architecture)
-            self._emit_progress(5, "frontend_generator", "done", {
-                "files_generated": len(result.frontend_files)
-            })
+        try:
+            for (step_num, step_name, fn), attr in zip(steps_def, result_attrs):
+                result.current_step = step_num
+                step_start          = datetime.now()
 
-            # Step 6: Debugging
-            result.current_step = 6
-            self._emit_progress(6, "debugger", "running")
-            logger.info("🐛 [6/9] Running autonomous debugger...")
-            result.debug_results = self.debugger.run(result.backend_files)
-            passed = sum(1 for r in result.debug_results if r.success)
-            self._emit_progress(6, "debugger", "done", {
-                "passed": passed,
-                "total": len(result.debug_results)
-            })
+                # Emit "running" immediately so the UI shows the step as active
+                self._emit_progress(step_num, step_name, "running")
+                logger.info(f"🔄 [{step_num}/9] {step_name}…")
 
-            # Step 7: Code Review
-            result.current_step = 7
-            self._emit_progress(7, "reviewer", "running")
-            logger.info("🔍 [7/9] Reviewing code quality...")
-            result.review_results = self.reviewer.run(result.backend_files)
-            scores = [r.score for r in result.review_results if r.score]
-            avg_score = sum(scores) / len(scores) if scores else 0
-            self._emit_progress(7, "reviewer", "done", {
-                "avg_score": avg_score,
-                "files_reviewed": len(result.review_results)
-            })
+                try:
+                    val = self._run_step_with_timeout(step_num, step_name, fn)
+                    setattr(result, attr, val)
 
-            # Step 8: Testing
-            result.current_step = 8
-            self._emit_progress(8, "tester", "running")
-            logger.info("🧪 [8/9] Generating and running tests...")
-            result.test_results = self.tester.run(
-                result.backend_files,
-                result.architecture,
-                debug_results=result.debug_results,
-            )
-            tests_passed = sum(r.passed for r in result.test_results)
-            tests_total = sum(r.tests_generated for r in result.test_results)
-            self._emit_progress(8, "tester", "done", {
-                "passed": tests_passed,
-                "total": tests_total
-            })
+                    # Build structured payload and measure elapsed time
+                    elapsed    = round((datetime.now() - step_start).total_seconds(), 1)
+                    step_data  = self._build_step_data(step_name, val)
+                    step_data["elapsed_seconds"] = elapsed
 
-            # Step 9: Documentation
-            result.current_step = 9
-            self._emit_progress(9, "documenter", "running")
-            logger.info("📝 [9/9] Generating documentation...")
-            result.doc_result = self.documenter.run(
-                result.intent,
-                result.architecture,
-                result.backend_files,
-                review_results=result.review_results,
-            )
-            self._emit_progress(9, "documenter", "done", {
-                "readme_path": result.doc_result.readme_path if result.doc_result else None
-            })
+                    self._emit_progress(step_num, step_name, "done", step_data)
+                    logger.info(f"✅ [{step_num}/9] {step_name} done in {elapsed}s")
+
+                except Exception as exc:
+                    elapsed = round((datetime.now() - step_start).total_seconds(), 1)
+                    tb      = traceback.format_exc()
+
+                    # Structured failure data stored to DB so BuildLogsPanel
+                    # can display "what went wrong" in ProjectDetail
+                    self._emit_progress(step_num, step_name, "failed", {
+                        "error":           str(exc),
+                        "error_type":      type(exc).__name__,
+                        "traceback":       tb[-1000:],   # last 1000 chars of traceback
+                        "elapsed_seconds": elapsed,
+                        "timed_out":       isinstance(exc, TimeoutError),
+                    })
+                    logger.error(
+                        f"💥 [{step_num}/9] {step_name} failed after {elapsed}s: {exc}"
+                    )
+                    raise   # propagate to outer try/except to mark build failed
 
             result.complete(success=True)
 
         except Exception as e:
             result.error = str(e)
             result.complete(success=False)
-            self._emit_progress(result.current_step, "error", "failed", {"error": str(e)})
-            logger.error(f"💥 Pipeline failed: {e}", exc_info=True)
+            logger.error(
+                f"💥 Pipeline failed at step {result.current_step}: {e}",
+                exc_info=True,
+            )
 
         return result
 
 
+# ── CLI smoke test ─────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    
-    # Example with progress callback
+
     def on_progress(progress):
-        print(f"[{progress['step']}/9] {progress['step_name']}: {progress['status']}")
-    
+        status = progress["status"]
+        step   = progress["step"]
+        name   = progress["step_name"]
+        data   = progress.get("data", {})
+        elapsed = data.get("elapsed_seconds", "?")
+        if status == "failed":
+            print(f"  ❌ [{step}/9] {name}: FAILED — {data.get('error', '?')} ({elapsed}s)")
+        elif status == "done":
+            print(f"  ✅ [{step}/9] {name}: done ({elapsed}s)")
+        else:
+            print(f"  🔄 [{step}/9] {name}: {status}")
+
     pipeline = Pipeline(progress_callback=on_progress)
-    result = pipeline.run(
+    result   = pipeline.run(
         "Build a weather dashboard that shows temperature, humidity and a 5-day forecast"
     )
     print(result.summary())

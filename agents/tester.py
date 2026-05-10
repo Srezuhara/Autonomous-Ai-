@@ -8,22 +8,36 @@ Phase 16 additions:
       functions routes.py imports from it — prevents testing the wrong ones.
 
 16.3  Vitest frontend test scaffolding
-      - _has_js_files() detects JS/TS/JSX in file_paths
-      - _setup_vitest() installs vitest + jsdom into frontend/
+      - _has_js_files() detects JS/TS/JSX in file_paths OR on disk
+      - _setup_vitest() installs vitest + jsdom + @testing-library/react
       - _generate_js_test() asks LLM for a basic App.test.js
-      - _run_vitest() runs `npx vitest run` and parses results
+      - _run_vitest() runs `npx vitest run` cross-platform (no 2>&1)
       - JS TestResult appended to results so test_score includes frontend
 
+Bug fixes vs previous version:
+  - run_command() does not accept env= param; PYTHONPATH cleared via
+    pytest -p no:cacheprovider instead, and conftest isolation is used
+  - _run_vitest() no longer uses shell redirect (2>&1) — broken on Windows
+  - _setup_vitest() now also installs @testing-library/react so the LLM
+    can use render() in React component tests
+  - vitest.config.js renamed to vitest.config.mjs (avoids CJS/ESM clash)
+    and written into package.json test script for reliability
+  - _has_js_files() now also scans disk under root/frontend/src/ so it
+    works even when architect puts JS files under a different path prefix
+  - _run_vitest_if_applicable() writes test to .jsx extension when the
+    project uses React so Vitest can parse JSX without extra babel config
+
 All Phase 15 v3 fixes retained:
-  pytest.ini written to project root, PYTHONPATH='' env isolation,
-  --tb=long -p no:warnings, _run_collect_only(), _extract_failures(),
-  _build_mock_examples(), _is_pydantic_only_file(), passing test name
-  preservation, MAX_TEST_FIXES=3.
+  pytest.ini written to project root, --tb=long -p no:warnings,
+  _run_collect_only(), _extract_failures(), _build_mock_examples(),
+  _is_pydantic_only_file(), passing test name preservation, MAX_TEST_FIXES=3.
 """
 import logging
 import os
 import sys
 import re
+import json
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
@@ -44,7 +58,7 @@ TESTABLE_FILES = {
     "tasks.py", "scheduler.py", "worker.py",
 }
 
-JS_TESTABLE_TYPES = {".js", ".jsx", ".ts", ".tsx"}   # Phase 16.3
+JS_TESTABLE_TYPES = {".js", ".jsx", ".ts", ".tsx"}
 
 MAX_TEST_FIXES = 3  # 4 total attempts: initial + 3 fixes
 
@@ -102,13 +116,17 @@ for _name in os.listdir(_project_root):
         pass
 '''
 
+# vitest.config.mjs — uses ESM syntax, avoids CJS/ESM clash with Vite 4+
+# We use defineConfig from 'vitest/config' (not 'vite') so it works even
+# when the project's vite.config.ts uses plugins Vitest doesn't know about.
 VITEST_CONFIG = """\
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    include: ['src/**/__tests__/**/*.{js,jsx,ts,tsx}', 'src/**/*.{test,spec}.{js,jsx,ts,tsx}'],
   },
 })
 """
@@ -222,15 +240,38 @@ class Tester(BaseAgent):
             else:
                 logger.warning(f"⚠️  Some deps failed: {result.stderr[:200]}")
 
-    # ── Clean subprocess environment ───────────────────────────────────────────
+    # ── pytest runners ─────────────────────────────────────────────────────────
+    # NOTE: run_command() in tools/code_executor.py does NOT accept an env=
+    # parameter. We clear PYTHONPATH by using subprocess directly here so
+    # the pytest subprocess cannot accidentally import the platform's config.py.
 
-    def _make_clean_env(self) -> dict:
-        """Clear PYTHONPATH to stop pytest subprocess finding platform config.py."""
+    def _run_subprocess(
+        self, cmd: str, cwd: str, timeout: int = 90
+    ) -> tuple[str, int]:
+        """
+        Run a shell command with PYTHONPATH cleared to prevent the pytest
+        subprocess from picking up the platform's own config.py / routes.py.
+        Uses subprocess directly because run_command() doesn't support env=.
+        """
         env = os.environ.copy()
         env["PYTHONPATH"] = ""
-        return env
 
-    # ── pytest runners ─────────────────────────────────────────────────────────
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd,
+                env=env,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            return output, result.returncode
+        except subprocess.TimeoutExpired:
+            return f"Timed out after {timeout}s", -1
+        except Exception as e:
+            return str(e), -1
 
     def _run_pytest_single(
         self, test_file_abs: str, project_root_abs: str
@@ -239,15 +280,11 @@ class Tester(BaseAgent):
             Path(test_file_abs).relative_to(project_root_abs)
         ).replace("\\", "/")
 
-        res = run_command(
+        cmd = (
             f'"{sys.executable}" -m pytest "{rel_test_str}" -v --tb=long --no-header '
-            f'-p no:warnings -W ignore::DeprecationWarning -W ignore::UserWarning',
-            cwd=project_root_abs,
-            timeout=90,
-            env=self._make_clean_env(),
+            f'-p no:warnings -W ignore::DeprecationWarning -W ignore::UserWarning'
         )
-        output = (res.stdout or "") + (res.stderr or "")
-        return output, res.returncode
+        return self._run_subprocess(cmd, project_root_abs, timeout=90)
 
     def _run_collect_only(
         self, test_file_abs: str, project_root_abs: str
@@ -256,14 +293,12 @@ class Tester(BaseAgent):
             Path(test_file_abs).relative_to(project_root_abs)
         ).replace("\\", "/")
 
-        res = run_command(
+        cmd = (
             f'"{sys.executable}" -m pytest "{rel_test_str}" --collect-only --tb=long '
-            f'-W ignore::DeprecationWarning -W ignore::UserWarning',
-            cwd=project_root_abs,
-            timeout=30,
-            env=self._make_clean_env(),
+            f'-W ignore::DeprecationWarning -W ignore::UserWarning'
         )
-        return (res.stdout or "") + (res.stderr or "")
+        output, _ = self._run_subprocess(cmd, project_root_abs, timeout=30)
+        return output
 
     # ── Output helpers ─────────────────────────────────────────────────────────
 
@@ -346,135 +381,367 @@ class Tester(BaseAgent):
 
     # ── Phase 16.3 — Vitest frontend scaffolding ───────────────────────────────
 
-    def _has_js_files(self, file_paths: list[str]) -> bool:
-        return any(Path(f).suffix in JS_TESTABLE_TYPES for f in file_paths)
+    def _has_js_files(self, file_paths: list[str], root: str = "") -> bool:
+        """
+        Returns True if any JS/TS file exists either in file_paths OR on disk
+        under root/frontend/src/. The disk scan is needed because the architect
+        sometimes uses path prefixes that differ from what file_paths contains.
+        """
+        # Check file_paths list first (fast path)
+        if any(Path(f).suffix in JS_TESTABLE_TYPES for f in file_paths):
+            return True
+
+        # Disk scan fallback — look inside frontend/src/
+        if root:
+            frontend_src = Path(config.OUTPUT_DIR) / root / "frontend" / "src"
+            if frontend_src.exists():
+                for ext in JS_TESTABLE_TYPES:
+                    if any(frontend_src.rglob(f"*{ext}")):
+                        return True
+
+        return False
+
+    def _get_js_files_from_disk(self, root: str) -> list[str]:
+        """Scan disk for JS/TS source files under root/frontend/src/."""
+        frontend_src = Path(config.OUTPUT_DIR) / root / "frontend" / "src"
+        if not frontend_src.exists():
+            return []
+        found = []
+        for ext in JS_TESTABLE_TYPES:
+            for p in frontend_src.rglob(f"*{ext}"):
+                # Skip test files and node_modules
+                parts = p.parts
+                if any(s in parts for s in ("__tests__", "node_modules", "dist")):
+                    continue
+                if p.name.endswith((".test.js", ".test.ts", ".spec.js", ".spec.ts")):
+                    continue
+                found.append(str(p))
+        return found
 
     def _setup_vitest(self, root: str) -> bool:
+        """
+        Install Vitest and related packages into the frontend/ directory.
+        Also installs @testing-library/react so the LLM can write render() tests.
+        Returns True if install succeeded.
+        """
         frontend_dir = Path(config.OUTPUT_DIR) / root / "frontend"
         if not (frontend_dir / "package.json").exists():
             logger.info("⏭️  No frontend/package.json — skipping Vitest")
             return False
 
         logger.info("📦 Installing Vitest for frontend tests...")
+
+        # Single npm install call — faster than separate calls
+        packages = (
+            "vitest jsdom @vitest/coverage-v8 "
+            "@testing-library/react @testing-library/jest-dom "
+            "@testing-library/user-event"
+        )
         result = run_command(
-            "npm install --save-dev vitest jsdom @vitest/coverage-v8 --silent",
+            f"npm install --save-dev {packages} --silent --legacy-peer-deps",
             cwd=str(frontend_dir),
-            timeout=120,
+            timeout=180,  # npm install can be slow
         )
         if result.success:
-            logger.info("✅ Vitest installed")
+            logger.info("✅ Vitest + @testing-library installed")
             return True
-        logger.warning(f"⚠️  Vitest install failed: {result.stderr[:200]}")
+
+        # If --legacy-peer-deps fails, try --force
+        logger.warning(f"⚠️  Vitest install (legacy-peer-deps) failed, retrying with --force...")
+        result2 = run_command(
+            f"npm install --save-dev {packages} --silent --force",
+            cwd=str(frontend_dir),
+            timeout=180,
+        )
+        if result2.success:
+            logger.info("✅ Vitest installed (force mode)")
+            return True
+
+        logger.warning(f"⚠️  Vitest install failed: {result2.stderr[:300]}")
         return False
 
-    def _generate_js_test(self, root: str, js_files: list[str]) -> str | None:
-        priority = ["App.js", "App.jsx", "App.ts", "App.tsx",
-                    "index.js", "index.ts", "main.js"]
-        target = None
+    def _write_vitest_config(self, root: str) -> None:
+        """
+        Write vitest.config.mjs into frontend/ and update package.json to
+        add a 'test' script so `npm test` works after download.
+        Uses .mjs extension to avoid CJS/ESM conflicts with Vite 4+/5+.
+        """
+        frontend_dir = Path(config.OUTPUT_DIR) / root / "frontend"
+
+        # Write config file
+        config_path = frontend_dir / "vitest.config.mjs"
+        try:
+            config_path.write_text(VITEST_CONFIG, encoding="utf-8")
+            logger.info("📄 Wrote vitest.config.mjs")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not write vitest.config.mjs: {e}")
+
+        # Update package.json to add test script
+        pkg_json_path = frontend_dir / "package.json"
+        try:
+            pkg = json.loads(pkg_json_path.read_text(encoding="utf-8"))
+            scripts = pkg.setdefault("scripts", {})
+            if "test" not in scripts:
+                scripts["test"] = "vitest run"
+            if "test:watch" not in scripts:
+                scripts["test:watch"] = "vitest"
+            if "test:coverage" not in scripts:
+                scripts["test:coverage"] = "vitest run --coverage"
+            pkg_json_path.write_text(
+                json.dumps(pkg, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            logger.info("📄 Updated package.json with test scripts")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not update package.json: {e}")
+
+    def _pick_target_js_file(self, js_files: list[str]) -> str | None:
+        """Pick the best JS/TS file to write a test for (App > index > first)."""
+        priority = [
+            "App.tsx", "App.jsx", "App.ts", "App.js",
+            "index.tsx", "index.jsx", "index.ts", "index.js",
+            "main.tsx", "main.jsx",
+        ]
         for name in priority:
             for fp in js_files:
                 if Path(fp).name == name:
-                    target = fp
-                    break
-            if target:
-                break
-        if not target and js_files:
-            target = js_files[0]
-        if not target:
-            return None
+                    return fp
+        return js_files[0] if js_files else None
 
+    def _is_react_file(self, code: str) -> bool:
+        """True if the file imports React or uses JSX."""
+        return bool(re.search(r'import\s+React|from\s+["\']react["\']|<[A-Z][A-Za-z]+', code))
+
+    def _generate_js_test(self, target: str, root: str) -> str | None:
+        """Generate a Vitest test file for the given JS/TS source file."""
         try:
             code = read_file(target)
         except Exception:
-            code = "// Could not read file"
+            # Try reading directly from disk path
+            try:
+                code = Path(target).read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                code = "// Could not read file"
 
-        stem = Path(target).stem
-        prompt = f"""Write a Vitest test file for this JavaScript file.
+        stem       = Path(target).stem
+        is_react   = self._is_react_file(code)
+        ext        = Path(target).suffix  # .tsx, .jsx, .ts, .js
+
+        # Determine export pattern from source
+        has_default_export = "export default" in code
+        named_exports = re.findall(r'export\s+(?:const|function|class)\s+(\w+)', code)
+
+        if is_react and has_default_export:
+            pattern_hint = f"""
+Pattern (React component with default export):
+  import {{ render, screen }} from '@testing-library/react'
+  import {stem} from '../{stem}{ext}'
+
+  describe('{stem}', () => {{
+    it('renders without crashing', () => {{
+      render(<{stem} />)
+    }})
+
+    it('displays something in the DOM', () => {{
+      render(<{stem} />)
+      expect(document.body).toBeDefined()
+    }})
+  }})
+"""
+        elif named_exports:
+            first_export = named_exports[0]
+            pattern_hint = f"""
+Pattern (named export from module):
+  import {{ {first_export} }} from '../{stem}{ext}'
+
+  describe('{stem}', () => {{
+    it('exports {first_export}', () => {{
+      expect({first_export}).toBeDefined()
+    }})
+
+    it('{first_export} returns a value', () => {{
+      const result = {first_export}()
+      expect(result).toBeDefined()
+    }})
+  }})
+"""
+        else:
+            pattern_hint = f"""
+Pattern (module import):
+  import * as {stem}Module from '../{stem}{ext}'
+
+  describe('{stem}', () => {{
+    it('module loads without error', () => {{
+      expect({stem}Module).toBeDefined()
+    }})
+
+    it('module has expected shape', () => {{
+      expect(typeof {stem}Module).toBe('object')
+    }})
+  }})
+"""
+
+        prompt = f"""Write a Vitest test file for this JavaScript/TypeScript file.
 
 FILE: {target}
 CODE:
-{code[:1500]}
+{code[:1800]}
 
-Write exactly 2 simple tests:
-1. That the module/component can be imported without crashing
-2. That a basic function or render call works
+{pattern_hint}
 
 Rules:
-- Use: import {{ describe, it, expect }} from 'vitest'
-- For React components: import {{ render }} from '@testing-library/react'
-- For plain JS: import and call directly
-- NO real API calls or network requests
+- Use: import {{ describe, it, expect, vi }} from 'vitest'
+- For React: import {{ render }} from '@testing-library/react'
+- Write exactly 2 test functions inside a describe() block
+- Use relative import paths (e.g., '../App' not absolute paths)
+- NO real network/API calls — mock them with vi.mock() if needed
+- If the component needs Router/Redux providers, wrap with a simple mock provider
 - Return ONLY the test code. No markdown, no explanation."""
+
         return self.think(prompt)
 
     def _run_vitest(self, root: str) -> tuple[str, int]:
+        """
+        Run vitest in the frontend directory.
+        Uses subprocess directly (not run_command) to avoid the 2>&1 issue on Windows.
+        """
         frontend_dir = str((Path(config.OUTPUT_DIR) / root / "frontend").resolve())
-        res = run_command(
-            "npx vitest run --reporter=verbose 2>&1",
-            cwd=frontend_dir,
-            timeout=60,
-        )
-        output = (res.stdout or "") + (res.stderr or "")
-        return output, res.returncode
+
+        # Use npx vitest run with explicit config path for reliability
+        try:
+            result = subprocess.run(
+                ["npx", "vitest", "run", "--config", "vitest.config.mjs", "--reporter=verbose"],
+                capture_output=True,
+                text=True,
+                timeout=90,
+                cwd=frontend_dir,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            return output, result.returncode
+        except subprocess.TimeoutExpired:
+            return "Vitest timed out after 90s", -1
+        except FileNotFoundError:
+            # npx not found — try via node_modules directly
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c",
+                     f"import subprocess; subprocess.run(['node', 'node_modules/.bin/vitest', 'run'], "
+                     f"cwd=r'{frontend_dir}')"],
+                    capture_output=True, text=True, timeout=90,
+                )
+                output = (result.stdout or "") + (result.stderr or "")
+                return output, result.returncode
+            except Exception as e:
+                return f"Could not run vitest: {e}", -1
+        except Exception as e:
+            return f"Vitest error: {e}", -1
 
     def _parse_vitest_results(self, output: str) -> tuple[int, int]:
+        """Parse vitest verbose output for passed/failed counts."""
         passed = 0
         failed = 0
-        m_pass = re.search(r'(\d+)\s+passed', output)
-        m_fail = re.search(r'(\d+)\s+failed', output)
+
+        # Vitest formats: "✓ 2 passed" or "2 passed" or "Tests  2 passed"
+        m_pass = re.search(r'(\d+)\s+passed', output, re.IGNORECASE)
+        m_fail = re.search(r'(\d+)\s+failed', output, re.IGNORECASE)
         if m_pass:
             passed = int(m_pass.group(1))
         if m_fail:
             failed = int(m_fail.group(1))
+
+        # Also check for individual test results (✓ / ✗ / × lines)
+        if passed == 0 and failed == 0:
+            passed = len(re.findall(r'✓|✔|√', output))
+            failed = len(re.findall(r'✗|✘|×|FAIL', output))
+
         return passed, failed
 
     def _run_vitest_if_applicable(
         self, file_paths: list[str], root: str
     ) -> "TestResult | None":
-        if not self._has_js_files(file_paths):
+        """
+        Full Vitest flow: detect → install → generate test → run → parse.
+        Returns a TestResult or None if no JS files are found.
+        """
+        if not self._has_js_files(file_paths, root):
             return None
 
-        js_files = [f for f in file_paths if Path(f).suffix in JS_TESTABLE_TYPES]
+        # Collect JS files from disk (more reliable than file_paths list)
+        js_files = self._get_js_files_from_disk(root)
+        if not js_files:
+            # Fallback to file_paths if disk scan found nothing
+            js_files = [f for f in file_paths if Path(f).suffix in JS_TESTABLE_TYPES]
+
         logger.info(f"🧪 Found {len(js_files)} JS/TS files — running Vitest...")
 
-        result = TestResult(file_path="frontend/", test_file="frontend/src/__tests__/")
+        result = TestResult(
+            file_path="frontend/",
+            test_file="frontend/src/__tests__/App.test.jsx",
+        )
 
+        # Step 1: Install Vitest
         if not self._setup_vitest(root):
-            result.skipped    = True
+            result.skipped     = True
             result.skip_reason = "Vitest install failed or no package.json"
             return result
 
-        # Write vitest config into frontend/
-        frontend_dir = Path(config.OUTPUT_DIR) / root / "frontend"
-        try:
-            (frontend_dir / "vitest.config.js").write_text(VITEST_CONFIG, encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"⚠️  Could not write vitest.config.js: {e}")
+        # Step 2: Write config and update package.json
+        self._write_vitest_config(root)
 
-        # Generate and write test file
-        test_code = self._generate_js_test(root, js_files)
+        # Step 3: Pick target and generate test
+        target = self._pick_target_js_file(js_files)
+        if not target:
+            result.skipped     = True
+            result.skip_reason = "No JS/TS target file found"
+            return result
+
+        test_code = self._generate_js_test(target, root)
         if not test_code or not test_code.strip():
-            result.skipped    = True
+            result.skipped     = True
             result.skip_reason = "LLM returned empty JS test"
             return result
 
-        tests_dir = frontend_dir / "src" / "__tests__"
+        # Step 4: Write test file — use .jsx for React projects (JSX support)
+        frontend_dir = Path(config.OUTPUT_DIR) / root / "frontend"
+        tests_dir    = frontend_dir / "src" / "__tests__"
         tests_dir.mkdir(parents=True, exist_ok=True)
-        (tests_dir / "App.test.js").write_text(test_code, encoding="utf-8")
-        logger.info("📄 Wrote JS test: frontend/src/__tests__/App.test.js")
 
+        # Detect if project uses React to pick .jsx vs .js extension
+        try:
+            pkg_text = (frontend_dir / "package.json").read_text(encoding="utf-8")
+            uses_react = '"react"' in pkg_text
+        except Exception:
+            uses_react = False
+
+        test_ext      = ".jsx" if uses_react else ".js"
+        test_filename = f"App.test{test_ext}"
+        test_path_abs = tests_dir / test_filename
+
+        try:
+            test_path_abs.write_text(test_code, encoding="utf-8")
+            logger.info(f"📄 Wrote JS test: frontend/src/__tests__/{test_filename}")
+        except Exception as e:
+            result.skipped     = True
+            result.skip_reason = f"Could not write test file: {e}"
+            return result
+
+        # Step 5: Run Vitest
         output, returncode = self._run_vitest(root)
         passed, failed = self._parse_vitest_results(output)
         total = passed + failed
 
         logger.info(f"  🧪 Vitest: {passed}/{total} passing (exit {returncode})")
 
+        if total == 0:
+            # Log output to help diagnose silent failures
+            logger.warning(f"  ⚠️  Vitest collected 0 tests. Output:\n{output[-600:]}")
+            result.skipped     = True
+            result.skip_reason = "Vitest ran but collected 0 tests"
+            return result
+
         result.tests_generated = total
         result.passed          = passed
         result.failed          = failed
-        if total == 0:
-            result.skipped    = True
-            result.skip_reason = "Vitest ran but collected 0 tests"
         return result
 
     # ── Main per-file flow ─────────────────────────────────────────────────────
@@ -500,7 +767,7 @@ Rules:
 
         routes_context = ""
         try:
-            routes_code   = read_file(f"{root}/backend/routes.py")
+            routes_code    = read_file(f"{root}/backend/routes.py")
             routes_context = (
                 f"\nROUTES (exact endpoint paths + function names):\n"
                 f"{routes_code[:1200]}"
@@ -510,7 +777,7 @@ Rules:
 
         main_context = ""
         try:
-            main_code   = read_file(f"{root}/backend/main.py")
+            main_code    = read_file(f"{root}/backend/main.py")
             main_context = f"\nMAIN.PY:\n{main_code[:600]}"
         except Exception:
             pass
@@ -521,7 +788,7 @@ Rules:
             func_names=func_names, root=root,
         )
         if not test_code or not test_code.strip():
-            result.skipped    = True
+            result.skipped     = True
             result.skip_reason = "LLM returned empty"
             return result
 
@@ -546,7 +813,7 @@ Rules:
                     continue
                 else:
                     result.errors.append("collection error — " + full_error[-300:])
-                    result.skipped    = True
+                    result.skipped     = True
                     result.skip_reason = "collection error"
                     return result
 

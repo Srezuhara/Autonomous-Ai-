@@ -15,9 +15,9 @@ from api_platform.database import get_project, get_build_progress
 
 router = APIRouter(tags=["websocket"])
 
-# In-memory subscriber registry: build_id → list of queues
+# In-memory subscriber registry: build_id → list of (queue, loop)
 # Populated by runner.py via notify_subscribers()
-_subscribers: dict[str, list[asyncio.Queue]] = {}
+_subscribers: dict[str, list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = {}
 
 POLL_INTERVAL = 0.5    # seconds between DB polls for progress
 MAX_SILENCE = 120      # close connection after N seconds without progress
@@ -30,11 +30,16 @@ def notify_subscribers(build_id: str, event: dict):
     """
     import asyncio as _asyncio
     queues = _subscribers.get(build_id, [])
-    for q in queues:
-        try:
-            q.put_nowait(event)
-        except _asyncio.QueueFull:
-            pass   # slow consumer – skip
+    for q, loop in queues:
+        def _put(queue=q, ev=event):
+            try:
+                queue.put_nowait(ev)
+            except _asyncio.QueueFull:
+                pass
+        
+        # Schedule the _put call on the event loop that owns the queue
+        if loop and not loop.is_closed():
+            loop.call_soon_threadsafe(_put)
 
 
 @router.websocket("/ws/jobs/{build_id}")
@@ -80,7 +85,8 @@ async def websocket_progress(websocket: WebSocket, build_id: str):
 
     # Register as subscriber
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _subscribers.setdefault(build_id, []).append(queue)
+    loop = asyncio.get_running_loop()
+    _subscribers.setdefault(build_id, []).append((queue, loop))
 
     # Send history so far immediately on connect
     await _send_full_history(websocket, build_id, project)
@@ -138,9 +144,10 @@ async def websocket_progress(websocket: WebSocket, build_id: str):
     finally:
         # Unregister subscriber
         subs = _subscribers.get(build_id, [])
-        if queue in subs:
-            subs.remove(queue)
-        if not subs:
+        subs_to_keep = [s for s in subs if s[0] != queue]
+        if subs_to_keep:
+            _subscribers[build_id] = subs_to_keep
+        else:
             _subscribers.pop(build_id, None)
 
     await websocket.close()

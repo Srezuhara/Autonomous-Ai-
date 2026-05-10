@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from api_platform.models import BuildRequest, BuildStatus, ProjectSummary, ProjectDetail
 from api_platform.runner import job_runner
-from api_platform.database import get_project, list_projects, delete_project, get_project_files
+from api_platform.database import get_project, list_projects, delete_project, get_project_files, get_build_progress
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,19 @@ async def get_project_detail(build_id: str):
     files = get_project_files(build_id)
     project["files"] = [f["file_path"] for f in files]
     project["file_count"] = len(files)
+
+    # Phase 17: attach per-step build logs so ProjectDetail.tsx BuildLogsPanel renders
+    progress = get_build_progress(build_id)
+    project["build_steps"] = [
+        {
+            "step":      s["step"],
+            "name":      s["step_name"],
+            "status":    s["status"],
+            "timestamp": s["timestamp"],
+            "data":      s.get("data"),   # raw JSON string; frontend parses it
+        }
+        for s in progress
+    ]
 
     return project
 
