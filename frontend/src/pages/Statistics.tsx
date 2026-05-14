@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
-import { TrendingUp, CheckCircle, Clock, Layers } from 'lucide-react';
+import { TrendingUp, CheckCircle, Clock, Layers, Zap } from 'lucide-react';
 import { useStats, useDailyStats } from '../hooks/useQueries';
 import './Statistics.css';
 
@@ -39,6 +39,202 @@ const GRID_PROPS = {
   stroke: 'rgba(255,255,255,0.04)',
 };
 
+// ── Token usage section ────────────────────────────────────────────────────────
+function TokenStat({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  color?: string;
+}) {
+  return (
+    <div className="token-stat-pill card">
+      <div className="metric-label">{label}</div>
+      <div className="metric-value" style={color ? { color } : undefined}>{value}</div>
+      {sub && <div className="token-stat-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function TokenUsageSection({
+  stats,
+  isLoading,
+}: {
+  stats: ReturnType<typeof useStats>['data'];
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="token-section">
+        <div className="skeleton" style={{ height: 110 }} />
+      </div>
+    );
+  }
+
+  const usage = stats?.token_usage;
+
+  const noData =
+    !usage ||
+    (usage.total_tokens === 0 && usage.avg_tokens_per_build === null);
+
+  if (noData) {
+    return (
+      <div className="token-section card" style={{ padding: 'var(--space-5)' }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          marginBottom: 'var(--space-3)',
+        }}>
+          <Zap size={15} style={{ color: 'var(--color-warning)' }} />
+          <span className="section-label">Token usage</span>
+        </div>
+        <p style={{
+          fontSize: 'var(--text-sm)',
+          color: 'var(--text-tertiary)',
+          lineHeight: 'var(--leading-relaxed)',
+        }}>
+          No token data yet. Token tracking is recorded for builds run after
+          Phase 17 was deployed. Complete a new build to see usage statistics.
+        </p>
+      </div>
+    );
+  }
+
+  const fmt = (n: number) =>
+    n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(2)}M`
+      : n >= 1_000
+      ? `${(n / 1_000).toFixed(1)}K`
+      : String(n);
+
+  const totalCost =
+    (usage.total_prompt_tokens     / 1_000_000) * 0.59 +
+    (usage.total_completion_tokens / 1_000_000) * 0.79;
+
+  const avgTokens = usage.avg_tokens_per_build ?? 0;
+  const avgCost   = avgTokens > 0
+    ? ((avgTokens * 0.35) / 1_000_000)   // blended ~$0.35/1M average
+    : null;
+
+  const inputPct = usage.total_tokens > 0
+    ? Math.round((usage.total_prompt_tokens / usage.total_tokens) * 100)
+    : 0;
+  const outputPct = 100 - inputPct;
+
+  return (
+    <div className="token-section">
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        marginBottom: 'var(--space-4)',
+      }}>
+        <Zap size={15} style={{ color: 'var(--color-warning)' }} />
+        <span className="section-label">Token usage — all builds</span>
+      </div>
+
+      <div className="token-stats-grid">
+        <TokenStat
+          label="Total tokens"
+          value={fmt(usage.total_tokens)}
+          sub="across all builds"
+          color="var(--color-accent-secondary)"
+        />
+        <TokenStat
+          label="Prompt tokens"
+          value={fmt(usage.total_prompt_tokens)}
+          sub={`${inputPct}% of total`}
+        />
+        <TokenStat
+          label="Completion tokens"
+          value={fmt(usage.total_completion_tokens)}
+          sub={`${outputPct}% of total`}
+        />
+        <TokenStat
+          label="Avg per build"
+          value={avgTokens > 0 ? fmt(avgTokens) : '—'}
+          sub="tokens / build"
+        />
+        <TokenStat
+          label="Est. total cost"
+          value={totalCost < 0.001 ? '<$0.001' : `$${totalCost.toFixed(3)}`}
+          sub="llama-3.3-70b rate"
+          color="var(--color-success)"
+        />
+        {avgCost !== null && (
+          <TokenStat
+            label="Est. cost / build"
+            value={avgCost < 0.001 ? '<$0.001' : `$${avgCost.toFixed(3)}`}
+            sub="blended rate"
+            color="var(--color-success)"
+          />
+        )}
+      </div>
+
+      {/* Input vs output split bar */}
+      <div style={{ marginTop: 'var(--space-4)' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--text-tertiary)',
+          marginBottom: 'var(--space-2)',
+        }}>
+          <span>Prompt ({inputPct}%)</span>
+          <span>Completion ({outputPct}%)</span>
+        </div>
+        <div style={{
+          height: 6,
+          borderRadius: 'var(--radius-full)',
+          background: 'var(--color-bg-elevated)',
+          overflow: 'hidden',
+          display: 'flex',
+        }}>
+          <div style={{
+            width: `${inputPct}%`,
+            background: 'var(--color-accent-primary)',
+            transition: 'width 0.6s ease',
+          }} />
+          <div style={{
+            width: `${outputPct}%`,
+            background: 'var(--color-accent-secondary)',
+            transition: 'width 0.6s ease',
+          }} />
+        </div>
+        <div style={{
+          display: 'flex',
+          gap: 'var(--space-4)',
+          marginTop: 'var(--space-2)',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--text-tertiary)',
+        }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: 2,
+              background: 'var(--color-accent-primary)',
+              display: 'inline-block',
+            }} />
+            Input ($0.59 / 1M tokens)
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: 2,
+              background: 'var(--color-accent-secondary)',
+              display: 'inline-block',
+            }} />
+            Output ($0.79 / 1M tokens)
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Statistics() {
   const [days, setDays] = useState(14);
   const { data: stats, isLoading: statsLoading } = useStats();
@@ -46,18 +242,15 @@ export default function Statistics() {
 
   const isLoading = statsLoading || dailyLoading;
 
-  // API returns { days, data: [...] } — handle both array and wrapped object
   const daily: object[] = Array.isArray(dailyRaw)
     ? dailyRaw
     : (dailyRaw as { data?: object[] } | null)?.data ?? [];
 
-  // Filter out days with zero builds so the chart isn't a flat zero line
   const dailyWithData = daily.filter((d: object) => {
     const row = d as { total?: number };
     return (row.total ?? 0) > 0;
   });
 
-  // Show all days in chart (including zeros) but use dailyWithData for "empty" check
   const chartData = daily;
 
   const appTypeData = stats
@@ -67,9 +260,6 @@ export default function Statistics() {
       )
     : [];
 
-  // ── Fix: read avg_duration_seconds from top-level field (not nested) ─────────
-  // Old API: stats.duration_seconds.average  → showed NaN
-  // New API: stats.avg_duration_seconds      → correct number
   const avgDuration = stats
     ? (stats.avg_duration_seconds ?? (stats as { duration_seconds?: { average?: number } }).duration_seconds?.average ?? null)
     : null;
@@ -90,7 +280,6 @@ export default function Statistics() {
         },
         {
           icon:  <Clock size={18} />,
-          // Guard against null/undefined/NaN before calling Math.round
           value: avgDuration != null && !isNaN(avgDuration)
             ? `${Math.round(avgDuration)}s`
             : '—',
@@ -168,12 +357,11 @@ export default function Statistics() {
                 <XAxis
                   dataKey="date"
                   {...AXIS_PROPS}
-                  tickFormatter={(v: string) => v.slice(5)} // show MM-DD only
+                  tickFormatter={(v: string) => v.slice(5)}
                 />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
                 <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: '0.75rem', paddingTop: '12px' }} />
-                {/* dataKey="success" matches the renamed field in analytics.py */}
                 <Area
                   type="monotone"
                   dataKey="success"
@@ -256,6 +444,9 @@ export default function Statistics() {
           )}
         </div>
       </div>
+
+      {/* ── Phase 17: Token usage section ── */}
+      <TokenUsageSection stats={stats} isLoading={statsLoading} />
     </div>
   );
 }

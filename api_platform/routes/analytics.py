@@ -1,13 +1,11 @@
 """
-api_platform/routes/analytics.py  — Phase 17
+api_platform/routes/analytics.py  — Phase 17.1
 
-Changes vs Phase 14:
-  - /stats now includes token_usage block:
-      {total_prompt_tokens, total_completion_tokens, total_tokens,
-       avg_tokens_per_build}
-  - /stats/daily includes per-day token totals
-  - All other fixes (avg_duration_seconds top-level, success rename,
-    _refine_app_type, _parse_dt) retained from Phase 14.
+Changes vs Phase 17:
+  - /projects/{build_id}/rebuild now accepts optional custom_prompt in body
+    so the RebuildModal "Custom Instructions" feature works end-to-end.
+    If custom_prompt is provided it is used as the new build prompt;
+    otherwise the original prompt is reused unchanged.
 """
 
 import shutil
@@ -77,13 +75,6 @@ def _parse_dt(value: str) -> datetime:
 
 @router.get("/stats")
 async def get_platform_stats():
-    """
-    Overall platform statistics.
-
-    Phase 17 additions:
-      - token_usage: {total_prompt_tokens, total_completion_tokens,
-                      total_tokens, avg_tokens_per_build}
-    """
     rows  = db.list_projects(limit=10_000)
     total = len(rows)
 
@@ -109,7 +100,6 @@ async def get_platform_stats():
             "message": "No builds yet. Start your first build with POST /projects/",
         }
 
-    # ── Status counts ──────────────────────────────────────────────────────────
     by_status: dict[str, int] = {}
     for r in rows:
         s = r.get("status", "unknown")
@@ -120,7 +110,6 @@ async def get_platform_stats():
     completed = done + failed
     success_rate = round((done / completed * 100), 1) if completed else 0.0
 
-    # ── Duration stats (done builds only) ──────────────────────────────────────
     durations = []
     for r in rows:
         if r.get("status") == "done" and r.get("duration_seconds") is not None:
@@ -135,7 +124,6 @@ async def get_platform_stats():
     min_duration = round(min(durations), 1) if durations else None
     max_duration = round(max(durations), 1) if durations else None
 
-    # ── App types ──────────────────────────────────────────────────────────────
     type_counts: dict[str, int] = {}
     for r in rows:
         if r.get("status") != "done":
@@ -147,7 +135,6 @@ async def get_platform_stats():
 
     top_types = sorted(type_counts.items(), key=lambda x: -x[1])[:10]
 
-    # ── Review scores ──────────────────────────────────────────────────────────
     scores = []
     for r in rows:
         if r.get("status") == "done" and r.get("review_score") is not None:
@@ -157,7 +144,6 @@ async def get_platform_stats():
                 pass
     avg_score = round(sum(scores) / len(scores), 2) if scores else None
 
-    # ── Time-window counts ─────────────────────────────────────────────────────
     now         = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start  = today_start - timedelta(days=7)
@@ -176,7 +162,7 @@ async def get_platform_stats():
         except Exception:
             pass
 
-    # ── Phase 17: Token usage aggregation ────────────────────────────────────
+    # ── Token usage — include ALL statuses (done + failed + cancelled) ─────────
     total_prompt_tokens     = 0
     total_completion_tokens = 0
     total_tokens_all        = 0
@@ -187,9 +173,7 @@ async def get_platform_stats():
         ct = r.get("completion_tokens") or 0
         tt = r.get("total_tokens") or 0
         try:
-            pt = int(pt)
-            ct = int(ct)
-            tt = int(tt)
+            pt = int(pt); ct = int(ct); tt = int(tt)
         except (TypeError, ValueError):
             pt = ct = tt = 0
 
@@ -218,7 +202,6 @@ async def get_platform_stats():
         "by_status":             by_status,
         "top_app_types":         [{"type": t, "count": c} for t, c in top_types],
         "average_review_score":  avg_score,
-        # Phase 17
         "token_usage": {
             "total_prompt_tokens":     total_prompt_tokens,
             "total_completion_tokens": total_completion_tokens,
@@ -233,11 +216,6 @@ async def get_platform_stats():
 
 @router.get("/stats/daily")
 async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
-    """
-    Builds per day for the last N days.
-
-    Phase 17: each entry also includes total_tokens for that day.
-    """
     rows = db.list_projects(limit=10_000)
     now  = datetime.utcnow()
 
@@ -250,7 +228,7 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
             "success":      0,
             "failed":       0,
             "cancelled":    0,
-            "total_tokens": 0,   # Phase 17
+            "total_tokens": 0,
         }
 
     for r in rows:
@@ -266,13 +244,11 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
 
         daily[day]["total"] += 1
         status = r.get("status", "unknown")
-
         if status == "done":
             daily[day]["success"] += 1
         elif status in ("failed", "cancelled"):
             daily[day][status] += 1
 
-        # Phase 17: accumulate tokens
         try:
             daily[day]["total_tokens"] += int(r.get("total_tokens") or 0)
         except (TypeError, ValueError):
@@ -286,28 +262,46 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
 
 # ── /projects/{id}/rebuild ─────────────────────────────────────────────────────
 
+class RebuildRequest(BaseModel):
+    """
+    Optional body for rebuild endpoint.
+    - custom_prompt: if provided, used as the new build prompt
+                     (supports RebuildModal "Custom Instructions" mode).
+    - If omitted or empty, the original project prompt is reused.
+    """
+    custom_prompt: str = ""
+
+
 @router.post("/projects/{build_id}/rebuild")
-async def rebuild_project(build_id: str):
-    """Start a new build using the exact same prompt."""
+async def rebuild_project(build_id: str, body: RebuildRequest = None):
+    """
+    Start a new build from an existing project.
+    Optionally pass a custom_prompt to change the requirements.
+    """
     from api_platform.runner import job_runner
 
     project = db.get_project(build_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project {build_id} not found")
 
-    prompt = project.get("prompt")
-    if not prompt:
+    original_prompt = project.get("prompt")
+    if not original_prompt:
         raise HTTPException(
             status_code=400,
             detail="Original project has no prompt stored",
         )
 
-    new_build_id = job_runner.start_build(prompt)
+    # Use custom prompt if provided and non-empty, else fall back to original
+    custom = (body.custom_prompt or "").strip() if body else ""
+    prompt_to_use = custom if custom else original_prompt
+
+    new_build_id = job_runner.start_build(prompt_to_use)
     return {
         "message":           "Rebuild started",
         "original_build_id": build_id,
         "new_build_id":      new_build_id,
-        "prompt":            prompt,
+        "prompt":            prompt_to_use,
+        "used_custom_prompt": bool(custom),
         "status_url":        f"/jobs/{new_build_id}/status",
     }
 
@@ -322,7 +316,6 @@ class CleanupRequest(BaseModel):
 
 @router.delete("/projects/cleanup")
 async def cleanup_old_projects(req: CleanupRequest):
-    """Delete old builds. Set dry_run=false to actually delete."""
     cutoff = datetime.utcnow() - timedelta(days=req.older_than_days)
     rows   = db.list_projects(limit=10_000)
 

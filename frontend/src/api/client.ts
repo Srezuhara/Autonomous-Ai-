@@ -43,11 +43,12 @@ export interface BuildResponse {
 }
 
 export interface RebuildResponse {
-    message:           string;
-    original_build_id: string;
-    new_build_id:      string;
-    prompt:            string;
-    status_url:        string;
+    message:            string;
+    original_build_id:  string;
+    new_build_id:       string;
+    prompt:             string;
+    used_custom_prompt: boolean;
+    status_url:         string;
 }
 
 export interface JobStatus {
@@ -69,7 +70,6 @@ export interface JobStatus {
             name:   string;
             status: string;
             at:     string;
-            // Phase 17: structured step data (elapsed_seconds, error, etc.)
             data?:  Record<string, unknown>;
         }>;
         remaining_steps: string[];
@@ -112,7 +112,6 @@ export interface ActiveJobs {
 
 // ── Stats types ────────────────────────────────────────────────────────────────
 
-// Phase 17: token usage block returned by /stats
 export interface TokenUsageStats {
     total_prompt_tokens:     number;
     total_completion_tokens: number;
@@ -134,7 +133,6 @@ export interface PlatformStats {
     by_status:              Record<string, number>;
     top_app_types:          Array<{ type: string; count: number }>;
     average_review_score:   number | null;
-    // Phase 17
     token_usage:            TokenUsageStats;
     generated_at:           string;
 }
@@ -145,7 +143,6 @@ export interface DailyStatsEntry {
     success:       number;
     failed:        number;
     cancelled:     number;
-    // Phase 17
     total_tokens:  number;
 }
 
@@ -226,8 +223,12 @@ export const api = {
             { method: 'DELETE' }
         ),
 
-    rebuildProject: (id: string) =>
-        fetchAPI<RebuildResponse>(`/projects/${id}/rebuild`, { method: 'POST' }),
+    // ── FIX: accepts customPrompt (empty string = use original prompt) ─────────
+    rebuildProject: (id: string, customPrompt: string = '') =>
+        fetchAPI<RebuildResponse>(`/projects/${id}/rebuild`, {
+            method: 'POST',
+            body:   JSON.stringify({ custom_prompt: customPrompt }),
+        }),
 
     downloadZip: (id: string) => {
         window.open(`${BASE_URL}/projects/${id}/download`, '_blank');

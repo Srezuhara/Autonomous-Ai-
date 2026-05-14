@@ -118,7 +118,233 @@
   transition: width 0.8s var(--ease-out);
 }
 
-/* ── Pipeline Logs Panel ────────────────────────────────── */
+/* ── Phase 17: Token usage card ─────────────────────────────────────────────── */
+.pd-token-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.pd-token-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.pd-token-model {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-weight: var(--font-regular);
+  text-transform: none;
+  letter-spacing: 0;
+  /* Separate visually from the label */
+  padding: 1px 6px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.pd-token-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+}
+
+@media (max-width: 700px) {
+  .pd-token-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.pd-token-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.pd-token-stat--total {
+  border-color: var(--border-accent);
+  background: var(--color-accent-subtle);
+}
+
+.pd-token-label {
+  font-size: 10px;
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.pd-token-value {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--font-bold);
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.pd-token-value--total {
+  color: var(--color-accent-secondary);
+}
+
+/* ── Phase 17: Build step logs ───────────────────────────────────────────────── */
+.pd-step-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.pd-step-logs-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.pd-step-logs-toggle:hover { background: var(--color-bg-hover); }
+
+.pd-step-log-count {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--border-subtle);
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+}
+
+.pd-step-logs-body {
+  border-top: 1px solid var(--border-subtle);
+  animation: expandDown 0.2s var(--ease-out);
+}
+
+@keyframes expandDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.step-log-entry {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.step-log-entry:last-child { border-bottom: none; }
+
+.step-log-entry--error { background: rgba(239, 68, 68, 0.03); }
+
+.step-log-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.step-log-header:hover { background: var(--color-bg-hover); }
+
+.step-log-num {
+  font-size: 10px;
+  font-weight: var(--font-bold);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  min-width: 18px;
+}
+
+.step-log-name {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  font-weight: var(--font-medium);
+  flex: 1;
+  text-transform: capitalize;
+}
+
+.step-log-elapsed {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.step-log-status {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.04em;
+}
+
+.step-log-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: var(--font-bold);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+}
+
+.step-log-badge--timeout {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.step-log-body {
+  padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + 30px);
+}
+
+.step-log-error {
+  font-size: var(--text-xs);
+  color: var(--color-error);
+  background: var(--color-error-bg);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  line-height: 1.6;
+}
+
+.step-log-traceback {
+  margin-top: var(--space-2);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--color-error);
+  opacity: 0.8;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.step-log-data {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: var(--space-2);
+}
+
+/* ── Pipeline Logs Panel (legacy toggle kept for compat) ─────────────────────── */
 .pd-logs {
   padding: 0;
   overflow: hidden;
@@ -137,9 +363,7 @@
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.pd-logs-toggle:hover {
-  background: var(--color-bg-hover);
-}
+.pd-logs-toggle:hover { background: var(--color-bg-hover); }
 
 .pd-logs-toggle-left {
   display: flex;
@@ -173,11 +397,6 @@
   padding: var(--space-4) var(--space-5) var(--space-5);
   border-top: 1px solid var(--border-subtle);
   animation: expandDown 0.25s var(--ease-out);
-}
-
-@keyframes expandDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* File Tree */

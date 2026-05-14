@@ -1,5 +1,6 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
+import { RebuildModal } from '../components/shared/RebuildModal';
 import {
   ArrowLeft, Download, RefreshCw, Trash2, FileCode2,
   Star, Shield, FlaskConical, Clock, Calendar,
@@ -10,13 +11,14 @@ import { api } from '../api/client';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import './ProjectDetail.css';
 
+// ── Score helpers ─────────────────────────────────────────────────────────────
 /**
- * Smart score parser — handles all formats the API might return:
- *   "7.5"    → 75%    (numeric out of 10)
- *   "7.5/10" → 75%    (explicit /10)
- *   "3/5"    → 60%    (test score fraction)
+ * Converts any score format to a 0-100 percentage.
+ *   "7.5"    → 75%   (numeric out of 10)
+ *   "7.5/10" → 75%   (explicit /10)
+ *   "3/5"    → 60%   (test score fraction)
  *   "0/0 (collection errors)" → 0%
- *   7        → 70%    (bare number)
+ *   7        → 70%   (bare number)
  */
 function parseScorePct(value: string | number | undefined): number {
   if (value == null) return 0;
@@ -36,6 +38,7 @@ function parseScorePct(value: string | number | undefined): number {
   return 0;
 }
 
+// ── ScoreGauge — pure display component, no modal inside ─────────────────────
 function ScoreGauge({ label, value, icon }: {
   label: string;
   value: string | number | undefined;
@@ -71,59 +74,108 @@ function ScoreGauge({ label, value, icon }: {
 }
 
 // ── Phase 17: Token usage card ─────────────────────────────────────────────────
+/**
+ * Three display states:
+ *   1. All props undefined   → pre-Phase-17 build (no token columns in DB)
+ *   2. All props = 0         → build ran after schema migration but no LLM calls recorded
+ *   3. total > 0             → normal tracked build — show full stats
+ */
 function TokenCard({ promptTokens, completionTokens, totalTokens }: {
   promptTokens?:     number;
   completionTokens?: number;
   totalTokens?:      number;
 }) {
-  const total = totalTokens ?? 0;
-  if (total === 0) return null;
+  const total      = totalTokens      ?? 0;
+  const prompt     = promptTokens     ?? 0;
+  const completion = completionTokens ?? 0;
+
+  const prePhase17 = (
+    promptTokens     === undefined &&
+    completionTokens === undefined &&
+    totalTokens      === undefined
+  );
 
   const fmt = (n: number) =>
     n >= 1_000_000
       ? `${(n / 1_000_000).toFixed(2)}M`
       : n >= 1_000
       ? `${(n / 1_000).toFixed(1)}K`
-      : String(n);
+      : n === 0 ? '—' : String(n);
 
-  // Rough cost estimate — Groq llama-3.3-70b pricing (as of 2025)
-  // $0.59 / 1M input tokens, $0.79 / 1M output tokens
-  const inputCost  = ((promptTokens ?? 0)     / 1_000_000) * 0.59;
-  const outputCost = ((completionTokens ?? 0) / 1_000_000) * 0.79;
+  const inputCost  = (prompt     / 1_000_000) * 0.59;
+  const outputCost = (completion / 1_000_000) * 0.79;
   const totalCost  = inputCost + outputCost;
+
+  const costLabel =
+    total === 0    ? '—'
+    : totalCost < 0.001 ? '<$0.001'
+    : `$${totalCost.toFixed(3)}`;
 
   return (
     <div className="pd-token-card card">
       <div className="pd-token-header">
         <Zap size={15} style={{ color: 'var(--color-warning)' }} />
-        <span>Token Usage</span>
+        <span>Token usage</span>
         <span className="pd-token-model">llama-3.3-70b</span>
-      </div>
-      <div className="pd-token-grid">
-        <div className="pd-token-stat">
-          <span className="pd-token-label">Prompt</span>
-          <span className="pd-token-value">{fmt(promptTokens ?? 0)}</span>
-        </div>
-        <div className="pd-token-stat">
-          <span className="pd-token-label">Completion</span>
-          <span className="pd-token-value">{fmt(completionTokens ?? 0)}</span>
-        </div>
-        <div className="pd-token-stat pd-token-stat--total">
-          <span className="pd-token-label">Total</span>
-          <span className="pd-token-value pd-token-value--total">{fmt(total)}</span>
-        </div>
-        <div className="pd-token-stat">
-          <span className="pd-token-label">Est. Cost</span>
-          <span className="pd-token-value" style={{ color: 'var(--color-success)' }}>
-            ${totalCost < 0.01 ? '<$0.01' : totalCost.toFixed(3)}
+        {prePhase17 && (
+          <span style={{
+            marginLeft: 'auto',
+            fontSize: 'var(--text-xs)',
+            color: 'var(--text-tertiary)',
+            fontStyle: 'italic',
+          }}>
+            build predates tracking
           </span>
-        </div>
+        )}
       </div>
+
+      {prePhase17 ? (
+        <p style={{
+          fontSize: 'var(--text-xs)',
+          color: 'var(--text-tertiary)',
+          margin: 'var(--space-2) 0 0',
+          lineHeight: 'var(--leading-relaxed)',
+        }}>
+          Token data is recorded for builds run after Phase 17 was deployed.
+          Rebuild this project to see usage.
+        </p>
+      ) : total === 0 ? (
+        <p style={{
+          fontSize: 'var(--text-xs)',
+          color: 'var(--text-tertiary)',
+          margin: 'var(--space-2) 0 0',
+          lineHeight: 'var(--leading-relaxed)',
+        }}>
+          No tokens recorded — this build may have failed before any LLM calls
+          were made, or token tracking was not active for this run.
+        </p>
+      ) : (
+        <div className="pd-token-grid">
+          <div className="pd-token-stat">
+            <span className="pd-token-label">Prompt</span>
+            <span className="pd-token-value">{fmt(prompt)}</span>
+          </div>
+          <div className="pd-token-stat">
+            <span className="pd-token-label">Completion</span>
+            <span className="pd-token-value">{fmt(completion)}</span>
+          </div>
+          <div className="pd-token-stat pd-token-stat--total">
+            <span className="pd-token-label">Total</span>
+            <span className="pd-token-value pd-token-value--total">{fmt(total)}</span>
+          </div>
+          <div className="pd-token-stat">
+            <span className="pd-token-label">Est. cost</span>
+            <span className="pd-token-value" style={{ color: 'var(--color-success)' }}>
+              {costLabel}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Phase 17: Build step log panel ────────────────────────────────────────────
+// ── Phase 17: Build step log entry ────────────────────────────────────────────
 interface StepLog {
   step:   number;
   name:   string;
@@ -134,10 +186,10 @@ interface StepLog {
 
 function StepLogEntry({ log }: { log: StepLog }) {
   const [open, setOpen] = useState(false);
-  const hasError  = log.status === 'failed' && log.data?.error;
-  const hasData   = log.data && Object.keys(log.data).length > 0;
-  const elapsed   = log.data?.elapsed_seconds as number | undefined;
-  const timedOut  = log.data?.timed_out as boolean | undefined;
+  const hasError = log.status === 'failed' && log.data?.error;
+  const hasData  = log.data && Object.keys(log.data).length > 0;
+  const elapsed  = log.data?.elapsed_seconds as number | undefined;
+  const timedOut = log.data?.timed_out as boolean | undefined;
 
   const statusColor =
     log.status === 'done'    ? 'var(--color-success)' :
@@ -202,12 +254,16 @@ function StepLogEntry({ log }: { log: StepLog }) {
   );
 }
 
+// ── Main page component ────────────────────────────────────────────────────────
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const { data: project, isLoading, isError } = useProjectDetail(id);
   const navigate = useNavigate();
-  const [isRebuilding, setIsRebuilding] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
+
+  // Rebuild modal state — lives here at page level, NOT inside sub-components
+  const [isRebuilding,     setIsRebuilding]     = useState(false);
+  const [rebuildModalOpen, setRebuildModalOpen] = useState(false);
+  const [logsOpen,         setLogsOpen]         = useState(false);
 
   const handleDelete = async () => {
     if (!id || !confirm('Delete this project permanently?')) return;
@@ -215,11 +271,17 @@ export default function ProjectDetail() {
     navigate('/dashboard');
   };
 
-  const handleRebuild = async () => {
+  /**
+   * Called by RebuildModal when the user confirms.
+   * customPrompt === '' means "same prompt" (modal's "Same Prompt" mode).
+   * customPrompt !== '' means "custom instructions" mode.
+   */
+  const handleRebuild = async (customPrompt: string) => {
     if (!id || isRebuilding) return;
     setIsRebuilding(true);
+    setRebuildModalOpen(false);
     try {
-      const res = await api.rebuildProject(id);
+      const res = await api.rebuildProject(id, customPrompt);
       navigate(`/build/${res.new_build_id}`);
     } catch (err) {
       console.error('Rebuild failed:', err);
@@ -227,6 +289,7 @@ export default function ProjectDetail() {
     }
   };
 
+  // ── Loading / error guards ────────────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="project-detail page-wrapper animate-in">
@@ -250,37 +313,42 @@ export default function ProjectDetail() {
     );
   }
 
-  // Build step logs from progress (stored in project.progress if available)
-  // The API returns them via useProjectDetail → GET /projects/{id}
-  // For now we read from JobStatus shape if present; extend when API exposes them.
+  // ── Parse build step logs from the API response ───────────────────────────
   const stepLogs: StepLog[] = (project as unknown as {
-    build_steps?: Array<{ step: number; name: string; status: string; timestamp: string; data?: string }>
+    build_steps?: Array<{
+      step: number; name: string; status: string; timestamp: string; data?: string;
+    }>;
   }).build_steps?.map(s => ({
     step:   s.step,
     name:   s.name,
     status: s.status,
     at:     s.timestamp,
-    data:   s.data ? (() => { try { return JSON.parse(s.data!); } catch { return {}; } })() : undefined,
+    data:   s.data
+      ? (() => { try { return JSON.parse(s.data!); } catch { return {}; } })()
+      : undefined,
   })) ?? [];
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="project-detail page-wrapper animate-in">
+
       {/* Back */}
       <Link to="/dashboard" className="back-link">
         <ArrowLeft size={15} /> Dashboard
       </Link>
 
-      {/* Hero */}
+      {/* Hero card */}
       <div className="pd-hero card">
         <div className="pd-hero-left">
           <h1 className="pd-app-name">{project.app_name || 'Unnamed App'}</h1>
           <p className="pd-prompt">{project.prompt}</p>
           <div className="pd-tags">
             <StatusBadge status={project.status} />
-            {project.app_type  && <span className="tag">{project.app_type}</span>}
+            {project.app_type   && <span className="tag">{project.app_type}</span>}
             {project.complexity && <span className="tag">{project.complexity}</span>}
           </div>
         </div>
+
         <div className="pd-actions">
           {project.status === 'done' && (
             <button
@@ -291,9 +359,11 @@ export default function ProjectDetail() {
               <Download size={15} /> Download ZIP
             </button>
           )}
+
+          {/* Rebuild button — opens modal, does NOT immediately start a build */}
           <button
             className="btn btn-secondary"
-            onClick={handleRebuild}
+            onClick={() => setRebuildModalOpen(true)}
             disabled={isRebuilding}
           >
             {isRebuilding
@@ -301,13 +371,14 @@ export default function ProjectDetail() {
               : <><RefreshCw size={15} /> Rebuild</>
             }
           </button>
+
           <button className="btn btn-danger" onClick={handleDelete}>
             <Trash2 size={15} /> Delete
           </button>
         </div>
       </div>
 
-      {/* Time info */}
+      {/* Time row */}
       <div className="pd-time-row">
         <div className="pd-time-item card">
           <Calendar size={14} className="pd-time-icon" />
@@ -327,7 +398,7 @@ export default function ProjectDetail() {
         )}
       </div>
 
-      {/* Scores */}
+      {/* Score gauges — only for completed builds */}
       {project.status === 'done' && (
         <div className="pd-scores">
           <ScoreGauge
@@ -348,14 +419,14 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* Phase 17: Token usage */}
+      {/* Token usage — always shown, never silently hidden */}
       <TokenCard
         promptTokens={project.prompt_tokens}
         completionTokens={project.completion_tokens}
         totalTokens={project.total_tokens}
       />
 
-      {/* Phase 17: Build step logs */}
+      {/* Build step logs */}
       {stepLogs.length > 0 && (
         <div className="pd-step-logs card">
           <button
@@ -379,7 +450,7 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* File Tree */}
+      {/* Generated file tree */}
       {project.files && project.files.length > 0 && (
         <div className="pd-files card">
           <div className="pd-files-header">
@@ -396,13 +467,31 @@ export default function ProjectDetail() {
               >
                 <FileCode2 size={13} className="file-row-icon" />
                 <code className="file-row-path">
-                  {typeof f === 'string' ? f : (f as { file_path?: string }).file_path ?? String(f)}
+                  {typeof f === 'string'
+                    ? f
+                    : (f as { file_path?: string }).file_path ?? String(f)}
                 </code>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      {/*
+        ── RebuildModal ──────────────────────────────────────────────────────
+        Rendered at the PAGE ROOT — never inside a sub-component like ScoreGauge.
+        This is what caused the black screen: the modal was inside ScoreGauge
+        but referenced state (rebuildModalOpen, handleRebuild, project, isRebuilding)
+        that only exists in ProjectDetail's scope.
+      */}
+      <RebuildModal
+        isOpen={rebuildModalOpen}
+        onClose={() => setRebuildModalOpen(false)}
+        onRebuild={handleRebuild}
+        originalPrompt={project.prompt}
+        appName={project.app_name || project.build_id.substring(0, 8)}
+        isRebuilding={isRebuilding}
+      />
     </div>
   );
 }

@@ -1,16 +1,12 @@
 """
-agents/pipeline.py  v2.0.0  (Phase 17 — reliability & observability)
-======================================================================
-Changes vs v1.x:
-  - STEP_TIMEOUT_SECONDS = 240  (configurable hard timeout per step)
-  - STEP_MAX_RETRIES = 1        (each step retried once before failing the build)
-  - _run_step_with_timeout()    — ThreadPoolExecutor-based timeout (works on Windows)
-  - Structured "data" dict emitted on both success AND failure:
-      success: {"elapsed_seconds": N, + step-specific metrics}
-      failure: {"error": "...", "error_type": "...", "traceback": "...",
-                "elapsed_seconds": N, "timed_out": bool}
-  - Token tracking: set_current_build_id() called at pipeline start
-  - _build_step_data() centralises per-step success payload building
+agents/pipeline.py  v2.0.2  (Phase 17 fix 2 — cooperative cancellation)
+=========================================================================
+Changes vs v2.0.1:
+  - __init__ now accepts cancel_check: Callable[[], bool] = None
+  - run() checks cancel_check() BEFORE every step; raises PipelineCancelledError
+    so the runner can handle cancellation cleanly (store tokens, set status)
+  - result.cancelled flag added to BuildResult
+  - _make_tracked_fn() unchanged (token tracking sub-thread fix from v2.0.1)
 """
 import logging
 import traceback
@@ -32,9 +28,12 @@ from agents.documenter import Documenter, DocResult
 
 logger = logging.getLogger(__name__)
 
-# ── Phase 17: configurable per-step limits ─────────────────────────────────────
-STEP_TIMEOUT_SECONDS: int = 240   # seconds before a hung step is cancelled
-STEP_MAX_RETRIES:     int = 1     # extra attempts after the first failure (0 = no retry)
+STEP_TIMEOUT_SECONDS: int = 240
+STEP_MAX_RETRIES:     int = 1
+
+
+class PipelineCancelledError(Exception):
+    """Raised when cancel_check() returns True between steps."""
 
 
 @dataclass
@@ -52,6 +51,7 @@ class BuildResult:
     doc_result:     Optional[DocResult] = None
     success:        bool  = False
     error:          str   = ""
+    cancelled:      bool  = False
     started_at:     datetime = field(default_factory=datetime.now)
     completed_at:   Optional[datetime] = None
     current_step:   int   = 0
@@ -77,7 +77,6 @@ class BuildResult:
         total_tests  = sum(r.tests_generated for r in self.test_results)
         tests_passed = sum(r.passed for r in self.test_results)
         doc_status   = str(self.doc_result) if self.doc_result else "not run"
-
         lines = [
             f"\n{'='*50}",
             f"  BUILD RESULT: {'✅ SUCCESS' if self.success else '❌ FAILED'}",
@@ -94,22 +93,6 @@ class BuildResult:
             f"  Duration:   {self.duration_seconds:.1f}s",
             f"{'='*50}",
         ]
-        if self.all_files:
-            lines.append("  Generated files:")
-            for f in self.all_files:
-                lines.append(f"    📄 {f}")
-        if self.debug_results:
-            lines.append("\n  Debug results:")
-            for r in self.debug_results:
-                lines.append(f"    {r}")
-        if self.review_results:
-            lines.append("\n  Review results:")
-            for r in self.review_results:
-                lines.append(f"    {r}")
-        if self.test_results:
-            lines.append("\n  Test results:")
-            for r in self.test_results:
-                lines.append(f"    {r}")
         if self.error:
             lines.append(f"\n  ❌ Error: {self.error}")
         lines.append(f"{'='*50}\n")
@@ -117,23 +100,16 @@ class BuildResult:
 
 
 class Pipeline:
-    def __init__(self, build_id: str = None, progress_callback: Callable = None):
-        """
-        Args:
-            build_id:          Unique build identifier (auto-generated if not provided)
-            progress_callback: Called with a progress dict on every step change.
-                               Dict shape:
-                               {
-                                 "build_id":  str,
-                                 "step":      int,
-                                 "step_name": str,
-                                 "status":    "running" | "done" | "failed",
-                                 "timestamp": str (ISO),
-                                 "data":      dict   ← structured per-step payload
-                               }
-        """
+    def __init__(
+        self,
+        build_id:          str      = None,
+        progress_callback: Callable = None,
+        cancel_check:      Callable[[], bool] = None,
+    ):
         self.build_id          = build_id or str(uuid4())[:8]
         self.progress_callback = progress_callback
+        # cancel_check() returns True when the build has been cancelled
+        self._cancel_check     = cancel_check or (lambda: False)
 
         self.intent_analyzer    = IntentAnalyzer()
         self.planner            = Planner()
@@ -145,7 +121,23 @@ class Pipeline:
         self.tester             = Tester()
         self.documenter         = Documenter()
 
-    # ── Phase 17: step runner with timeout + retry ─────────────────────────────
+    # ── Token tracking: propagate build_id into sub-threads ───────────────────
+
+    def _make_tracked_fn(self, fn: Callable) -> Callable:
+        """Wrap fn so the sub-thread calls set_current_build_id before running."""
+        build_id = self.build_id
+
+        def _tracked():
+            try:
+                import llm_client
+                llm_client.set_current_build_id(build_id)
+            except Exception:
+                pass
+            return fn()
+
+        return _tracked
+
+    # ── Step runner with timeout + retry ──────────────────────────────────────
 
     def _run_step_with_timeout(
         self,
@@ -155,74 +147,49 @@ class Pipeline:
         timeout:   int = STEP_TIMEOUT_SECONDS,
         retries:   int = STEP_MAX_RETRIES,
     ) -> Any:
-        """
-        Run fn() in a worker thread with a hard wall-clock timeout.
-
-        Uses ThreadPoolExecutor.submit() + Future.result(timeout=N) so it works
-        cross-platform (no signal.alarm, which is Unix-only).
-
-        On timeout or exception, retries up to `retries` additional times.
-        Raises the last exception if all attempts fail.
-
-        Note: the worker thread continues running after a timeout (Python threads
-        cannot be forcibly killed). The future is cancelled so the result is ignored,
-        but the thread will still complete in the background. This is the standard
-        Python trade-off for cross-platform timeouts.
-        """
         last_exc: Optional[Exception] = None
         total_attempts = retries + 1
 
         for attempt in range(1, total_attempts + 1):
-            attempt_label = f"attempt {attempt}/{total_attempts}"
             logger.info(
-                f"  ⏱️  [{step_name}] Starting ({attempt_label}, timeout={timeout}s)"
+                f"  ⏱️  [{step_name}] Starting (attempt {attempt}/{total_attempts}, timeout={timeout}s)"
             )
 
-            # Each attempt gets its own single-worker pool so threads don't accumulate
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"step_{step_name}") as executor:
-                future = executor.submit(fn)
+            tracked_fn = self._make_tracked_fn(fn)
+
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix=f"step_{step_name}",
+            ) as executor:
+                future = executor.submit(tracked_fn)
                 try:
                     result = future.result(timeout=timeout)
                     if attempt > 1:
-                        logger.info(
-                            f"  ✅ [{step_name}] Succeeded on {attempt_label}"
-                        )
+                        logger.info(f"  ✅ [{step_name}] Succeeded on attempt {attempt}")
                     return result
 
                 except FuturesTimeoutError:
-                    # future.cancel() is a best-effort hint; the thread may still run
                     future.cancel()
                     last_exc = TimeoutError(
-                        f"Step '{step_name}' timed out after {timeout}s. "
-                        f"The step was taking too long — check Ollama/Groq connectivity."
+                        f"Step '{step_name}' timed out after {timeout}s."
                     )
-                    logger.warning(
-                        f"  ⏰ [{step_name}] Timed out after {timeout}s ({attempt_label})"
-                    )
+                    logger.warning(f"  ⏰ [{step_name}] Timed out (attempt {attempt})")
 
                 except Exception as exc:
                     last_exc = exc
                     logger.warning(
-                        f"  ❌ [{step_name}] Failed ({attempt_label}): "
+                        f"  ❌ [{step_name}] Failed (attempt {attempt}): "
                         f"{type(exc).__name__}: {exc}"
                     )
 
             if attempt < total_attempts:
-                logger.info(f"  🔁 [{step_name}] Retrying ({attempt + 1}/{total_attempts})…")
+                logger.info(f"  🔁 [{step_name}] Retrying…")
 
-        # All attempts exhausted — propagate the last exception
         raise last_exc  # type: ignore[misc]
 
-    # ── Progress emitter ────────────────────────────────────────────────────────
+    # ── Progress emitter ──────────────────────────────────────────────────────
 
-    def _emit_progress(
-        self,
-        step:      int,
-        step_name: str,
-        status:    str,
-        data:      Dict = None,
-    ):
-        """Emit a progress event via the registered callback."""
+    def _emit_progress(self, step: int, step_name: str, status: str, data: Dict = None):
         if self.progress_callback:
             self.progress_callback({
                 "build_id":  self.build_id,
@@ -233,14 +200,9 @@ class Pipeline:
                 "data":      data or {},
             })
 
-    # ── Per-step success data builders ─────────────────────────────────────────
+    # ── Per-step success data builders ────────────────────────────────────────
 
     def _build_step_data(self, step_name: str, val: Any) -> dict:
-        """
-        Build a structured data dict for a step's success outcome.
-        These are stored in build_progress.data (JSON) and shown in the
-        BuildLogsPanel on the frontend.
-        """
         try:
             if step_name == "intent_analyzer" and isinstance(val, dict):
                 return {
@@ -272,21 +234,17 @@ class Pipeline:
             pass
         return {}
 
-    # ── Main pipeline ───────────────────────────────────────────────────────────
+    # ── Main pipeline ─────────────────────────────────────────────────────────
 
     def run(self, user_prompt: str) -> BuildResult:
-        # ── Phase 17: register build for token tracking ───────────────────────
         try:
             import llm_client
             llm_client.set_current_build_id(self.build_id)
         except Exception:
-            pass  # token tracking is best-effort; never crash the pipeline
+            pass
 
         result = BuildResult(user_prompt=user_prompt, build_id=self.build_id)
 
-        # ── Step definitions ───────────────────────────────────────────────────
-        # Each entry: (step_num, step_name, zero-arg lambda)
-        # Lambdas close over `result` so they always use the latest partial results.
         steps_def = [
             (1, "intent_analyzer",
              lambda: self.intent_analyzer.run(user_prompt)),
@@ -317,7 +275,6 @@ class Pipeline:
              )),
         ]
 
-        # Attribute names on BuildResult, parallel to steps_def
         result_attrs = [
             "intent", "steps", "architecture",
             "backend_files", "frontend_files",
@@ -326,10 +283,20 @@ class Pipeline:
 
         try:
             for (step_num, step_name, fn), attr in zip(steps_def, result_attrs):
+
+                # ── Cooperative cancellation: check BEFORE each step ──────────
+                if self._cancel_check():
+                    logger.info(
+                        f"🚫 Build {self.build_id[:8]} cancelled before "
+                        f"step {step_num} ({step_name})"
+                    )
+                    raise PipelineCancelledError(
+                        f"Cancelled before step {step_num} ({step_name})"
+                    )
+
                 result.current_step = step_num
                 step_start          = datetime.now()
 
-                # Emit "running" immediately so the UI shows the step as active
                 self._emit_progress(step_num, step_name, "running")
                 logger.info(f"🔄 [{step_num}/9] {step_name}…")
 
@@ -337,7 +304,6 @@ class Pipeline:
                     val = self._run_step_with_timeout(step_num, step_name, fn)
                     setattr(result, attr, val)
 
-                    # Build structured payload and measure elapsed time
                     elapsed    = round((datetime.now() - step_start).total_seconds(), 1)
                     step_data  = self._build_step_data(step_name, val)
                     step_data["elapsed_seconds"] = elapsed
@@ -345,25 +311,30 @@ class Pipeline:
                     self._emit_progress(step_num, step_name, "done", step_data)
                     logger.info(f"✅ [{step_num}/9] {step_name} done in {elapsed}s")
 
+                except PipelineCancelledError:
+                    raise  # let outer handler catch it
+
                 except Exception as exc:
                     elapsed = round((datetime.now() - step_start).total_seconds(), 1)
                     tb      = traceback.format_exc()
 
-                    # Structured failure data stored to DB so BuildLogsPanel
-                    # can display "what went wrong" in ProjectDetail
                     self._emit_progress(step_num, step_name, "failed", {
                         "error":           str(exc),
                         "error_type":      type(exc).__name__,
-                        "traceback":       tb[-1000:],   # last 1000 chars of traceback
+                        "traceback":       tb[-1000:],
                         "elapsed_seconds": elapsed,
                         "timed_out":       isinstance(exc, TimeoutError),
                     })
                     logger.error(
                         f"💥 [{step_num}/9] {step_name} failed after {elapsed}s: {exc}"
                     )
-                    raise   # propagate to outer try/except to mark build failed
+                    raise
 
             result.complete(success=True)
+
+        except PipelineCancelledError:
+            result.cancelled = True
+            result.complete(success=False)
 
         except Exception as e:
             result.error = str(e)
@@ -376,16 +347,14 @@ class Pipeline:
         return result
 
 
-# ── CLI smoke test ─────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     def on_progress(progress):
-        status = progress["status"]
-        step   = progress["step"]
-        name   = progress["step_name"]
-        data   = progress.get("data", {})
+        status  = progress["status"]
+        step    = progress["step"]
+        name    = progress["step_name"]
+        data    = progress.get("data", {})
         elapsed = data.get("elapsed_seconds", "?")
         if status == "failed":
             print(f"  ❌ [{step}/9] {name}: FAILED — {data.get('error', '?')} ({elapsed}s)")
