@@ -1,11 +1,13 @@
 """
-api_platform/routes/analytics.py  — Phase 17.1
+api_platform/routes/analytics.py  — Phase 19.5 (Rebuild Context Fix)
 
-Changes vs Phase 17:
-  - /projects/{build_id}/rebuild now accepts optional custom_prompt in body
-    so the RebuildModal "Custom Instructions" feature works end-to-end.
-    If custom_prompt is provided it is used as the new build prompt;
-    otherwise the original prompt is reused unchanged.
+Changes vs Phase 17.1:
+  - rebuild_project() now composes a COMBINED prompt when custom_prompt is given:
+      original_prompt + "\n\n[REBUILD INSTRUCTIONS]\n" + custom_prompt
+    This ensures the pipeline always knows WHAT app it is rebuilding AND what
+    to improve, instead of treating the custom instructions as a standalone prompt.
+  - Added `original_prompt` field to rebuild response for UI display.
+  - All other behaviour identical to Phase 17.1.
 """
 
 import shutil
@@ -162,7 +164,7 @@ async def get_platform_stats():
         except Exception:
             pass
 
-    # ── Token usage — include ALL statuses (done + failed + cancelled) ─────────
+    # ── Token usage ───────────────────────────────────────────────────────────
     total_prompt_tokens     = 0
     total_completion_tokens = 0
     total_tokens_all        = 0
@@ -265,18 +267,60 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
 class RebuildRequest(BaseModel):
     """
     Optional body for rebuild endpoint.
-    - custom_prompt: if provided, used as the new build prompt
-                     (supports RebuildModal "Custom Instructions" mode).
-    - If omitted or empty, the original project prompt is reused.
+
+    - custom_prompt: additional instructions describing what to improve.
+      When provided, the pipeline receives a COMBINED prompt:
+        "<original_prompt>\n\n[REBUILD INSTRUCTIONS]\n<custom_prompt>"
+      This ensures the pipeline understands WHAT app to build AND what
+      to change — preventing the "builds a new app from scratch" bug
+      where only the custom_prompt was used as the full build prompt.
+
+    - If omitted or empty, the original project prompt is reused unchanged
+      (same-prompt rebuild behaviour).
     """
     custom_prompt: str = ""
+
+
+def _build_combined_prompt(original_prompt: str, custom_prompt: str) -> str:
+    """
+    Combine original project description with custom rebuild instructions.
+
+    The output reads naturally to the IntentAnalyzer so it correctly
+    identifies the app type, then picks up the improvements from the
+    REBUILD INSTRUCTIONS block.
+
+    Example output:
+        Create a Python AI report generator that takes CSV/Excel data,
+        analyzes it, generates charts, and produces a professional PDF
+        report with insights using reportlab and matplotlib.
+
+        [REBUILD INSTRUCTIONS]
+        Improve test coverage and add integration tests.
+        Improve error handling and add input validation.
+        Make the UI more responsive and mobile-friendly.
+    """
+    custom = custom_prompt.strip()
+    original = original_prompt.strip()
+
+    if not custom:
+        return original
+
+    return (
+        f"{original}\n\n"
+        f"[REBUILD INSTRUCTIONS]\n"
+        f"{custom}"
+    )
 
 
 @router.post("/projects/{build_id}/rebuild")
 async def rebuild_project(build_id: str, body: RebuildRequest = None):
     """
     Start a new build from an existing project.
-    Optionally pass a custom_prompt to change the requirements.
+
+    - No body / empty custom_prompt → re-runs the original prompt unchanged.
+    - custom_prompt provided → builds with original context + improvement instructions.
+      The IntentAnalyzer will see the full original description so it generates
+      the correct app type and structure, then applies the requested improvements.
     """
     from api_platform.runner import job_runner
 
@@ -291,18 +335,24 @@ async def rebuild_project(build_id: str, body: RebuildRequest = None):
             detail="Original project has no prompt stored",
         )
 
-    # Use custom prompt if provided and non-empty, else fall back to original
     custom = (body.custom_prompt or "").strip() if body else ""
-    prompt_to_use = custom if custom else original_prompt
+
+    # ── KEY FIX: always include original_prompt as the base ──────────────────
+    # Previously: prompt_to_use = custom if custom else original_prompt
+    # Bug: when custom was set, original_prompt was dropped entirely, causing
+    # the pipeline to build "Improve test coverage..." as a fresh project.
+    prompt_to_use = _build_combined_prompt(original_prompt, custom)
 
     new_build_id = job_runner.start_build(prompt_to_use)
     return {
-        "message":           "Rebuild started",
-        "original_build_id": build_id,
-        "new_build_id":      new_build_id,
-        "prompt":            prompt_to_use,
+        "message":            "Rebuild started",
+        "original_build_id":  build_id,
+        "new_build_id":       new_build_id,
+        "prompt":             prompt_to_use,
+        "original_prompt":    original_prompt,
+        "custom_prompt":      custom,
         "used_custom_prompt": bool(custom),
-        "status_url":        f"/jobs/{new_build_id}/status",
+        "status_url":         f"/jobs/{new_build_id}/status",
     }
 
 

@@ -1,5 +1,15 @@
 """
-agents/frontend_generator.py — Generates React/Tailwind frontend code.
+agents/frontend_generator.py — Phase 19.2 update
+==================================================
+Phase 19.2 — Multi-file context in code generation
+  - Shows ALL previously written frontend files (not just last 3)
+  - Takes first 30 lines per file (not a char-limit that can cut mid-line)
+  - Also injects the full architecture file list as project structure context
+  - Groups JS/JSX/TS/TSX by role:
+      config/types → hooks → utils → components → pages → App → main
+
+This ensures later files (App.tsx, main.tsx) see the full import surface of
+earlier ones, preventing "Cannot find module" errors at build time.
 """
 import logging
 import json
@@ -14,6 +24,71 @@ PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "frontend_generator.txt
 # File types this agent handles
 FRONTEND_TYPES = {"javascript", "jsx", "typescript", "tsx", "css", "html", "json"}
 
+# ── Phase 19.2: role-based generation order ──────────────────────────────────
+_ROLE_ORDER = {
+    # Config / type definitions first
+    "vite.config.ts":  0,
+    "vite.config.js":  0,
+    "tailwind.config.js": 0,
+    "postcss.config.js":  0,
+    "tsconfig.json":   0,
+    "package.json":    0,
+    "index.css":       1,
+    "globals.css":     1,
+    "tokens.css":      1,
+    # Type declaration files
+    "types.ts":        2,
+    "types.d.ts":      2,
+    # API / client layer
+    "client.ts":       3,
+    "api.ts":          3,
+    # Hooks
+    "useAuth.ts":      4,
+    "useApi.ts":       4,
+    # Utilities / helpers
+    "utils.ts":        5,
+    "helpers.ts":      5,
+    "lib.ts":          5,
+    # Components
+    "components":      6,   # matched by prefix
+    # Pages
+    "pages":           7,   # matched by prefix
+    # Root app
+    "App.tsx":         8,
+    "App.jsx":         8,
+    "App.ts":          8,
+    "App.js":          8,
+    # Entry point last
+    "main.tsx":        9,
+    "main.jsx":        9,
+    "index.tsx":       9,
+    "index.html":      9,
+}
+
+
+def _role_priority(file_info: dict) -> int:
+    path = file_info.get("path", "")
+    name = Path(path).name
+
+    # Exact match
+    if name in _ROLE_ORDER:
+        return _ROLE_ORDER[name]
+
+    # Prefix match (components/, pages/)
+    parts = Path(path).parts
+    for part in parts:
+        if part.lower() in ("components", "component"):
+            return 6
+        if part.lower() in ("pages", "page", "views"):
+            return 7
+        if part.lower() in ("hooks", "hook"):
+            return 4
+        if part.lower() in ("utils", "lib", "helpers"):
+            return 5
+
+    # Default: middle of the pack
+    return 5
+
 
 class FrontendGenerator(BaseAgent):
     def __init__(self):
@@ -22,14 +97,11 @@ class FrontendGenerator(BaseAgent):
 
     def run(self, intent: dict, architecture: dict) -> list[str]:
         """
-        Generate frontend code for all JS/JSX/HTML files in the architecture.
+        Generate frontend code for all JS/JSX/HTML/CSS files in the architecture.
 
-        Args:
-            intent:       output from IntentAnalyzer
-            architecture: output from Architect
+        Phase 19.2: files generated in role-order; full-header context passed.
 
-        Returns:
-            list of file paths that were written
+        Returns list of file paths that were written.
         """
         root = architecture.get("root_folder", "project")
         frontend_files = [
@@ -37,15 +109,22 @@ class FrontendGenerator(BaseAgent):
             if f.get("type") in FRONTEND_TYPES
         ]
 
-        logger.info(f"🎨 Generating frontend: {len(frontend_files)} files")
+        # ── Phase 19.2: sort by role ──────────────────────────────────────────
+        frontend_files_sorted = sorted(frontend_files, key=_role_priority)
+
+        logger.info(
+            f"🎨 Generating frontend: {len(frontend_files_sorted)} files "
+            f"(role-ordered)"
+        )
         written = []
 
-        for file_info in frontend_files:
-            path = file_info["path"]
+        for file_info in frontend_files_sorted:
+            path        = file_info["path"]
             description = file_info["description"]
-            full_path = f"{root}/{path}"
+            full_path   = f"{root}/{path}"
 
-            context = self._gather_context(root, written)
+            # Phase 19.2: full context from all previously written files
+            context = self._gather_full_context(root, written)
 
             code = self._generate_file(
                 intent=intent,
@@ -61,25 +140,53 @@ class FrontendGenerator(BaseAgent):
 
         return written
 
+    # ── Phase 19.2: full-header multi-file context ────────────────────────────
+
+    def _gather_full_context(self, root: str, written_paths: list[str]) -> str:
+        """
+        Return the first 30 lines of every already-written file, labelled by
+        relative path. This gives the LLM full import visibility.
+
+        Replaces the old _gather_context() which only showed the last 3 files
+        truncated to 800 chars each.
+        """
+        if not written_paths:
+            return ""
+
+        snippets = []
+        for path in written_paths:
+            try:
+                content = read_file(path)
+                lines   = content.splitlines()[:30]
+                header  = "\n".join(lines)
+                snippets.append(f"--- {path} (first {len(lines)} lines) ---\n{header}")
+            except Exception:
+                pass
+
+        return "\n\n".join(snippets)
+
     def _generate_file(
         self,
-        intent: dict,
+        intent:       dict,
         architecture: dict,
-        file_path: str,
-        description: str,
-        context: str,
+        file_path:    str,
+        description:  str,
+        context:      str,
     ) -> str:
         # Detect file type for language-specific instructions
         ext = Path(file_path).suffix.lower()
         lang_hint = {
-            ".js": "React JavaScript",
-            ".jsx": "React JSX",
-            ".ts": "TypeScript",
-            ".tsx": "React TypeScript",
-            ".css": "CSS",
+            ".js":   "React JavaScript",
+            ".jsx":  "React JSX",
+            ".ts":   "TypeScript",
+            ".tsx":  "React TypeScript",
+            ".css":  "CSS",
             ".html": "HTML",
             ".json": "JSON config",
         }.get(ext, "JavaScript")
+
+        # Full project file list for structural awareness
+        arch_files = [f["path"] for f in architecture.get("files", [])]
 
         prompt = f"""
 Generate the complete {lang_hint} code for this file.
@@ -91,10 +198,10 @@ FILE TO WRITE:
 Path: {file_path}
 Purpose: {description}
 
-PROJECT STRUCTURE:
-{json.dumps([f["path"] for f in architecture.get("files", [])], indent=2)}
+PROJECT STRUCTURE (all planned files):
+{json.dumps(arch_files, indent=2)}
 
-ALREADY WRITTEN FILES (for context/imports):
+ALREADY WRITTEN FILES (import context — use these exact paths for imports):
 {context if context else "None yet — this is the first file."}
 
 The backend API runs at: http://localhost:8000
@@ -103,21 +210,8 @@ Write the complete, working {lang_hint} code for: {file_path}
 """
         return self.think(prompt)
 
-    def _gather_context(self, root: str, written_paths: list[str]) -> str:
-        """Read already-written files to give the LLM context."""
-        if not written_paths:
-            return ""
-        snippets = []
-        for path in written_paths[-3:]:
-            try:
-                content = read_file(path)
-                snippets.append(f"--- {path} ---\n{content[:800]}")
-            except Exception:
-                pass
-        return "\n\n".join(snippets)
 
-
-# ── Smoke test ────────────────────────────────────────────
+# ── Smoke test ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     from agents.intent_analyzer import IntentAnalyzer
@@ -139,7 +233,7 @@ if __name__ == "__main__":
     print("Step 4: Generating backend...")
     BackendDeveloper().run(intent, arch)
 
-    print("Step 5: Generating frontend...")
+    print("Step 5: Generating frontend (Phase 19.2)...")
     written = FrontendGenerator().run(intent, arch)
 
     print(f"\n=== Frontend Generation Complete ===")

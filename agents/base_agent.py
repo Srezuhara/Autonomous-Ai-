@@ -1,9 +1,18 @@
 """
 agents/base_agent.py — Shared base class for all agents.
-Every agent inherits from this.
 
-Phase 15.1: think_json() now retries up to 3x with exponential backoff
-            (0.5s, 1s, 2s) and appends a stricter JSON instruction on each retry.
+v3.5.0 changes (on top of Phase 15.1):
+  1. __init__ now calls get_agent_token_budget(self.name) once and stores
+     the result as self._token_budget. No more blanket 2048.
+  2. think() passes both self._token_budget (as max_tokens) and self.name
+     (as agent_name) to generate_text(). This is the only line that changed
+     in the actual logic — everything else is identical.
+  3. The agent_name param tells llm_client which model to use (heavy vs fast)
+     and which token budget to reserve against the Groq daily quota.
+
+Phase 15.1 retained unchanged:
+  think_json() retries up to 3× with exponential backoff (0.5s, 1s, 2s)
+  and appends a stricter JSON instruction on each retry.
 """
 import logging
 import json
@@ -18,14 +27,37 @@ logger = logging.getLogger(__name__)
 
 class BaseAgent:
     def __init__(self, name: str, system_prompt: str):
-        self.name = name
+        self.name          = name
         self.system_prompt = system_prompt
-        logger.info(f"🤖 Agent initialized: {self.name}")
+        # Look up the right-sized token budget for this agent once at init.
+        # This avoids reserving 2048 tokens for every call regardless of need.
+        self._token_budget = llm_client.get_agent_token_budget(self.name)
+        logger.info(
+            f"🤖 Agent initialized: {self.name} "
+            f"(model: {'heavy 70b' if self.name.lower().replace(' ','') in {'architect','backenddeveloper','frontendgenerator'} else 'fast 8b'}, "
+            f"budget: {self._token_budget} tokens)"
+        )
 
-    def think(self, prompt: str) -> str:
-        """Send a prompt to the LLM, return response with fences stripped."""
+    def think(self, prompt: str, max_tokens: int = None) -> str:
+        """
+        Send a prompt to the LLM and return the response with fences stripped.
+
+        Passes self.name as agent_name so llm_client can:
+          1. Route to the correct model (heavy 70b vs fast 8b)
+          2. Log which agent is making the call
+
+        max_tokens defaults to self._token_budget (right-sized per agent).
+        Pass an explicit value only when you genuinely need to override —
+        for example a very long code file that won't fit in 1200 tokens.
+        """
+        budget = max_tokens if max_tokens is not None else self._token_budget
         logger.info(f"🧠 [{self.name}] Thinking...")
-        response = llm_client.generate_text(prompt, system=self.system_prompt)
+        response = llm_client.generate_text(
+            prompt,
+            system=self.system_prompt,
+            max_tokens=budget,
+            agent_name=self.name,      # ← the only change vs old base_agent
+        )
         response = llm_client._strip_fences(response)
         logger.debug(f"[{self.name}] Response: {response[:200]}...")
         return response
@@ -36,8 +68,9 @@ class BaseAgent:
         Retries up to `retries` times with exponential backoff: 0.5s, 1s, 2s.
         On each retry the prompt is appended with a strict JSON-only instruction
         so the LLM knows exactly what went wrong.
+        Unchanged from Phase 15.1.
         """
-        last_error = None
+        last_error     = None
         current_prompt = prompt
 
         for attempt in range(1, retries + 1):
@@ -53,7 +86,6 @@ class BaseAgent:
                         f"(attempt {attempt}/{retries}), retrying in {wait:.1f}s — {e}"
                     )
                     time.sleep(wait)
-                    # Append strict instruction so model doesn't repeat the mistake
                     current_prompt = (
                         f"{prompt}\n\n"
                         "IMPORTANT: Your previous response could not be parsed as JSON. "
@@ -73,7 +105,7 @@ class BaseAgent:
         )
 
     def _parse_json(self, text: str) -> dict | list:
-        """Strip markdown fences and parse JSON."""
+        """Strip markdown fences and parse JSON. Unchanged."""
         cleaned = re.sub(r"```(?:json)?\s*", "", text)
         cleaned = re.sub(r"```", "", cleaned).strip()
 

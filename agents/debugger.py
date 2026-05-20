@@ -1,33 +1,31 @@
 """
 agents/debugger.py — Autonomous debugging loop with two-pass cascade fix.
 
-Phase 18 changes (on top of Phase 15):
-────────────────────────────────────────
-1. DOTTED_IMPORT_REWRITER — new _rewrite_dotted_imports() method that runs
-   BEFORE the import-check loop. It catches the most common LLM mistake:
-     from ai_pdf_reader.backend.vault import X   →  from vault import X
-     from backend.routes import router           →  from routes import router
-   This prevents the "from X.Y.Z import" error from ever reaching the debug loop.
+Phase 19 Bug 3 fix — timeout misclassification
+-----------------------------------------------
+Root cause:
+  IGNORE_ERRORS contained the string "Timed out after".  When run_python()
+  hit its (now-raised) timeout on a services.py that imported matplotlib or
+  pandas at module level, the stderr read:
 
-2. WINDOWS_BLOCKED_PACKAGES_HANDLER — when pip_install() returns failure
-   AND the error mentions dlib/face_recognition/tensorflow/torch, the debugger
-   now asks the LLM to REWRITE the file to remove that dependency entirely,
-   rather than retrying the failing install endlessly.
+      "Timed out after 30 seconds"
 
-3. INSTALL_TIMEOUT_GUARD — if a package install returns "Timed out" in stderr,
-   the debugger treats it the same as a Windows-blocked package: rewrite the
-   source instead of looping.
+  The debugger matched this against IGNORE_ERRORS and set success=True —
+  silently passing a file whose import-check had never actually completed.
+  This meant the real import error was never surfaced, the Reviewer and
+  Tester both operated on broken code, and users saw runtime failures in the
+  downloaded ZIP.
 
-4. IMPORT_ERROR_PROPAGATION_FIX — when a root-cause file fails to import
-   because it uses a blocked package, the error now propagates correctly:
-   the blocked package name is extracted from the root-cause file's error,
-   not from the parent file that imported it.
+Fix:
+  1. Remove "Timed out after" from IGNORE_ERRORS entirely.
+  2. Add a dedicated _is_import_check_timeout() helper that recognises the
+     timeout message and routes it to the LLM fix path (ask LLM to remove
+     or lazy-load the heavy import) rather than silently passing.
+  3. The LLM prompt for timeout errors specifically instructs the model to
+     move heavy imports inside functions (lazy-loading) so the module-level
+     import-check succeeds quickly.
 
-5. LOCAL_MODULE_BLOCKLIST expanded to include project-name prefixes so the
-   debugger won't try to pip-install the project itself.
-
-All Phase 15 fixes retained: SKIP_DEBUG_FILES, _pre_install_project_deps,
-_ensure_init_files, _inject_syspath, SYSPATH_BLOCK, two-pass retry.
+All other Phase 18 logic retained unchanged.
 """
 import logging
 import re
@@ -50,7 +48,6 @@ logger = logging.getLogger(__name__)
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "debugger.txt"
 MAX_ATTEMPTS = 3
 
-# Local module names that are NEVER PyPI packages
 LOCAL_MODULE_BLOCKLIST = {
     "main", "app", "config", "routes", "services", "models",
     "utils", "helpers", "database", "db", "schemas", "middleware",
@@ -58,12 +55,21 @@ LOCAL_MODULE_BLOCKLIST = {
     "backend", "frontend", "auth", "users", "items", "weather",
     "endpoints", "routers", "weather_service", "weather_model",
     "weather_api", "forecast_api", "weather_routes",
-    # Phase 18: project-name prefixes
     "ai_pdf_reader", "todo_app", "task_manager", "blog_platform",
     "chat_app", "ecommerce", "booking_app", "portfolio",
 }
 
-IGNORE_ERRORS = ["uvicorn", "Address already in use", "Timed out after"]
+# ── Phase 19 Bug 3 fix: removed "Timed out after" ─────────────────────────────
+# "Timed out after" was here before.  It has been removed because:
+#   - A timeout on run_python() means the import-check DID NOT complete.
+#   - Passing the file as if it succeeded hid real bugs (heavy module-level
+#     imports, infinite loops at import time, blocked network calls in __init__).
+#   - The correct response is to route the timeout to the LLM fix path
+#     (see _is_import_check_timeout() and _fix_timeout_import() below).
+IGNORE_ERRORS = [
+    "uvicorn",
+    "Address already in use",
+]
 
 # Phase 15.3 — files that cannot be import-checked via importlib
 SKIP_DEBUG_FILES = {
@@ -82,7 +88,6 @@ for _p in [_here, _parent, _grandparent]:
         _sys.path.insert(0, _p)
 """
 
-# Combined set of all packages that should trigger a "rewrite the code" response
 _ALL_BLOCKED_PACKAGES: frozenset[str] = frozenset(
     p.lower().replace("-", "_")
     for p in (WINDOWS_BUILD_BLOCKLIST | HEAVY_PACKAGES_TIMEOUT_BLOCKLIST)
@@ -90,8 +95,17 @@ _ALL_BLOCKED_PACKAGES: frozenset[str] = frozenset(
 
 
 def _package_is_blocked(package_name: str) -> bool:
-    """Return True if the package is on any blocklist."""
     return package_name.lower().replace("-", "_") in _ALL_BLOCKED_PACKAGES
+
+
+# ── Phase 19 Bug 3: timeout detection ─────────────────────────────────────────
+
+def _is_import_check_timeout(stderr: str) -> bool:
+    """
+    Return True when run_python()'s subprocess timed out.
+    run_command() sets stderr to "Timed out after N seconds" on TimeoutExpired.
+    """
+    return "Timed out after" in stderr and "seconds" in stderr
 
 
 @dataclass
@@ -113,7 +127,6 @@ class Debugger(BaseAgent):
         super().__init__("Debugger", system_prompt)
 
     def run(self, file_paths: list[str]) -> list[FileDebugResult]:
-        # Phase 15.3 — filter out un-debuggable files
         py_files = [
             f for f in file_paths
             if f.endswith(".py") and Path(f).name not in SKIP_DEBUG_FILES
@@ -126,11 +139,9 @@ class Debugger(BaseAgent):
 
         logger.info(f"🐛 Debugging {len(py_files)} Python files...")
 
-        # Phase 15.2 — pre-install project dependencies before the debug loop
         self._pre_install_project_deps(py_files)
-
-        # Pre-flight: __init__.py + fixes + dotted-import rewriting + sys.path injection
         self._ensure_init_files(py_files)
+
         for fp in py_files:
             fixes = self._preflight_fix(fp)
             for fix in fixes:
@@ -142,14 +153,12 @@ class Debugger(BaseAgent):
             if self._inject_syspath(fp):
                 logger.info(f"  💉 Injected sys.path: {fp}")
 
-        # PASS 1: debug all files
         results = {}
         for fp in py_files:
             r = self._debug_file(fp)
             results[fp] = r
             logger.info(str(r))
 
-        # PASS 2: re-try files that failed in pass 1
         failed = [fp for fp, r in results.items() if not r.success]
         if failed:
             logger.info(f"🔁 Pass 2: re-trying {len(failed)} failed files after dependency fixes...")
@@ -171,16 +180,6 @@ class Debugger(BaseAgent):
     # ── Phase 18: Dotted-import rewriter ──────────────────────────────────────
 
     def _rewrite_dotted_imports(self, file_path: str) -> list[str]:
-        """
-        Rewrite dotted imports that use the project name or 'backend.' prefix.
-
-        Examples fixed:
-          from ai_pdf_reader.backend.vault import X  →  from vault import X
-          from backend.summarization import Y        →  from summarization import Y
-          from project.backend.services import Z     →  from services import Z
-
-        Returns list of fix descriptions applied.
-        """
         try:
             content = read_file(file_path)
         except Exception:
@@ -189,8 +188,6 @@ class Debugger(BaseAgent):
         original = content
         fixes = []
 
-        # Pattern: from X.Y.Z import something  where X or X.Y is a local prefix
-        # We want to convert it to: from Z import something
         dotted_from = re.compile(
             r'^(\s*from\s+)([\w]+(?:\.[\w]+)+)(\s+import\s+.+)$',
             re.MULTILINE,
@@ -200,41 +197,30 @@ class Debugger(BaseAgent):
             prefix = match.group(1)
             module_path = match.group(2)
             rest = match.group(3)
-
             parts = module_path.split(".")
-            # Find the last meaningful part that isn't a generic folder name
             folder_names = {
                 "backend", "frontend", "api", "src", "lib", "app",
                 "routes", "services", "models", "utils", "helpers",
             }
-
-            # Check if the root looks like a project name or local module
             root = parts[0]
             if not (_is_local_module(root) or root in folder_names):
-                return match.group(0)  # not a local path — leave unchanged
-
-            # Strip prefix segments that are folder/project names
+                return match.group(0)
             clean_parts = []
             for p in parts:
                 if p.lower() in folder_names or _is_local_module(p):
-                    clean_parts = []  # reset — everything before was folder structure
+                    clean_parts = []
                 else:
                     clean_parts.append(p)
-
             if not clean_parts:
-                # All parts were folder names — use the last part
                 clean_parts = [parts[-1]]
-
             new_module = ".".join(clean_parts)
             if new_module == module_path:
-                return match.group(0)  # nothing changed
-
+                return match.group(0)
             fixes.append(f"from {module_path} → from {new_module}")
             return f"{prefix}{new_module}{rest}"
 
         new_content = dotted_from.sub(_replace_dotted, content)
 
-        # Also handle: import ai_pdf_reader.backend.something  (rare but happens)
         dotted_import = re.compile(
             r'^(\s*import\s+)([\w]+(?:\.[\w]+)+)$',
             re.MULTILINE,
@@ -247,7 +233,6 @@ class Debugger(BaseAgent):
             root = parts[0]
             if not (_is_local_module(root)):
                 return match.group(0)
-            # Can't easily shorten a bare `import` — comment it out with a note
             fixes.append(f"commented out dotted import: import {module_path}")
             return f"# FIXED: {match.group(0).strip()}  # use 'from X import Y' style instead"
 
@@ -263,10 +248,6 @@ class Debugger(BaseAgent):
     def _rewrite_to_remove_blocked_dependency(
         self, file_path: str, blocked_package: str, error_text: str
     ) -> bool:
-        """
-        Ask the LLM to rewrite a file to remove an uninstallable dependency.
-        Returns True if a rewrite was performed.
-        """
         try:
             current_code = read_file(file_path)
         except Exception:
@@ -284,16 +265,12 @@ REASON IT CANNOT BE INSTALLED: '{blocked_package}' requires special build tools
 (Visual Studio C++, cmake, GPU drivers, or is too large to install automatically).
 
 REWRITE RULES:
-1. Remove ALL imports of '{blocked_package}' and any related packages (e.g. dlib, cv2).
-2. Replace the functionality with a simpler Python-only alternative:
-   - face_recognition / biometrics → use hashlib + a JSON file to store user credentials
-   - tensorflow / keras / torch → use simple rule-based logic or return mock results
-   - opencv-python / cv2 → use PIL/Pillow (already installable) or skip image processing
-   - psycopg2 → use sqlite3 (built into Python)
+1. Remove ALL imports of '{blocked_package}' and any related packages.
+2. Replace the functionality with a simpler Python-only alternative.
 3. Keep ALL other functionality intact.
 4. The file must import-check successfully with standard library + fastapi + pydantic.
-5. If a class/function used the blocked package for its core logic, replace with
-   a stub that logs a warning and returns a reasonable default value.
+5. If a class/function used the blocked package, replace with a stub that logs a
+   warning and returns a reasonable default value.
 
 Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
@@ -303,7 +280,66 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             return True
         return False
 
-    # ── Phase 15.2 — Pre-install project dependencies ─────────────────────────
+    # ── Phase 19 Bug 3: import-check timeout fixer ────────────────────────────
+
+    def _fix_timeout_import(self, file_path: str) -> bool:
+        """
+        When run_python() times out, the most common cause is a heavy package
+        imported at module level (matplotlib, pandas, scipy, etc.) that runs
+        slow initialisation during import.
+
+        Strategy: ask the LLM to move heavy imports inside the functions that
+        use them (lazy imports), so the module-level import-check finishes
+        quickly while runtime behaviour is unchanged.
+        """
+        try:
+            current_code = read_file(file_path)
+        except Exception:
+            return False
+
+        logger.info(f"  ⏱️  Import-check timed out for {file_path} — applying lazy-import fix")
+
+        prompt = f"""This Python file causes an import-check timeout because it imports heavy
+packages (matplotlib, pandas, scipy, numpy, etc.) at module level.
+
+FILE: {file_path}
+CURRENT CODE:
+{current_code}
+
+FIX RULE — move heavy imports inside the functions that use them (lazy imports):
+
+BEFORE:
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    def generate_chart(data):
+        fig, ax = plt.subplots()
+        ...
+
+AFTER:
+    def generate_chart(data):
+        import matplotlib.pyplot as plt  # lazy import — avoids slow module init
+        import pandas as pd
+        fig, ax = plt.subplots()
+        ...
+
+RULES:
+- Move ONLY the slow/heavy package imports inside functions.
+- Keep stdlib imports (os, sys, json, re, pathlib, datetime, etc.) at the top.
+- Keep fastapi, pydantic, httpx imports at the top (they are fast).
+- Do NOT change any function signatures or business logic.
+- The file must pass `py_compile.compile()` and `importlib` import-check quickly.
+
+Return ONLY the complete rewritten Python code. No markdown, no explanation."""
+
+        fixed = self.think(prompt)
+        if fixed and fixed.strip():
+            create_file(file_path, fixed)
+            logger.info(f"  ✅ Lazy-import fix applied to {file_path}")
+            return True
+        return False
+
+    # ── Pre-install / scaffold helpers ─────────────────────────────────────────
 
     def _pre_install_project_deps(self, file_paths: list[str]) -> None:
         from tools.dependency_installer import pip_install_requirements
@@ -323,8 +359,6 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 else:
                     logger.warning(f"⚠️  Some deps failed: {result.stderr[:200]}")
                 return
-
-    # ── Pre-flight fixes ───────────────────────────────────────────────────────
 
     def _preflight_fix(self, file_path: str) -> list[str]:
         try:
@@ -502,6 +536,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
             error_text = execution.stderr
 
+            # ── Ignorable runtime errors (not import errors) ───────────────────
             if any(p in error_text for p in IGNORE_ERRORS):
                 result.success = True
                 logger.info(f"  ✅ [{file_path}] Import-check passed (runtime error ignored)")
@@ -512,6 +547,27 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 logger.info(f"  ✅ [{file_path}] Import-check passed (DB connection ignored)")
                 return result
 
+            # ── Phase 19 Bug 3: import-check timeout → lazy-import fix ────────
+            # Previously this fell through to the IGNORE_ERRORS check (which
+            # contained "Timed out after") and was silently passed as success.
+            # Now we explicitly detect it and route to the lazy-import fixer.
+            if _is_import_check_timeout(error_text):
+                logger.warning(
+                    f"  ⏱️  [{file_path}] Import-check timed out — "
+                    f"attempting lazy-import rewrite (attempt {attempt})"
+                )
+                if attempt <= MAX_ATTEMPTS:
+                    fixed = self._fix_timeout_import(file_path)
+                    if fixed:
+                        result.fixes_applied.append(
+                            f"lazy-import rewrite on attempt {attempt}"
+                        )
+                        self._inject_syspath(file_path)
+                        continue
+                # If lazy-import fix didn't help or exhausted attempts,
+                # mark as failed so the build surfaces the issue.
+                break
+
             logger.warning(f"  ❌ [{file_path}] Error:\n{error_text[:400]}")
 
             root_cause = self._extract_root_cause_file(error_text)
@@ -519,7 +575,6 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
             if root_cause and root_cause != file_path:
                 logger.info(f"  🔍 Root cause: {root_cause}")
-                # Phase 18: rewrite dotted imports in root cause file first
                 dotted_fixes = self._rewrite_dotted_imports(root_cause)
                 for fix in dotted_fixes:
                     logger.info(f"  🔄 Dotted-import fix [{root_cause}]: {fix}")
@@ -535,15 +590,12 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             missing_pkg = extract_missing_package(error_text)
 
             if missing_pkg is None:
-                # Phase 18: extract_missing_package returned None → likely a local module
-                # Try to rewrite dotted imports in the file being debugged
                 dotted_fixes = self._rewrite_dotted_imports(file_to_fix)
                 if dotted_fixes:
                     logger.info(f"  🔄 Rewrote dotted imports in {file_to_fix}: {dotted_fixes}")
                     result.fixes_applied.extend(dotted_fixes)
                     continue
 
-                # Also try the LLM fix path for other import errors
                 if attempt < MAX_ATTEMPTS:
                     fixed = self._generate_fix(file_to_fix, error_text)
                     if fixed:
@@ -554,14 +606,11 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                         self._inject_syspath(file_to_fix)
                 continue
 
-            # Phase 18: Check if the package is on the blocklist BEFORE trying to install
             if _package_is_blocked(missing_pkg):
                 logger.warning(
                     f"  🚫 [{file_path}] Blocked package '{missing_pkg}' detected. "
                     f"Rewriting {file_to_fix} to remove this dependency..."
                 )
-                # Find the actual file that imports the blocked package
-                # (may be root_cause, not file_to_fix)
                 target_for_rewrite = root_cause if root_cause else file_to_fix
                 rewritten = self._rewrite_to_remove_blocked_dependency(
                     target_for_rewrite, missing_pkg, error_text
@@ -578,7 +627,6 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                     )
                     break
 
-            # Normal case: try to install the package
             if missing_pkg not in LOCAL_MODULE_BLOCKLIST:
                 logger.info(f"  📦 Auto-installing: {missing_pkg}")
                 install_result = pip_install(missing_pkg)
@@ -586,7 +634,6 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                     result.fixes_applied.append(f"pip install {missing_pkg}")
                     continue
                 else:
-                    # Install failed — check if it's a blocked package error
                     stderr = install_result.stderr
                     if (
                         "Timed out" in stderr

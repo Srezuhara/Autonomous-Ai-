@@ -1,6 +1,19 @@
 """
 config.py — Central configuration loaded from .env
 Enhanced with connection health checks for Stage 2.
+
+Phase 19 Bug 2 fix:
+  OLLAMA_MAX_TOKENS raised from 600 → 1500.
+
+  Root cause: when all Groq keys are exhausted (e.g. on a large 10-file
+  project), llm_client falls back to Ollama.  The Tester agent generates
+  full pytest files — these routinely exceed 600 tokens.  With max_tokens=600
+  Ollama truncates the response mid-function, producing syntactically broken
+  test code.  The resulting import error or SyntaxError causes the whole
+  Tester step to hit its 240s pipeline timeout and cancel the build.
+
+  1500 tokens comfortably covers a 60-line pytest file (the prompt cap in
+  prompts/tester.txt) with room for the system prompt overhead.
 """
 import os
 import logging
@@ -11,11 +24,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ── LLM settings ───────────────────────────────────────────
-LLM_PROVIDER   = os.getenv("LLM_PROVIDER", "both")      # groq | ollama | both
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL     = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+LLM_PROVIDER    = os.getenv("LLM_PROVIDER", "both")      # groq | ollama | both
+GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b-instruct-q4_K_M")
+OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b-instruct-q4_K_M")
 
 # ── App settings ───────────────────────────────────────────
 LOG_LEVEL  = os.getenv("LOG_LEVEL", "INFO")
@@ -60,13 +73,13 @@ def test_connections() -> dict:
     Returns dict with connection status for each provider.
     """
     results = {}
-    
+
     if LLM_PROVIDER in ("groq", "both"):
         results["groq"] = test_groq_connection()
-    
+
     if LLM_PROVIDER in ("ollama", "both"):
         results["ollama"] = test_ollama_connection()
-    
+
     return results
 
 
@@ -80,4 +93,10 @@ def validate():
     if LLM_PROVIDER in ("ollama", "both") and not OLLAMA_BASE_URL:
         raise EnvironmentError("OLLAMA_BASE_URL is not set.")
 
-OLLAMA_MAX_TOKENS = 600
+
+# ── Phase 19 Bug 2 fix: raised from 600 → 1500 ────────────────────────────────
+# 600 tokens was too short for a full pytest file (the tester generates up to
+# 60 lines). Truncated output produced broken Python that caused SyntaxError
+# during collection, making the whole Tester step time out at 240s.
+# 1500 tokens covers the maximum tester output with comfortable headroom.
+OLLAMA_MAX_TOKENS = 1500

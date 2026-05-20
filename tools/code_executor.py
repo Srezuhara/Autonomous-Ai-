@@ -1,16 +1,71 @@
 """
 tools/code_executor.py — Code execution tools for AI agents.
 Agents use these to run code and capture output/errors.
+
+Phase 19 bug fix:
+  Bug 1 — run_python() timeout was 30s, too short for modules that import
+  matplotlib, pandas, scipy, etc. at the module level.  These packages
+  trigger slow __init__ execution during the import-check even though we
+  never call their functions.
+
+  Fix:
+    - Default timeout raised to 90s (covers even slow first-import of pandas).
+    - _detect_heavy_imports() scans the source file for known slow packages
+      and extends the timeout further to 150s when found.
+    - The extended timeout is logged so it is visible in build output.
 """
 import logging
 import subprocess
 import sys
+import re
 from pathlib import Path
 from dataclasses import dataclass
 
 import config
 
 logger = logging.getLogger(__name__)
+
+
+# ── Heavy packages whose first import can take 10-60s ────────────────────────
+# When any of these appear in the source file we give the import-check extra
+# time so it doesn't false-positive as a "bug" that triggers a debug loop.
+_HEAVY_IMPORT_PACKAGES: frozenset[str] = frozenset({
+    "matplotlib", "pandas", "numpy", "scipy", "sklearn", "sklearn",
+    "seaborn", "plotly", "bokeh", "altair",
+    "tensorflow", "keras", "torch", "torchvision",
+    "cv2", "PIL", "skimage",
+    "nltk", "spacy", "gensim", "transformers",
+    "statsmodels", "pyarrow", "polars",
+    "openpyxl", "xlrd", "xlwt",
+    "reportlab", "fpdf", "pdfplumber",
+    "sqlalchemy",   # first import on some envs can be slow
+    "chromadb",
+})
+
+# Timeout (seconds) used when heavy packages are detected
+_HEAVY_TIMEOUT = 150
+# Default timeout for normal files
+_DEFAULT_TIMEOUT = 90
+
+
+def _detect_heavy_imports(file_path: Path) -> bool:
+    """
+    Return True if the source file imports any known slow/heavy package.
+    Uses a simple regex scan rather than parsing the AST, so it is fast
+    and does not require the file to be valid Python.
+    """
+    try:
+        source = file_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+
+    pattern = re.compile(
+        r'^\s*(?:import|from)\s+('
+        + "|".join(re.escape(p) for p in _HEAVY_IMPORT_PACKAGES)
+        + r')\b',
+        re.MULTILINE,
+    )
+    return bool(pattern.search(source))
 
 
 @dataclass
@@ -75,18 +130,25 @@ def run_command(command: str, cwd: str = None, timeout: int = 60) -> ExecutionRe
         )
 
 
-def run_python(file_path: str, timeout: int = 30) -> ExecutionResult:
+def run_python(file_path: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecutionResult:
     """
     Validate a Python file by checking its syntax and imports.
 
     Uses 'python -c "import <module>"' style check — this catches:
       - Syntax errors
       - Import errors (missing packages or wrong paths)
-    
-    Does NOT execute the file as a script, so FastAPI servers, 
+
+    Does NOT execute the file as a script, so FastAPI servers,
     uvicorn.run() etc. won't actually start and hang.
 
     Runs from the file's OWN directory so local imports resolve correctly.
+
+    Phase 19 Bug 1 fix:
+      - Default timeout raised from 30s to 90s.
+      - Auto-detects heavy imports (matplotlib, pandas, scipy …) and extends
+        the timeout to 150s for those files, preventing false "Timed out"
+        errors that were silently misclassified as runtime-ignorable errors
+        by the Debugger and never fixed.
     """
     full_path = (Path(config.OUTPUT_DIR) / file_path).resolve()
     if not full_path.exists():
@@ -98,10 +160,19 @@ def run_python(file_path: str, timeout: int = 30) -> ExecutionResult:
     run_dir = full_path.parent
     module_name = full_path.stem  # filename without .py
 
-    logger.info(f"🐍 Running Python: {full_path} (cwd: {run_dir.name})")
+    # ── Phase 19 Bug 1: extend timeout for heavy-import files ─────────────────
+    effective_timeout = timeout
+    if _detect_heavy_imports(full_path):
+        effective_timeout = _HEAVY_TIMEOUT
+        logger.info(
+            f"⏱️  Heavy imports detected in {full_path.name} — "
+            f"extending import-check timeout to {effective_timeout}s"
+        )
+    else:
+        logger.info(f"🐍 Running Python: {full_path} (cwd: {run_dir.name})")
 
-    # Use compile + import check instead of running as script
-    # This validates syntax AND all imports without executing server code
+    # Use compile + import check instead of running as script.
+    # This validates syntax AND all imports without executing server code.
     check_code = (
         f"import sys, os; "
         f"sys.path.insert(0, r'{run_dir}'); "
@@ -117,7 +188,7 @@ def run_python(file_path: str, timeout: int = 30) -> ExecutionResult:
     return run_command(
         f'"{sys.executable}" -c "{check_code}"',
         cwd=str(run_dir),
-        timeout=timeout,
+        timeout=effective_timeout,
     )
 
 
@@ -165,5 +236,15 @@ if __name__ == "__main__":
     result = run_python_code("import non_existent_module")
     print(result)
     print(f"Captured error: {'ModuleNotFoundError' in result.stderr}")
+
+    print("\n--- Test 4: heavy import detection (no file, just regex) ---")
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write("import matplotlib.pyplot as plt\nimport pandas as pd\n")
+        tmp = f.name
+    heavy = _detect_heavy_imports(Path(tmp))
+    os.unlink(tmp)
+    print(f"Heavy import detected: {heavy}")
+    assert heavy, "Should have detected matplotlib/pandas"
 
     print("\n✅ code_executor tests passed!")
