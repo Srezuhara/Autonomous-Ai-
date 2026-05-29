@@ -21,6 +21,7 @@ Phase 19.4 — CORS auto-detection
 """
 import logging
 import json
+import os
 from pathlib import Path
 from agents.base_agent import BaseAgent
 from tools.file_writer import create_file, read_file
@@ -28,6 +29,9 @@ from tools.file_writer import create_file, read_file
 logger = logging.getLogger(__name__)
 
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "backend_developer.txt"
+CONTEXT_MAX_CHARS = int(os.getenv("GROQ_CONTEXT_MAX_CHARS", "2500"))
+CONTEXT_HEADER_LINES = int(os.getenv("GROQ_CONTEXT_HEADER_LINES", "12"))
+CONTEXT_RECENT_FILES = int(os.getenv("GROQ_CONTEXT_RECENT_FILES", "3"))
 
 # File-role ordering for generation — ensures dependencies are generated first
 _ROLE_ORDER = {
@@ -178,17 +182,26 @@ class BackendDeveloper(BaseAgent):
         if not written_paths:
             return ""
 
-        snippets = []
+        summary = [f"Already written ({len(written_paths)} files):"]
         for path in written_paths:
+            summary.append(f"- {path}")
+
+        snippets = []
+        for path in written_paths[-CONTEXT_RECENT_FILES:]:
             try:
                 content = read_file(path)
-                lines   = content.splitlines()[:30]
+                lines   = content.splitlines()[:CONTEXT_HEADER_LINES]
                 header  = "\n".join(lines)
                 snippets.append(f"--- {path} (first {len(lines)} lines) ---\n{header}")
             except Exception:
                 pass
 
-        return "\n\n".join(snippets)
+        context = "\n".join(summary)
+        if snippets:
+            context += "\n\nRecent file snippets:\n" + "\n\n".join(snippets)
+        if len(context) > CONTEXT_MAX_CHARS:
+            return context[:CONTEXT_MAX_CHARS] + "\n... [context truncated]"
+        return context
 
     def _generate_file(
         self,
@@ -203,7 +216,11 @@ class BackendDeveloper(BaseAgent):
         origins_repr = json.dumps(cors_origins)
 
         # Build concise architecture file list
-        arch_files = [f["path"] for f in architecture.get("files", [])]
+        arch_files = [
+            f"{f.get('path')} ({f.get('type', 'file')})"
+            for f in architecture.get("files", [])
+        ]
+        arch_summary = "\n".join(f"- {path}" for path in arch_files)
 
         prompt = f"""
 Generate the complete Python code for this file.
@@ -216,7 +233,7 @@ Path: {file_path}
 Purpose: {description}
 
 PROJECT STRUCTURE (all planned files):
-{json.dumps(arch_files, indent=2)}
+{arch_summary}
 
 ALREADY WRITTEN FILES (import context — use these exact module names):
 {context if context else "None yet — this is the first file."}

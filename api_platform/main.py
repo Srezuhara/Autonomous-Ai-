@@ -81,9 +81,10 @@ app.include_router(ws_router)
 
 @app.get("/", tags=["info"])
 async def root():
-    from llm_client import get_key_status
+    from llm_client import get_key_status, get_rate_limit_status
     pool = job_runner.get_pool_status()
     ks   = get_key_status()
+    rl   = get_rate_limit_status()
     return {
         "service": "AI App Builder Platform",
         "version": "2.2.0",
@@ -91,10 +92,14 @@ async def root():
         "timestamp": datetime.utcnow().isoformat(),
         "workers": pool,
         "llm": {
-            "provider": getattr(config, "LLM_PROVIDER", "both"),
+            "provider": getattr(config, "LLM_PROVIDER", "groq"),
             "groq_keys_available": ks["available_keys"],
             "groq_keys_exhausted": ks["exhausted_keys"],
             "groq_keys_total":     ks["total_keys"],
+            "exhausted_70b":       ks["exhausted_70b"],
+            "exhausted_8b":        ks["exhausted_8b"],
+            "fully_exhausted":     ks["fully_exhausted"],
+            "rate_limits":         rl,
         },
         "endpoints": {
             "docs":       "/docs",
@@ -111,13 +116,19 @@ async def root():
 
 @app.get("/health", tags=["info"])
 async def health():
-    from llm_client import get_key_status
+    from llm_client import get_key_status, get_rate_limit_status
     pool = job_runner.get_pool_status()
     ks   = get_key_status()
+    rl   = get_rate_limit_status()
+    provider = getattr(config, "LLM_PROVIDER", "groq")
 
     # Determine overall LLM health
-    if ks["available_keys"] == 0:
-        llm_status = "ollama_only"
+    if rl["any_daily_limited"]:
+        llm_status = "quota_limited"
+    elif rl["max_cooldown_seconds"] > 0:
+        llm_status = "rate_limited"
+    elif ks["available_keys"] == 0:
+        llm_status = "missing_groq_keys" if provider == "groq" else "ollama_only"
     elif ks["exhausted_keys"] > 0:
         llm_status = "degraded"
     else:
@@ -130,10 +141,14 @@ async def health():
         "worker_pool": pool,
         "llm": {
             "status":          llm_status,
-            "provider":        getattr(config, "LLM_PROVIDER", "both"),
+            "provider":        provider,
             "groq_keys_total":     ks["total_keys"],
             "groq_keys_available": ks["available_keys"],
             "groq_keys_exhausted": ks["exhausted_keys"],
+            "exhausted_70b":       ks["exhausted_70b"],
+            "exhausted_8b":        ks["exhausted_8b"],
+            "fully_exhausted":     ks["fully_exhausted"],
+            "rate_limits":         rl,
             "keys": ks["keys"],   # [{suffix: "...abc123", status: "available"}, ...]
         },
         "features": {

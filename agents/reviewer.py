@@ -14,6 +14,8 @@ Phase 16.1 changes:
 Phase 15.2 (retained): _parse_score() safely handles "7/10", "7.5", null, etc.
 """
 import logging
+import os
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
@@ -23,6 +25,20 @@ logger = logging.getLogger(__name__)
 
 PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "reviewer.txt"
 SKIP_FILES = {"__init__.py", "config.py"}
+GROQ_FREE_TIER_CONSERVE = os.getenv("GROQ_FREE_TIER_CONSERVE", "true").lower() in {
+    "1", "true", "yes", "on"
+}
+MAX_REVIEW_FILES = int(os.getenv("GROQ_MAX_REVIEW_FILES", "5"))
+REVIEW_PRIORITY = {
+    "main.py": 0,
+    "routes.py": 1,
+    "services.py": 2,
+    "models.py": 3,
+}
+
+
+def _review_priority(path: str) -> int:
+    return REVIEW_PRIORITY.get(Path(path).name.lower(), 10)
 
 
 @dataclass
@@ -49,6 +65,22 @@ class Reviewer(BaseAgent):
             f for f in file_paths
             if f.endswith(".py") and Path(f).name not in SKIP_FILES
         ]
+        py_files = sorted(py_files, key=_review_priority)
+        if GROQ_FREE_TIER_CONSERVE:
+            filtered = []
+            for fp in py_files:
+                if len(filtered) >= MAX_REVIEW_FILES:
+                    break
+                try:
+                    code = read_file(fp)
+                    if len(code.strip()) < 80:
+                        continue
+                    if not re.search(r'^(?:async )?def \w+|^class \w+', code, re.MULTILINE):
+                        continue
+                except Exception:
+                    continue
+                filtered.append(fp)
+            py_files = filtered
         logger.info(f"🔍 Reviewing {len(py_files)} files...")
 
         results = []

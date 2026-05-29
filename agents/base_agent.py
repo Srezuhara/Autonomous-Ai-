@@ -32,9 +32,11 @@ class BaseAgent:
         # Look up the right-sized token budget for this agent once at init.
         # This avoids reserving 2048 tokens for every call regardless of need.
         self._token_budget = llm_client.get_agent_token_budget(self.name)
+        model = llm_client.get_model_for_agent(self.name)
+        model_label = "heavy 70b" if model == llm_client._HEAVY_MODEL else "fast 8b"
         logger.info(
             f"🤖 Agent initialized: {self.name} "
-            f"(model: {'heavy 70b' if self.name.lower().replace(' ','') in {'architect','backenddeveloper','frontendgenerator'} else 'fast 8b'}, "
+            f"(model: {model_label}, "
             f"budget: {self._token_budget} tokens)"
         )
 

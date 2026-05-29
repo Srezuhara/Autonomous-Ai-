@@ -1,6 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
 import {
-  Wifi, WifiOff, CheckCircle2, XCircle,
+  Wifi, CheckCircle2, XCircle,
   ArrowLeft, ExternalLink, Loader, X
 } from 'lucide-react';
 import { useBuildProgress } from '../hooks/useBuildProgress';

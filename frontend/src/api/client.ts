@@ -167,6 +167,27 @@ export interface HealthStatus {
         groq_keys_total:       number;
         groq_keys_available:   number;
         groq_keys_exhausted:   number;
+        exhausted_70b?:        number;
+        exhausted_8b?:         number;
+        fully_exhausted?:      number;
+        rate_limits?: {
+            max_cooldown_seconds: number;
+            any_daily_limited:    boolean;
+            models: Array<{
+                model:                  string;
+                limit_tokens?:          number | null;
+                remaining_tokens?:      number | null;
+                reset_tokens_seconds:   number;
+                limit_requests?:        number | null;
+                remaining_requests?:    number | null;
+                reset_requests_seconds: number;
+                cooldown_seconds:       number;
+                last_rate_limit_reason: string;
+                last_wait_seconds:      number;
+                daily_limited:          boolean;
+                updated_at:             number;
+            }>;
+        };
         keys: Array<{ suffix: string; status: string }>;
     };
     features: Record<string, boolean>;

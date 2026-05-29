@@ -186,7 +186,10 @@ interface StepLog {
 
 function StepLogEntry({ log }: { log: StepLog }) {
   const [open, setOpen] = useState(false);
-  const hasError = log.status === 'failed' && log.data?.error;
+  const errorType = log.data?.error_type != null ? String(log.data.error_type) : 'Error';
+  const errorText = log.data?.error != null ? String(log.data.error) : '';
+  const traceback = log.data?.traceback != null ? String(log.data.traceback) : '';
+  const hasError = log.status === 'failed' && errorText.length > 0;
   const hasData  = log.data && Object.keys(log.data).length > 0;
   const elapsed  = log.data?.elapsed_seconds as number | undefined;
   const timedOut = log.data?.timed_out as boolean | undefined;
@@ -228,11 +231,11 @@ function StepLogEntry({ log }: { log: StepLog }) {
         <div className="step-log-body">
           {hasError && (
             <div className="step-log-error">
-              <strong>{log.data!.error_type as string}:</strong>{' '}
-              {log.data!.error as string}
-              {log.data!.traceback && (
+              <strong>{errorType}:</strong>{' '}
+              {errorText}
+              {traceback && (
                 <pre className="step-log-traceback">
-                  {(log.data!.traceback as string).slice(-800)}
+                  {traceback.slice(-800)}
                 </pre>
               )}
             </div>

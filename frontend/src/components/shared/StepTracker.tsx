@@ -40,6 +40,16 @@ function StepIcon({ status }: { status: string }) {
   return <Circle size={18} className="step-icon step-icon--pending" />;
 }
 
+function getStepMessage(data: unknown): string | null {
+  if (data == null) return null;
+  if (typeof data === 'string') return data;
+  if (typeof data !== 'object') return null;
+
+  const message = (data as Record<string, unknown>).message;
+  if (message == null) return null;
+  return typeof message === 'string' ? message : String(message);
+}
+
 export function StepTracker({ steps, totalSteps = 9 }: StepTrackerProps) {
   const stepsMap       = new Map(steps.map(s => [s.step, s]));
   const completedCount = steps.filter(s => s.status === 'done').length;
@@ -75,6 +85,7 @@ export function StepTracker({ steps, totalSteps = 9 }: StepTrackerProps) {
           const name      = rawName
             ? formatStepName(rawName)
             : (STEP_NAMES_FALLBACK[stepNum] ?? `Step ${stepNum}`);
+          const message   = getStepMessage(step?.data);
 
           return (
             <div key={stepNum} className={`step-row step-row--${status}`}>
@@ -93,8 +104,8 @@ export function StepTracker({ steps, totalSteps = 9 }: StepTrackerProps) {
                     <span className={`step-status step-status--${status}`}>{status}</span>
                   )}
                 </div>
-                {step?.data?.message && (
-                  <p className="step-message">{step.data.message}</p>
+                {message && (
+                  <p className="step-message">{message}</p>
                 )}
                 {step?.timestamp && (
                   <span className="step-time">

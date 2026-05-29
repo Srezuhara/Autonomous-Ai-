@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   ChevronDown, ChevronRight, CheckCircle2, XCircle,
   Loader, Clock, Terminal, AlertTriangle, Info,
-  FileCode2, Star, Shield, FlaskConical
+  FileCode2, Star, FlaskConical
 } from 'lucide-react';
 import type { ProgressStep } from '../../hooks/useBuildProgress';
 
@@ -69,18 +69,18 @@ function StepDataBlock({ data }: { data: unknown }) {
         } else if (key === 'avg_score' || key === 'score') {
           const n = parseFloat(String(value));
           const color = n >= 7 ? 'var(--color-success)' : n >= 5 ? 'var(--color-warning)' : 'var(--color-error)';
-          display = <span style={{ color, fontWeight: 600 }}>{value}/10</span>;
+          display = <span style={{ color, fontWeight: 600 }}>{String(value)}/10</span>;
         } else if (key === 'passed' && typeof value === 'number') {
           const total = (parsed.total as number) || 0;
           const color = value === total ? 'var(--color-success)' : 'var(--color-warning)';
-          display = <span style={{ color, fontWeight: 600 }}>{value}/{total}</span>;
+          display = <span style={{ color, fontWeight: 600 }}>{String(value)}/{total}</span>;
         } else if (key === 'intent') {
           const intent = value as Record<string, unknown>;
           display = (
             <div className="step-data-intent">
-              {intent.app_name && <span className="step-data-badge">{String(intent.app_name)}</span>}
-              {intent.app_type && <span className="step-data-tag">{String(intent.app_type)}</span>}
-              {intent.complexity && <span className="step-data-tag">{String(intent.complexity)}</span>}
+              {intent.app_name != null && <span className="step-data-badge">{String(intent.app_name)}</span>}
+              {intent.app_type != null && <span className="step-data-tag">{String(intent.app_type)}</span>}
+              {intent.complexity != null && <span className="step-data-tag">{String(intent.complexity)}</span>}
             </div>
           );
         } else if (key === 'steps_count') {
@@ -123,7 +123,7 @@ function StepCard({
     ? formatDuration(step.timestamp)
     : null;
 
-  const hasData = step.data && Object.keys(parseStepData(step.data)).length > 0;
+  const hasData = Boolean(step.data && Object.keys(parseStepData(step.data)).length > 0);
 
   return (
     <div className={`step-card step-card--${step.status}`}>
@@ -192,11 +192,9 @@ function StepCard({
 }
 
 export function BuildLogsPanel({ steps, buildStatus, buildDone }: BuildLogsPanelProps) {
-  const [showAll, setShowAll] = useState(false);
-
   const sortedSteps = [...steps].sort((a, b) => a.step - b.step);
   const failedSteps = sortedSteps.filter(s => s.status === 'failed');
-  const visibleSteps = showAll ? sortedSteps : sortedSteps;
+  const visibleSteps = sortedSteps;
 
   if (steps.length === 0) {
     return (

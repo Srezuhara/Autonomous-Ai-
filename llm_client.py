@@ -1,76 +1,41 @@
 """
-llm_client.py  v3.5.0  (Dual-Model Routing + Per-Agent Token Budgets)
-=======================================================================
-Built on top of v3.3.0 (smarter 429 detection). Every v3.3.0 feature
-is fully preserved. Two new layers are added on top:
+llm_client.py  v3.6.1  (Per-Model Exhaustion Tracking — UI counter fix)
+========================================================================
+Changes vs v3.6.0:
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHANGE 1 — DUAL-MODEL ROUTING
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Groq tracks daily token quotas SEPARATELY per model. Using two
-models effectively splits the load across two independent quotas:
+BUG FIX — Gap B: exhausted_keys counter in get_key_status() used set
+  intersection (keys exhausted on BOTH models) instead of union (keys
+  exhausted on AT LEAST ONE model).  The FloatingStatus component uses
+  this number to decide whether to show the "Reset Keys" button.  If all
+  keys were exhausted on the heavy model but none on the fast model, the
+  counter read 0 and the reset button never appeared, leaving users
+  unable to manually reset without knowing about the /admin/reset-keys
+  endpoint directly.
 
-  HEAVY model  →  llama-3.3-70b-versatile
-    ~14,400 tokens/day per key (free tier)
-    Used for: architect, backend_developer, frontend_generator
-    These are the only agents where the bigger model meaningfully
-    improves code quality.
+  Fix: exhausted_keys now returns len(exhausted_heavy | exhausted_fast).
+  Two additional breakdown fields are also returned so the UI can surface
+  more informative messages when needed:
+    "exhausted_70b": count of keys exhausted on heavy model only or both
+    "exhausted_8b":  count of keys exhausted on fast model only or both
 
-  FAST model   →  llama-3.1-8b-instant
-    ~131,072 tokens/day per key (free tier) — 9× more headroom
-    Used for: intent_analyzer, planner, debugger, reviewer,
-              tester, documenter
-    These agents do JSON parsing, scoring, or template work
-    where the 8b model performs identically to the 70b.
+BUG FIX — Gap C: FrontendDebugger token budget was 1024 tokens, matching
+  the fast-model agents.  However FrontendDebugger generates complete
+  TypeScript file rewrites — identical to the code-generation agents —
+  and 1024 tokens reliably truncates the output mid-function, producing
+  broken JSX that fails the TypeScript compile check on the next run.
+  Fix: budget raised to 1500 tokens (same as Documenter).
 
-Result across one full build (~33 LLM calls):
-  Before:  all 33 calls → 70b quota  (~67K tokens reserved, 1 key burned)
-  After:   ~12 calls    → 70b quota  (~15K tokens reserved)
-           ~21 calls    → 8b quota   (~21K tokens reserved, 9× larger pool)
-  = roughly 3-4 complete builds per key per day instead of <1.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHANGE 2 — PER-AGENT TOKEN BUDGETS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Old default: max_tokens=2048 for EVERY call.
-Groq counts RESERVED tokens against quota, not just generated ones.
-An intent_analyzer call reserved 2048 tokens but only used ~300.
-
-Right-sized budgets cut total reservation by ~50%:
-  intent_analyzer:   2048 → 512
-  planner:           2048 → 768
-  reviewer (×4):     2048 → 600   saves 5,792 tokens
-  tester (×8):       2048 → 1024  saves 8,192 tokens
-  Total saving:      ~34,000 tokens per build
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-INTERFACE CHANGE — generate_text() gets a new optional parameter
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  generate_text(prompt, system, max_tokens, agent_name="")
-
-  agent_name is used to:
-    1. Pick the right model (heavy vs fast)
-    2. Look up the right token budget if max_tokens is not passed
-
-  base_agent.py is updated to pass self.name as agent_name.
-  No other file needs to change. All callers that don't pass
-  agent_name continue to work exactly as before (fast model,
-  default budget).
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-.env OPTIONAL OVERRIDES (no new keys needed)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  GROQ_MODEL_HEAVY=llama-3.3-70b-versatile  # already your default
-  GROQ_MODEL_FAST=llama-3.1-8b-instant      # new — same free account
-  # If you set the old GROQ_MODEL= it overrides both (backward compat)
-
-All v3.3.0 features retained unchanged:
-  - Per-minute vs daily-quota 429 detection (_classify_429)
-  - Per-key per-minute backoff tracking (_per_minute_wait)
-  - Multi-key round-robin rotation across all 8 keys
+All v3.6.0 features retained unchanged:
+  - Per-model exhaustion: _exhausted_by_model[model] = {key_indices}
+  - _get_next_groq_key(model) — model-scoped key selection
+  - _mark_groq_exhausted(key, model) — model-scoped exhaustion
+  - _reset_exhausted() — clears ALL models for /admin/reset-keys
+  - Dual-model routing (heavy agents → 70b, fast agents → 8b)
+  - Per-agent token budgets
+  - Per-minute vs daily-quota 429 classification
+  - Multi-key round-robin rotation
   - Thread-safe per-build token accumulation
   - Ollama last-resort fallback
-  - _reset_exhausted() / get_key_status() for /admin/reset-keys
 """
 
 import logging
@@ -78,6 +43,7 @@ import os
 import threading
 import re
 import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -85,13 +51,77 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# ── Constants (unchanged from v3.3.0) ─────────────────────────────────────────
 MAX_PER_MINUTE_WAIT = 60
+MAX_DAILY_QUOTA_ROTATIONS_PER_CALL = int(
+    os.getenv("GROQ_MAX_DAILY_QUOTA_ROTATIONS_PER_CALL", "2")
+)
+GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "900"))
+GROQ_RATE_LIMIT_MAX_RETRIES = int(os.getenv("GROQ_RATE_LIMIT_MAX_RETRIES", "20"))
+GROQ_TPM_SAFETY_TOKENS = int(os.getenv("GROQ_TPM_SAFETY_TOKENS", "800"))
+GROQ_CONTEXT_MAX_CHARS = int(os.getenv("GROQ_CONTEXT_MAX_CHARS", "2500"))
+GROQ_FREE_TIER_CONSERVE = os.getenv("GROQ_FREE_TIER_CONSERVE", "true").lower() in {
+    "1", "true", "yes", "on"
+}
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+if LLM_PROVIDER not in {"groq", "ollama", "both"}:
+    LLM_PROVIDER = "both"
 
 _DAILY_QUOTA_KEYWORDS = (
     "daily", "quota", "exceeded", "limit reached",
     "rate_limit_exceeded", "tokens_exceeded",
 )
+
+_DAILY_LIMIT_PHRASES = (
+    "tokens per day",
+    "requests per day",
+    "per day",
+    "daily",
+    "tpd",
+    "rpd",
+)
+
+_TOKEN_LIMIT_PHRASES = (
+    "tokens per minute",
+    "token per minute",
+    "tpm",
+    "token rate",
+)
+
+_REQUEST_LIMIT_PHRASES = (
+    "requests per minute",
+    "request per minute",
+    "rpm",
+)
+
+
+class GroqRateLimitError(RuntimeError):
+    """Raised for Groq rate limits that should not fall back to Ollama."""
+
+
+class GroqDailyQuotaError(GroqRateLimitError):
+    """Raised when Groq reports a real daily request/token quota limit."""
+
+
+@dataclass
+class RateLimitInfo:
+    kind: str
+    wait_seconds: float = 0.0
+    message: str = ""
+
+
+@dataclass
+class ModelRateState:
+    limit_tokens: Optional[int] = None
+    remaining_tokens: Optional[int] = None
+    reset_tokens_at: float = 0.0
+    limit_requests: Optional[int] = None
+    remaining_requests: Optional[int] = None
+    reset_requests_at: float = 0.0
+    cooldown_until: float = 0.0
+    last_rate_limit_reason: str = ""
+    last_wait_seconds: float = 0.0
+    daily_limited: bool = False
+    updated_at: float = field(default_factory=time.time)
 
 
 def _get_config(attr: str, default):
@@ -102,37 +132,44 @@ def _get_config(attr: str, default):
         return default
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# NEW: Dual-model configuration
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# Read model names from .env, with sensible defaults.
+# ── Dual-model configuration ──────────────────────────────────────────────────
 _HEAVY_MODEL = os.getenv("GROQ_MODEL_HEAVY", "llama-3.3-70b-versatile")
 _FAST_MODEL  = os.getenv("GROQ_MODEL_FAST",  "llama-3.1-8b-instant")
 
-# Backward compat: if old GROQ_MODEL is set, it overrides both.
 _legacy = os.getenv("GROQ_MODEL", "")
 if _legacy:
     _HEAVY_MODEL = _legacy
     _FAST_MODEL  = _legacy
     logger.info(f"ℹ️  GROQ_MODEL override active — both models set to: {_legacy}")
 
-# Agents that need the heavy model.
-# Every agent NOT in this set uses the fast model automatically.
-_HEAVY_AGENT_NAMES = {
-    "architect",
-    "backenddeveloper",      # normalised (lower, no spaces/underscores)
-    "backend_developer",
-    "frontendgenerator",
-    "frontend_generator",
-}
+_DEFAULT_HEAVY_AGENTS = "architect"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# NEW: Per-agent token budgets
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def _load_heavy_agent_names() -> set[str]:
+    """
+    Free-tier 70b quota is small enough that using it for every generated file
+    can burn all keys before one project finishes. Keep the default practical:
+    architecture gets 70b, code-generation agents use the larger 8b quota.
+
+    Override with GROQ_HEAVY_AGENTS when you have paid quota, e.g.
+    GROQ_HEAVY_AGENTS=architect,backend_developer,frontend_generator,frontend_debugger
+    """
+    raw = os.getenv("GROQ_HEAVY_AGENTS", _DEFAULT_HEAVY_AGENTS)
+    names: set[str] = set()
+    for item in raw.split(","):
+        name = item.strip().lower()
+        if not name:
+            continue
+        names.add(name)
+        names.add(name.replace("_", "").replace("-", "").replace(" ", ""))
+    return names
+
+
+_HEAVY_AGENT_NAMES = _load_heavy_agent_names()
+
+# ── Per-agent token budgets ───────────────────────────────────────────────────
 AGENT_TOKEN_BUDGETS: dict[str, int] = {
-    # Fast-model agents ─ lightweight structured output
+    # Fast-model agents — lightweight structured output
     "intentanalyzer":     512,
     "intent_analyzer":    512,
     "planner":            768,
@@ -140,25 +177,37 @@ AGENT_TOKEN_BUDGETS: dict[str, int] = {
     "tester":            1024,
     "documenter":        1200,
     "debugger":          1024,
-
-    # Heavy-model agents ─ need room for full code files
+    # Heavy-model agents — need room for full code files
     "architect":         1024,
     "backenddeveloper":  1200,
     "backend_developer": 1200,
     "frontendgenerator": 1200,
     "frontend_generator":1200,
+    # BUG FIX v3.6.1 (Gap C): FrontendDebugger rewrites complete TS/JSX files;
+    # 1024 tokens truncates output mid-function → broken JSX → tsc still fails.
+    # Raised to 1500 to match Documenter (same "full-file rewrite" pattern).
+    "frontenddebugger":  1500,
+    "frontend_debugger": 1500,
 }
 
-# Used when an agent is not in the table above
+if GROQ_FREE_TIER_CONSERVE:
+    AGENT_TOKEN_BUDGETS.update({
+        "reviewer":            450,
+        "tester":              850,
+        "debugger":            850,
+        "documenter":         1000,
+        "backenddeveloper":    950,
+        "backend_developer":   950,
+        "frontendgenerator":   950,
+        "frontend_generator":  950,
+        "frontenddebugger":   1000,
+        "frontend_debugger":  1000,
+    })
+
 _DEFAULT_MAX_TOKENS = 1024
 
 
 def get_model_for_agent(agent_name: str) -> str:
-    """
-    Return the Groq model string for a given agent name.
-    Heavy agents → llama-3.3-70b-versatile
-    All others   → llama-3.1-8b-instant
-    """
     normalised = agent_name.lower().replace(" ", "").replace("-", "")
     if normalised in _HEAVY_AGENT_NAMES or agent_name.lower() in _HEAVY_AGENT_NAMES:
         return _HEAVY_MODEL
@@ -166,20 +215,10 @@ def get_model_for_agent(agent_name: str) -> str:
 
 
 def get_agent_token_budget(agent_name: str) -> int:
-    """
-    Return the right-sized max_tokens for a given agent.
-    Called by base_agent.BaseAgent.__init__ to set self._token_budget.
-    """
     key = agent_name.lower().replace(" ", "").replace("-", "_")
     return AGENT_TOKEN_BUDGETS.get(key,
            AGENT_TOKEN_BUDGETS.get(agent_name.lower(), _DEFAULT_MAX_TOKENS))
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Everything below is IDENTICAL to v3.3.0 except:
-#   • _call_groq() accepts a `model` parameter
-#   • generate_text() accepts agent_name and routes to correct model
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # ── Groq key pool ──────────────────────────────────────────────────────────────
 
@@ -204,12 +243,23 @@ def _load_groq_keys() -> list[str]:
 
 _groq_keys: list[str] = _load_groq_keys()
 
-_global_key_index: int        = -1
-_exhausted:        set[int]   = set()
-_per_minute_wait:  dict[int, float] = {}
-_exhausted_lock    = threading.Lock()
+_global_key_index: int = -1
+_invalid_keys: set[int] = set()
 
-# ── Per-build token tracking (Phase 17, unchanged) ────────────────────────────
+# ── v3.6.0: Per-model exhaustion tracking ────────────────────────────────────
+# dict[model_name, set[key_index]]
+# A key is only blocked for the model it was exhausted on.
+_exhausted_by_model: dict[str, set[int]] = {}
+_exhausted_lock = threading.Lock()
+
+# Per-minute wait is shared (transient, not quota-based)
+_per_minute_wait: dict[int, float] = {}
+
+_model_rate_states: dict[str, ModelRateState] = {}
+_model_state_lock = threading.Lock()
+_model_locks: dict[str, threading.Lock] = {}
+
+# ── Per-build token tracking ──────────────────────────────────────────────────
 _token_store:     dict[str, dict] = {}
 _token_lock       = threading.Lock()
 _current_build_id = threading.local()
@@ -246,37 +296,235 @@ def get_and_reset_token_usage(build_id: str) -> dict:
         )
 
 
-# ── Key helpers (unchanged from v3.3.0) ───────────────────────────────────────
+# ── Key helpers (v3.6.0: model-scoped) ────────────────────────────────────────
 
-def _get_next_groq_key() -> Optional[str]:
+def _get_model_lock(model: str) -> threading.Lock:
+    with _model_state_lock:
+        if model not in _model_locks:
+            _model_locks[model] = threading.Lock()
+        return _model_locks[model]
+
+
+def _parse_header_int(value: str | None) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_wait_seconds(value: str | None) -> Optional[float]:
+    """Parse Groq reset headers such as '7.66s', '2m59.56s', or '1h2m3s'."""
+    if not value:
+        return None
+    raw = str(value).strip().lower()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+
+    total = 0.0
+    matched = False
+    for amount, unit in re.findall(r"(\d+(?:\.\d+)?)(ms|s|m|h)", raw):
+        matched = True
+        val = float(amount)
+        if unit == "ms":
+            total += val / 1000.0
+        elif unit == "s":
+            total += val
+        elif unit == "m":
+            total += val * 60.0
+        elif unit == "h":
+            total += val * 3600.0
+    return max(0.0, total) if matched else None
+
+
+def _estimate_tokens(prompt: str, system: str, max_tokens: int) -> int:
+    return int((len(prompt) + len(system)) / 4) + max_tokens
+
+
+def _fit_output_budget_to_model_limit(
+    model: str,
+    prompt: str,
+    system: str,
+    max_tokens: int,
+) -> int:
+    prompt_tokens = int((len(prompt) + len(system)) / 4)
+    with _model_state_lock:
+        limit_tokens = _model_rate_states.get(model, ModelRateState()).limit_tokens
+
+    if not limit_tokens:
+        return max_tokens
+
+    estimated = prompt_tokens + max_tokens
+    if estimated + GROQ_TPM_SAFETY_TOKENS <= limit_tokens:
+        return max_tokens
+
+    available_output = limit_tokens - prompt_tokens - GROQ_TPM_SAFETY_TOKENS
+    if available_output < 128:
+        # Safety margin is helpful, but a tiny completion is better than
+        # repeatedly submitting a request Groq has already told us cannot fit.
+        available_output = limit_tokens - prompt_tokens - 100
+    if available_output <= 0:
+        raise GroqRateLimitError(
+            f"Groq request for [{model}] is too large for the known TPM limit "
+            f"({estimated} estimated tokens vs limit {limit_tokens}). "
+            "The prompt/context must be compacted before retrying."
+        )
+
+    reduced = max(128, min(max_tokens, int(available_output)))
+    if reduced < max_tokens:
+        logger.warning(
+            f"✂️  Reducing [{model}] max_tokens from {max_tokens} to {reduced} "
+            f"to fit the known Groq TPM limit ({limit_tokens})."
+        )
+    return reduced
+
+
+def _update_rate_state_from_headers(model: str, headers) -> None:
+    now = time.time()
+    limit_tokens = _parse_header_int(headers.get("x-ratelimit-limit-tokens"))
+    remaining_tokens = _parse_header_int(headers.get("x-ratelimit-remaining-tokens"))
+    reset_tokens = _parse_wait_seconds(headers.get("x-ratelimit-reset-tokens"))
+    limit_requests = _parse_header_int(headers.get("x-ratelimit-limit-requests"))
+    remaining_requests = _parse_header_int(headers.get("x-ratelimit-remaining-requests"))
+    reset_requests = _parse_wait_seconds(headers.get("x-ratelimit-reset-requests"))
+
+    with _model_state_lock:
+        state = _model_rate_states.setdefault(model, ModelRateState())
+        if limit_tokens is not None:
+            state.limit_tokens = limit_tokens
+        if remaining_tokens is not None:
+            state.remaining_tokens = remaining_tokens
+        if reset_tokens is not None:
+            state.reset_tokens_at = now + reset_tokens
+        if limit_requests is not None:
+            state.limit_requests = limit_requests
+        if remaining_requests is not None:
+            state.remaining_requests = remaining_requests
+        if reset_requests is not None:
+            state.reset_requests_at = now + reset_requests
+        state.updated_at = now
+
+
+def _set_model_cooldown(model: str, reason: str, wait_seconds: float) -> None:
+    wait = max(0.0, min(wait_seconds, GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
+    with _model_state_lock:
+        state = _model_rate_states.setdefault(model, ModelRateState())
+        state.cooldown_until = max(state.cooldown_until, time.time() + wait)
+        state.last_rate_limit_reason = reason
+        state.last_wait_seconds = wait
+        state.updated_at = time.time()
+
+
+def _wait_for_model_capacity(model: str, estimated_tokens: int) -> None:
+    while True:
+        wait_seconds = 0.0
+        reason = ""
+        now = time.time()
+        with _model_state_lock:
+            state = _model_rate_states.setdefault(model, ModelRateState())
+            if state.daily_limited:
+                raise GroqDailyQuotaError(
+                    f"Groq daily quota is exhausted for model [{model}]. "
+                    "Wait for Groq to reset the org quota or use a higher-limit plan."
+                )
+            if state.cooldown_until > now:
+                wait_seconds = state.cooldown_until - now
+                reason = state.last_rate_limit_reason or "model cooldown"
+            elif (
+                state.remaining_tokens is not None
+                and state.reset_tokens_at > now
+                and estimated_tokens + GROQ_TPM_SAFETY_TOKENS > state.remaining_tokens
+            ):
+                wait_seconds = state.reset_tokens_at - now
+                reason = "waiting for Groq token-per-minute budget"
+
+        if wait_seconds <= 0:
+            return
+        if wait_seconds > GROQ_RATE_LIMIT_MAX_WAIT_SECONDS:
+            raise GroqRateLimitError(
+                f"Groq asked to wait {wait_seconds:.1f}s for [{model}], exceeding "
+                f"GROQ_RATE_LIMIT_MAX_WAIT_SECONDS={GROQ_RATE_LIMIT_MAX_WAIT_SECONDS}."
+            )
+        logger.warning(
+            f"⏳ Groq [{model}] {reason}; waiting {wait_seconds:.1f}s before retrying."
+        )
+        time.sleep(wait_seconds + 0.25)
+
+
+def _get_next_groq_key(model: str) -> Optional[str]:
+    """Return next available key for the given model (skips model-specific exhausted keys)."""
     global _global_key_index
     with _exhausted_lock:
+        exhausted_for_model = _exhausted_by_model.get(model, set())
         n = len(_groq_keys)
         if n == 0:
             return None
         for offset in range(1, n + 1):
             candidate_idx = (_global_key_index + offset) % n
-            if candidate_idx not in _exhausted:
+            if candidate_idx not in exhausted_for_model and candidate_idx not in _invalid_keys:
                 _global_key_index = candidate_idx
                 return _groq_keys[candidate_idx]
         return None
 
 
-def _mark_groq_exhausted(key: str, reason: str = "daily quota"):
+def _mark_key_invalid(key: str, reason: str = "auth failure"):
     with _exhausted_lock:
         try:
             idx = _groq_keys.index(key)
-            if idx not in _exhausted:
-                _exhausted.add(idx)
-                _per_minute_wait.pop(idx, None)
-                suffix    = key[-8:]
-                remaining = len(_groq_keys) - len(_exhausted)
-                logger.warning(
-                    f"🔑 Groq key ...{suffix} exhausted ({reason}). "
-                    f"{len(_exhausted)} exhausted, {remaining} remaining."
-                )
+            _invalid_keys.add(idx)
+            _per_minute_wait.pop(idx, None)
+            logger.warning(f"🔑 Key ...{key[-8:]} disabled ({reason}).")
         except ValueError:
             pass
+
+
+def _mark_groq_exhausted(key: str, model: str, reason: str = "daily quota"):
+    """Mark a key exhausted FOR A SPECIFIC MODEL only. Other models unaffected."""
+    with _exhausted_lock:
+        try:
+            idx = _groq_keys.index(key)
+            if model not in _exhausted_by_model:
+                _exhausted_by_model[model] = set()
+            if idx not in _exhausted_by_model[model]:
+                _exhausted_by_model[model].add(idx)
+                _per_minute_wait.pop(idx, None)
+                suffix          = key[-8:]
+                exhausted_count = len(_exhausted_by_model[model])
+                remaining       = len(_groq_keys) - exhausted_count
+                logger.warning(
+                    f"🔑 Key ...{suffix} exhausted on [{model}] ({reason}). "
+                    f"{exhausted_count}/{len(_groq_keys)} keys exhausted for this model, "
+                    f"{remaining} still available."
+                )
+                # Log if the OTHER model still has keys available
+                other_model     = _FAST_MODEL if model == _HEAVY_MODEL else _HEAVY_MODEL
+                other_exhausted = _exhausted_by_model.get(other_model, set())
+                other_available = len(_groq_keys) - len(other_exhausted)
+                if other_available > 0:
+                    logger.info(
+                        f"🔑 Note: {other_available} key(s) still available for "
+                        f"[{other_model}] — fast-model calls unaffected."
+                    )
+        except ValueError:
+            pass
+
+
+def _mark_model_daily_limited(model: str, reason: str = "daily quota"):
+    with _exhausted_lock:
+        _exhausted_by_model[model] = set(range(len(_groq_keys)))
+    with _model_state_lock:
+        state = _model_rate_states.setdefault(model, ModelRateState())
+        state.daily_limited = True
+        state.last_rate_limit_reason = reason
+        state.last_wait_seconds = 0.0
+        state.updated_at = time.time()
+    logger.error(
+        f"🔒 Groq daily quota exhausted for [{model}] ({reason}). "
+        "This is an organization/model limit; rotating keys will not help."
+    )
 
 
 def _record_per_minute_wait(key: str, wait_secs: float):
@@ -296,54 +544,133 @@ def _clear_per_minute_wait(key: str):
 
 
 def _reset_exhausted():
+    """Reset ALL exhaustion across ALL models (called by /admin/reset-keys)."""
     with _exhausted_lock:
-        count = len(_exhausted)
-        _exhausted.clear()
+        total_cleared = sum(len(s) for s in _exhausted_by_model.values())
+        _exhausted_by_model.clear()
         _per_minute_wait.clear()
+        _invalid_keys.clear()
+    with _model_state_lock:
+        for state in _model_rate_states.values():
+            state.cooldown_until = 0.0
+            state.last_rate_limit_reason = ""
+            state.last_wait_seconds = 0.0
+            state.daily_limited = False
     logger.info(
-        f"🔑 Reset {count} exhausted Groq key(s) — "
-        f"all {len(_groq_keys)} valid keys available"
+        f"🔑 Reset {total_cleared} model-key exhaustion entries — "
+        f"all {len(_groq_keys)} keys available for all models."
     )
 
 
 def get_key_status() -> dict:
+    """
+    Return key exhaustion status for the FloatingStatus UI component and
+    the /health + /admin/reset-keys endpoints.
+
+    BUG FIX v3.6.1 (Gap B):
+      Old: exhausted_keys = len(exhausted_heavy & exhausted_fast)
+           → Only counted keys exhausted on BOTH models.
+           → If all keys were exhausted on 70b but none on 8b, counter = 0
+             → "Reset Keys" button never appeared even when builds were failing.
+
+      New: exhausted_keys = len(exhausted_heavy | exhausted_fast)
+           → Counts any key exhausted on AT LEAST ONE model.
+           → Reset button appears as soon as any key hits any model limit.
+
+      Additionally: two breakdown fields are now returned so the UI can
+      distinguish "completely done" from "70b done, 8b still fine":
+        "exhausted_70b": number of keys exhausted on the heavy model
+        "exhausted_8b":  number of keys exhausted on the fast model
+    """
     with _exhausted_lock:
-        exhausted_count = len(_exhausted)
-        total           = len(_groq_keys)
-        available       = total - exhausted_count
-        keys_info       = [
-            {
-                "suffix": f"...{k[-8:]}",
-                "status": "exhausted" if i in _exhausted else "available",
-            }
-            for i, k in enumerate(_groq_keys)
-        ]
+        exhausted_heavy = _exhausted_by_model.get(_HEAVY_MODEL, set())
+        exhausted_fast  = _exhausted_by_model.get(_FAST_MODEL,  set())
+
+        # Union: any key exhausted on at least one model
+        any_exhausted = exhausted_heavy | exhausted_fast
+        # Intersection: keys exhausted on both (truly dead)
+        fully_exhausted = exhausted_heavy & exhausted_fast
+
+        total     = len(_groq_keys)
+        # "available" = can be used on at least one model
+        available = total - len(fully_exhausted)
+
+        keys_info = []
+        for i, k in enumerate(_groq_keys):
+            h_ex = i in exhausted_heavy
+            f_ex = i in exhausted_fast
+            if i in _invalid_keys:
+                status = "invalid"
+            elif h_ex and f_ex:
+                status = "exhausted"
+            elif h_ex:
+                status = "exhausted_70b_only"
+            elif f_ex:
+                status = "exhausted_8b_only"
+            else:
+                status = "available"
+            keys_info.append({"suffix": f"...{k[-8:]}", "status": status})
+
     return {
         "total_keys":     total,
         "available_keys": available,
-        "exhausted_keys": exhausted_count,
+        # BUG FIX v3.6.1: union count so FloatingStatus reset button appears correctly
+        "exhausted_keys": len(any_exhausted),
+        # Breakdown fields for informative UI messages
+        "exhausted_70b":  len(exhausted_heavy),
+        "exhausted_8b":   len(exhausted_fast),
+        "fully_exhausted": len(fully_exhausted),
         "keys":           keys_info,
     }
 
 
-# ── 429 classification (unchanged from v3.3.0) ────────────────────────────────
+# ── 429 classification (unchanged from v3.5.0) ────────────────────────────────
 
-def _classify_429(resp) -> tuple[str, float]:
-    retry_after_raw = resp.headers.get("retry-after", "")
-    retry_after: Optional[float] = None
-    try:
-        retry_after = float(retry_after_raw)
-    except (ValueError, TypeError):
-        retry_after = None
+def get_rate_limit_status() -> dict:
+    """Expose Groq model cooldown/token state for /health and the UI."""
+    now = time.time()
+    with _model_state_lock:
+        models = []
+        for model, state in _model_rate_states.items():
+            reset_tokens_seconds = max(0.0, state.reset_tokens_at - now)
+            reset_requests_seconds = max(0.0, state.reset_requests_at - now)
+            cooldown_seconds = max(0.0, state.cooldown_until - now)
+            models.append({
+                "model": model,
+                "limit_tokens": state.limit_tokens,
+                "remaining_tokens": state.remaining_tokens,
+                "reset_tokens_seconds": round(reset_tokens_seconds, 1),
+                "limit_requests": state.limit_requests,
+                "remaining_requests": state.remaining_requests,
+                "reset_requests_seconds": round(reset_requests_seconds, 1),
+                "cooldown_seconds": round(cooldown_seconds, 1),
+                "last_rate_limit_reason": state.last_rate_limit_reason,
+                "last_wait_seconds": round(state.last_wait_seconds, 1),
+                "daily_limited": state.daily_limited,
+                "updated_at": state.updated_at,
+            })
+    return {
+        "models": sorted(models, key=lambda item: item["model"]),
+        "max_cooldown_seconds": max(
+            (m["cooldown_seconds"] for m in models),
+            default=0.0,
+        ),
+        "any_daily_limited": any(m["daily_limited"] for m in models),
+    }
+
+
+def _classify_429(resp) -> RateLimitInfo:
+    retry_after = _parse_wait_seconds(resp.headers.get("retry-after"))
+    reset_tokens = _parse_wait_seconds(resp.headers.get("x-ratelimit-reset-tokens"))
+    reset_requests = _parse_wait_seconds(resp.headers.get("x-ratelimit-reset-requests"))
 
     body_text = ""
     try:
         body_json = resp.json()
         err = body_json.get("error", {})
-        body_text = (
-            err.get("message", "") + " " +
-            err.get("type",    "") + " " +
-            err.get("code",    "")
+        body_text = " ".join(
+            str(err.get(key, ""))
+            for key in ("message", "type", "code")
         ).lower()
     except Exception:
         try:
@@ -351,43 +678,49 @@ def _classify_429(resp) -> tuple[str, float]:
         except Exception:
             body_text = ""
 
-    is_daily = any(kw in body_text for kw in _DAILY_QUOTA_KEYWORDS)
+    message = body_text[:300]
+    if any(phrase in body_text for phrase in _DAILY_LIMIT_PHRASES):
+        return RateLimitInfo("daily_limit", 0.0, message)
 
-    if retry_after is not None:
-        if retry_after > MAX_PER_MINUTE_WAIT:
-            return "daily_quota", 0.0
-        return ("daily_quota", 0.0) if is_daily else ("per_minute", retry_after)
+    if any(phrase in body_text for phrase in _TOKEN_LIMIT_PHRASES):
+        wait = retry_after if retry_after is not None else reset_tokens
+        return RateLimitInfo("tpm_wait", wait if wait is not None else 5.0, message)
 
-    return ("daily_quota", 0.0) if is_daily else ("per_minute", 5.0)
+    if any(phrase in body_text for phrase in _REQUEST_LIMIT_PHRASES):
+        wait = retry_after if retry_after is not None else reset_requests
+        return RateLimitInfo("rpm_wait", wait if wait is not None else 5.0, message)
+
+    wait = retry_after
+    if wait is None:
+        wait = reset_tokens if reset_tokens is not None else reset_requests
+    return RateLimitInfo("unknown_rate_limit", wait if wait is not None else 5.0, message)
 
 
-# ── Groq call — now accepts `model` parameter ─────────────────────────────────
+# ── Groq call (v3.6.0: passes model to all helper functions) ──────────────────
 
-def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
+def _call_groq_legacy_unused(prompt: str, system: str, max_tokens: int, model: str) -> str:
     """
-    Try every available Groq key using the specified model.
-    Per-minute 429  → wait and retry the SAME key.
-    Daily quota 429 → mark key exhausted, rotate to next key.
-
-    Note: Groq daily quotas are per-model. Exhausting a key on the 70b model
-    does NOT consume its 8b quota. We share the key pool across both models
-    because an invalid/blocked key fails for both anyway.
+    Try every available Groq key for the given model.
+    Per-minute 429  → wait and retry SAME key.
+    Daily quota 429 → mark exhausted FOR THIS MODEL ONLY, rotate to next key.
     """
     import httpx
 
     tried_keys: set[str] = set()
+    daily_quota_rotations = 0
 
     while True:
-        key = _get_next_groq_key()
+        key = _get_next_groq_key(model)  # v3.6.0: model-scoped
         if key is None:
             raise RuntimeError(
-                "All Groq keys are exhausted (daily quota). "
-                "Wait for daily limits to reset or call POST /admin/reset-keys."
+                f"All Groq keys are exhausted for model [{model}]. "
+                f"Other models may still have quota. "
+                f"Call POST /admin/reset-keys after daily limits reset."
             )
 
         if key in tried_keys:
             raise RuntimeError(
-                f"All {len(tried_keys)} available Groq keys tried without success."
+                f"All {len(tried_keys)} available Groq keys tried for [{model}] without success."
             )
         tried_keys.add(key)
 
@@ -396,7 +729,7 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        per_minute_retries    = 0
+        per_minute_retries     = 0
         MAX_PER_MINUTE_RETRIES = 3
 
         while per_minute_retries <= MAX_PER_MINUTE_RETRIES:
@@ -419,15 +752,26 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                 if resp.status_code == 429:
                     classification, wait_secs = _classify_429(resp)
                     if classification == "daily_quota":
-                        _mark_groq_exhausted(key, reason=f"daily quota [{model}]")
-                        logger.info(f"🔁 Rotating to next Groq key (daily quota on {model})...")
-                        break
+                        _mark_groq_exhausted(key, model, reason="daily quota")  # v3.6.0
+                        daily_quota_rotations += 1
+                        if (
+                            MAX_DAILY_QUOTA_ROTATIONS_PER_CALL > 0
+                            and daily_quota_rotations >= MAX_DAILY_QUOTA_ROTATIONS_PER_CALL
+                        ):
+                            raise RuntimeError(
+                                f"Daily quota hit on {daily_quota_rotations} key(s) for model "
+                                f"[{model}] in one call. Stopping rotation early so remaining "
+                                f"keys are preserved for later calls."
+                            )
+                        logger.info(f"🔁 Rotating to next key for [{model}]...")
+                        break  # try next key
                     else:
                         _record_per_minute_wait(key, wait_secs)
                         actual_wait = min(wait_secs, MAX_PER_MINUTE_WAIT) + 0.5
                         logger.info(
-                            f"⏳ Key ...{key[-8:]} rate-limited for {actual_wait:.1f}s "
-                            f"(per-minute, retry {per_minute_retries+1}/{MAX_PER_MINUTE_RETRIES})"
+                            f"⏳ Key ...{key[-8:]} rate-limited {actual_wait:.1f}s "
+                            f"(per-minute on [{model}], retry {per_minute_retries+1}/"
+                            f"{MAX_PER_MINUTE_RETRIES})"
                         )
                         time.sleep(actual_wait)
                         per_minute_retries += 1
@@ -446,11 +790,24 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                     )
                 return data["choices"][0]["message"]["content"]
 
+            except RuntimeError:
+                raise
+
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     classification, wait_secs = _classify_429(e.response)
                     if classification == "daily_quota":
-                        _mark_groq_exhausted(key, reason=f"daily quota/{model} (HTTPStatusError)")
+                        _mark_groq_exhausted(key, model, reason="daily quota (HTTPStatusError)")
+                        daily_quota_rotations += 1
+                        if (
+                            MAX_DAILY_QUOTA_ROTATIONS_PER_CALL > 0
+                            and daily_quota_rotations >= MAX_DAILY_QUOTA_ROTATIONS_PER_CALL
+                        ):
+                            raise RuntimeError(
+                                f"Daily quota hit on {daily_quota_rotations} key(s) for model "
+                                f"[{model}] in one call. Stopping rotation early so remaining "
+                                f"keys are preserved for later calls."
+                            )
                         break
                     else:
                         actual_wait = min(wait_secs, MAX_PER_MINUTE_WAIT) + 0.5
@@ -474,11 +831,155 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
 
         if per_minute_retries > MAX_PER_MINUTE_RETRIES:
             logger.warning(
-                f"⚠️  Key ...{key[-8:]} exceeded {MAX_PER_MINUTE_RETRIES} per-minute retries — rotating"
+                f"⚠️  Key ...{key[-8:]} exceeded {MAX_PER_MINUTE_RETRIES} per-minute retries "
+                f"on [{model}] — rotating"
             )
 
 
-# ── Ollama fallback (unchanged from v3.3.0) ───────────────────────────────────
+# ── Ollama fallback (unchanged from v3.5.0) ───────────────────────────────────
+
+def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
+    """
+    Groq call path with organization/model-aware throttling.
+
+    Temporary TPM/RPM 429s wait on a per-model cooldown and retry without
+    marking keys exhausted. Keys are rotated only for real key failures such
+    as 401/403. Daily TPD/RPD limits stop immediately because Groq applies
+    those limits at the organization/model level.
+    """
+    import httpx
+
+    tried_keys: set[str] = set()
+    temporary_rate_retries = 0
+    model_lock = _get_model_lock(model)
+    retry_key: Optional[str] = None
+
+    with model_lock:
+        while True:
+            key = retry_key or _get_next_groq_key(model)
+            retry_key = None
+            if key is None:
+                raise RuntimeError(
+                    f"No usable Groq keys remain for model [{model}]. "
+                    "Daily quota or key authentication failures are blocking this model."
+                )
+            if key in tried_keys:
+                raise RuntimeError(
+                    f"All {len(tried_keys)} usable Groq keys tried for [{model}] without success."
+                )
+            tried_keys.add(key)
+
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+
+            try:
+                max_tokens = _fit_output_budget_to_model_limit(
+                    model, prompt, system, max_tokens
+                )
+                estimated_tokens = _estimate_tokens(prompt, system, max_tokens)
+                _wait_for_model_capacity(model, estimated_tokens)
+
+                with httpx.Client(timeout=60) as client:
+                    resp = client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {key}",
+                            "Content-Type":  "application/json",
+                        },
+                        json={
+                            "model":       model,
+                            "messages":    messages,
+                            "max_tokens":  max_tokens,
+                            "temperature": 0.2,
+                        },
+                    )
+                _update_rate_state_from_headers(model, resp.headers)
+
+                if resp.status_code == 429:
+                    info = _classify_429(resp)
+                    if info.kind == "daily_limit":
+                        reason = info.message or "daily request/token quota"
+                        _mark_model_daily_limited(model, reason)
+                        raise GroqDailyQuotaError(
+                            f"Groq daily quota exhausted for model [{model}]. "
+                            "Rotating API keys will not help because Groq rate limits "
+                            "apply at the organization/model level."
+                        )
+
+                    temporary_rate_retries += 1
+                    if temporary_rate_retries > GROQ_RATE_LIMIT_MAX_RETRIES:
+                        raise GroqRateLimitError(
+                            f"Groq [{model}] stayed rate-limited after "
+                            f"{GROQ_RATE_LIMIT_MAX_RETRIES} retries."
+                        )
+                    wait_secs = max(0.5, info.wait_seconds)
+                    _set_model_cooldown(model, info.kind, wait_secs)
+                    logger.warning(
+                        f"Groq [{model}] temporary {info.kind}; waiting "
+                        f"{min(wait_secs, GROQ_RATE_LIMIT_MAX_WAIT_SECONDS):.1f}s "
+                        "for token/request reset without marking keys exhausted."
+                    )
+                    retry_key = key
+                    tried_keys.discard(key)
+                    continue
+
+                if resp.status_code in (401, 403):
+                    _mark_key_invalid(key, reason=f"HTTP {resp.status_code}")
+                    continue
+
+                resp.raise_for_status()
+
+                _clear_per_minute_wait(key)
+                data = resp.json()
+                usage = data.get("usage", {})
+                if usage:
+                    _add_tokens(
+                        usage.get("prompt_tokens", 0),
+                        usage.get("completion_tokens", 0),
+                    )
+                return data["choices"][0]["message"]["content"]
+
+            except GroqRateLimitError:
+                raise
+            except httpx.HTTPStatusError as e:
+                _update_rate_state_from_headers(model, e.response.headers)
+                if e.response.status_code == 429:
+                    info = _classify_429(e.response)
+                    if info.kind == "daily_limit":
+                        reason = info.message or "daily request/token quota"
+                        _mark_model_daily_limited(model, reason)
+                        raise GroqDailyQuotaError(
+                            f"Groq daily quota exhausted for model [{model}]. "
+                            "Rotating API keys will not help because Groq rate limits "
+                            "apply at the organization/model level."
+                        )
+                    temporary_rate_retries += 1
+                    if temporary_rate_retries > GROQ_RATE_LIMIT_MAX_RETRIES:
+                        raise GroqRateLimitError(
+                            f"Groq [{model}] stayed rate-limited after "
+                            f"{GROQ_RATE_LIMIT_MAX_RETRIES} retries."
+                        )
+                    wait_secs = max(0.5, info.wait_seconds)
+                    _set_model_cooldown(model, info.kind, wait_secs)
+                    retry_key = key
+                    tried_keys.discard(key)
+                    continue
+                if e.response.status_code in (401, 403):
+                    _mark_key_invalid(key, reason=f"HTTP {e.response.status_code}")
+                    continue
+                logger.warning(
+                    f"Groq HTTP error ({e.response.status_code}) on key ...{key[-8:]}: {e}"
+                )
+                continue
+            except httpx.TimeoutException:
+                logger.warning(f"Groq timeout on key ...{key[-8:]}, trying next")
+                continue
+            except Exception as e:
+                logger.warning(f"Groq unexpected error on key ...{key[-8:]}: {e}")
+                continue
+
 
 def _call_ollama(prompt: str, system: str) -> str:
     import httpx
@@ -529,25 +1030,20 @@ def _call_ollama(prompt: str, system: str) -> str:
 
 # ── Public interface ───────────────────────────────────────────────────────────
 
-def generate_text(
+def _generate_text_legacy_unused(
     prompt:     str,
     system:     str = "",
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     agent_name: str = "",
 ) -> str:
     """
-    Generate text via Groq (dual-model routing, multi-key) with Ollama fallback.
+    Generate text via Groq (per-model exhaustion, multi-key) with Ollama fallback.
 
-    New vs v3.3.0:
-      agent_name  — if provided, selects the correct model (heavy vs fast)
-                    and can be used to look up a token budget.
-                    If omitted, the FAST model is used (safe default).
-      max_tokens  — default is now _DEFAULT_MAX_TOKENS (1024), not 2048.
-                    base_agent passes self._token_budget here.
+    v3.6.0: Groq call uses model-scoped exhaustion so exhausting a key on
+    llama-3.3-70b does NOT block subsequent fast-model (llama-3.1-8b) calls.
 
-    Callers that do NOT pass agent_name continue to work exactly as before.
-    The only observable difference is they use the fast model and 1024 tokens
-    instead of 2048 — both of which are fine for any generic call.
+    agent_name  — selects model (heavy vs fast) and token budget.
+    max_tokens  — defaults to per-agent budget from AGENT_TOKEN_BUDGETS.
     """
     model = get_model_for_agent(agent_name) if agent_name else _FAST_MODEL
 
@@ -558,7 +1054,22 @@ def generate_text(
             )
             return _call_groq(prompt, system, max_tokens, model)
         except RuntimeError as e:
-            logger.warning(f"⚠️  All Groq keys exhausted or failed: {e}")
+            err_msg = str(e)
+            if model == _HEAVY_MODEL and _FAST_MODEL != _HEAVY_MODEL:
+                logger.warning(
+                    f"⚠️  Heavy model [{_HEAVY_MODEL}] unavailable for "
+                    f"[{agent_name or 'generic'}]: {err_msg}"
+                )
+                try:
+                    logger.warning(
+                        f"↘️  Retrying [{agent_name or 'generic'}] on fast model "
+                        f"[{_FAST_MODEL}] before using Ollama."
+                    )
+                    return _call_groq(prompt, system, max_tokens, _FAST_MODEL)
+                except Exception as fast_exc:
+                    logger.warning(f"⚠️  Fast-model retry also failed: {fast_exc}")
+            else:
+                logger.warning(f"⚠️  All Groq keys exhausted or failed: {err_msg}")
         except Exception as e:
             logger.warning(f"⚠️  Groq call failed unexpectedly: {e}")
     else:
@@ -582,8 +1093,90 @@ def generate_text(
     raise RuntimeError("Ollama failed after 2 attempts")
 
 
+def generate_text(
+    prompt:     str,
+    system:     str = "",
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    agent_name: str = "",
+) -> str:
+    """
+    Generate text with explicit provider semantics.
+
+    LLM_PROVIDER=groq is Groq-only: no Ollama fallback, and temporary Groq
+    rate limits are surfaced as waits/retries rather than fake key exhaustion.
+    LLM_PROVIDER=both may use Ollama only after non-rate-limit Groq failures.
+    """
+    model = get_model_for_agent(agent_name) if agent_name else _FAST_MODEL
+
+    if LLM_PROVIDER == "ollama":
+        logger.info("LLM_PROVIDER=ollama; using Ollama directly")
+        return _call_ollama(prompt, system)
+
+    if not _groq_keys:
+        if LLM_PROVIDER == "groq":
+            raise RuntimeError(
+                "LLM_PROVIDER=groq but no Groq API keys are configured. "
+                "Add GROQ_API_KEY values to .env and restart the server."
+            )
+        logger.info("No Groq keys configured, going straight to Ollama")
+        return _call_ollama(prompt, system)
+
+    try:
+        logger.debug(f"[{agent_name or 'generic'}] model={model} max_tokens={max_tokens}")
+        return _call_groq(prompt, system, max_tokens, model)
+    except GroqRateLimitError as e:
+        logger.error(f"Groq rate limit for [{model}]: {e}")
+        raise RuntimeError(
+            f"Groq-only rate limit for model [{model}]: {e}"
+        ) from None
+    except Exception as groq_exc:
+        err_msg = str(groq_exc)
+        if model == _HEAVY_MODEL and _FAST_MODEL != _HEAVY_MODEL:
+            logger.warning(
+                f"Heavy model [{_HEAVY_MODEL}] failed for "
+                f"[{agent_name or 'generic'}]: {err_msg}"
+            )
+            try:
+                logger.warning(
+                    f"Retrying [{agent_name or 'generic'}] on Groq fast model "
+                    f"[{_FAST_MODEL}] before any fallback."
+                )
+                return _call_groq(prompt, system, max_tokens, _FAST_MODEL)
+            except GroqRateLimitError as fast_rate_exc:
+                logger.error(f"Groq fast model rate limit: {fast_rate_exc}")
+                raise RuntimeError(
+                    f"Groq-only rate limit for fast model [{_FAST_MODEL}]: {fast_rate_exc}"
+                ) from None
+            except Exception as fast_exc:
+                logger.warning(f"Groq fast-model retry also failed: {fast_exc}")
+                err_msg = f"{err_msg}; fast retry failed: {fast_exc}"
+
+        if LLM_PROVIDER == "groq":
+            raise RuntimeError(
+                "LLM_PROVIDER=groq is enabled, so Ollama fallback is disabled. "
+                f"Groq failed with: {err_msg}"
+            ) from None
+
+    logger.warning("Falling back to Ollama after non-rate-limit Groq failure")
+    for attempt in range(1, 3):
+        try:
+            return _call_ollama(prompt, system)
+        except RuntimeError as e:
+            err_msg = str(e)
+            if "timed out" in err_msg and attempt == 1:
+                logger.warning(f"Ollama timed out on attempt {attempt}, retrying once...")
+                continue
+            raise RuntimeError(
+                f"Ollama call failed: {err_msg}\n"
+                "Make sure Ollama is running (ollama serve) or set "
+                "LLM_PROVIDER=groq in your .env to disable the Ollama fallback."
+            ) from None
+
+    raise RuntimeError("Ollama failed after 2 attempts")
+
+
 def _strip_fences(text: str) -> str:
-    """Remove markdown code fences from LLM responses. Unchanged from v3.3.0."""
+    """Remove markdown code fences from LLM responses."""
     text = re.sub(r"^```[a-zA-Z]*\s*\n?", "", text, flags=re.MULTILINE)
     text = re.sub(r"\n?```\s*$",          "", text, flags=re.MULTILINE)
     return text.strip()
