@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import type { Project } from '../../api/client';
+import { isDownloadable } from '../../api/client';
 import { StatusBadge } from '../shared/StatusBadge';
 import './BuildCard.css';
 
@@ -9,7 +10,8 @@ interface BuildCardProps {
 }
 
 export function BuildCard({ project }: BuildCardProps) {
-  const isDone = project.status === 'done';
+  // Phase 21: done_with_context builds have real scores too — show them.
+  const isDone = isDownloadable(project.status);
   const displayName = project.app_name || project.build_id.substring(0, 8).toUpperCase();
   const promptPreview = project.prompt.length > 110
     ? project.prompt.substring(0, 110) + '…'

@@ -69,6 +69,45 @@
 .pd-time-icon { color: var(--text-tertiary); flex-shrink: 0; }
 
 /* Scores */
+/* Phase 21: done_with_context explainer banner */
+.pd-context-banner {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4) var(--space-5);
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.pd-context-banner .pd-context-icon {
+  color: var(--color-warning);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.pd-context-banner strong {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
+}
+
+.pd-context-banner p {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.pd-context-banner p:last-child { margin-bottom: 0; }
+
+.pd-context-banner code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.15));
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+}
+
 .pd-scores {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

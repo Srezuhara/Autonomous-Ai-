@@ -50,11 +50,41 @@ FORBIDDEN_FILES: frozenset[str] = frozenset({
     "gunicorn.conf.py",
 })
 
+MAX_BACKEND_PY_FILES = {
+    "simple": 4,
+    "medium": 4,
+    "complex": 6,
+}
+
+BACKEND_FILE_PRIORITY = {
+    "models.py": 0,
+    "schemas.py": 1,
+    "services.py": 2,
+    "routes.py": 3,
+    "main.py": 4,
+    "app.py": 5,
+    "__init__.py": 99,
+}
+
 
 def _is_forbidden(file_path: str) -> bool:
     """Return True if the file path ends with a forbidden filename."""
     name = Path(file_path).name
     return name in FORBIDDEN_FILES
+
+
+def _is_backend_python_file(file_info: dict) -> bool:
+    path = file_info.get("path", "").replace("\\", "/")
+    return (
+        (file_info.get("type") == "python" or path.endswith(".py"))
+        and path.startswith("backend/")
+        and Path(path).name != "__init__.py"
+    )
+
+
+def _backend_priority(file_info: dict) -> tuple[int, str]:
+    name = Path(file_info.get("path", "")).name.lower()
+    return (BACKEND_FILE_PRIORITY.get(name, 50), file_info.get("path", ""))
 
 
 class Architect(BaseAgent):
@@ -109,11 +139,65 @@ Return the architecture JSON object.
                 f"(setup.py, manage.py, etc.) before scaffolding."
             )
 
+        architecture = self._normalise_backend_architecture(architecture, intent)
+
         self._scaffold(architecture)
 
         logger.info(
             f"✅ Architecture designed: {len(architecture.get('files', []))} files planned "
             f"in '{isolated_root}'"
+        )
+        return architecture
+
+    def _normalise_backend_architecture(self, architecture: dict, intent: dict) -> dict:
+        """
+        Keep generated backends small and acyclic enough to verify.
+
+        Medium apps on free-tier Groq were drifting into 8-10 interdependent
+        Python files, then failing as circular imports. Prefer a deployable
+        four-file FastAPI backend: models -> services -> routes -> main.
+        """
+        files = list(architecture.get("files", []))
+        backend_py = [f for f in files if _is_backend_python_file(f)]
+        if not backend_py:
+            return architecture
+
+        names = {Path(f.get("path", "")).name.lower() for f in backend_py}
+        complexity = str(intent.get("complexity", "medium")).lower()
+        cap = MAX_BACKEND_PY_FILES.get(complexity, 4)
+
+        if "main.py" in names and "routes.py" in names and "app.py" in names:
+            files = [
+                f for f in files
+                if not (
+                    _is_backend_python_file(f)
+                    and Path(f.get("path", "")).name.lower() == "app.py"
+                )
+            ]
+            logger.warning(
+                "Removed backend/app.py because main.py/routes.py already define "
+                "the API entrypoint."
+            )
+            backend_py = [f for f in files if _is_backend_python_file(f)]
+
+        if len(backend_py) <= cap:
+            architecture["files"] = files
+            return architecture
+
+        keep = {
+            f.get("path", "")
+            for f in sorted(backend_py, key=_backend_priority)[:cap]
+        }
+        removed = sorted(
+            f.get("path", "") for f in backend_py if f.get("path", "") not in keep
+        )
+        architecture["files"] = [
+            f for f in files
+            if not _is_backend_python_file(f) or f.get("path", "") in keep
+        ]
+        logger.warning(
+            f"Reduced backend Python architecture from {len(backend_py)} to "
+            f"{len(keep)} files for deployability. Removed: {removed}"
         )
         return architecture
 

@@ -34,6 +34,7 @@ from pathlib import Path
 import config
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file, create_file
+from llm_client import GroqDailyQuotaError
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +334,15 @@ TYPESCRIPT ERRORS:
 Return ONLY the complete fixed TypeScript/JSX code. No markdown. No explanation."""
         try:
             return self.think(prompt)
+        # Phase 21 fix: same reasoning as reviewer.py — a dead daily quota must
+        # not be downgraded to "this one TS file could not be fixed". It has to
+        # reach the pipeline so the build is packaged with an honest handoff.
+        except GroqDailyQuotaError:
+            logger.error(
+                f"  LLM daily quota exhausted while fixing {rel_path} — "
+                "aborting TypeScript fix pass."
+            )
+            raise
         except Exception as e:
             logger.warning(f"  ⚠️  LLM fix failed for {rel_path}: {e}")
             return None

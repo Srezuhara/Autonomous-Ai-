@@ -1,11 +1,11 @@
 import { useParams, Link } from 'react-router-dom';
 import {
-  Wifi, CheckCircle2, XCircle,
+  Wifi, CheckCircle2, XCircle, AlertTriangle,
   ArrowLeft, ExternalLink, Loader, X
 } from 'lucide-react';
 import { useBuildProgress } from '../hooks/useBuildProgress';
 import { useProjectDetail } from '../hooks/useQueries';
-import { api } from '../api/client';
+import { api, isDownloadable } from '../api/client';
 import { StepTracker } from '../components/shared/StepTracker';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import './BuildProgress.css';
@@ -57,7 +57,10 @@ export default function BuildProgress() {
   const isFinished  = buildDone;
   const actualStatus = project?.status ?? buildStatus;
   const hasFailed    = isFinished && actualStatus === 'failed';
-  const hasSucceeded = isFinished && actualStatus === 'done';
+  // Phase 21: a done_with_context build produced downloadable code, so it gets
+  // the "View Result" path — not the failure path.
+  const isPartial    = isFinished && actualStatus === 'done_with_context';
+  const hasSucceeded = isFinished && isDownloadable(actualStatus);
 
   const stepsComplete = steps.filter(s => s.status === 'done').length;
 
@@ -88,7 +91,9 @@ export default function BuildProgress() {
           <div>
             <h1 className="bp-title">
               {isFinished
-                ? (hasFailed ? 'Build Failed' : 'Build Complete!')
+                ? (hasFailed
+                    ? 'Build Failed'
+                    : isPartial ? 'Build Complete — With Notes' : 'Build Complete!')
                 : 'Building Your App'}
             </h1>
             <code className="bp-build-id">{id}</code>
@@ -157,6 +162,23 @@ export default function BuildProgress() {
             >
               <X size={15} /> Cancel Build
             </button>
+          )}
+
+          {/* Phase 21: degraded / quota-paused completion notice */}
+          {isPartial && (
+            <div className="bp-error card" style={{ borderLeftColor: 'var(--color-warning)' }}>
+              <AlertTriangle
+                size={18}
+                style={{ color: 'var(--color-warning)', flexShrink: 0 }}
+              />
+              <div>
+                <p className="bp-error-title">Finished with a handoff document</p>
+                <p className="bp-error-sub">
+                  {project?.completion_reason
+                    ?? 'The build produced usable code but did not complete every step. Your files are downloadable.'}
+                </p>
+              </div>
+            </div>
           )}
 
           {/* Failure card */}

@@ -5,7 +5,16 @@ import { useBuilds, useStats } from '../hooks/useQueries';
 import { BuildCard } from '../components/shared/BuildCard';
 import './Dashboard.css';
 
-const STATUS_FILTERS = ['all', 'running', 'done', 'failed'] as const;
+// Phase 21: 'Partial' surfaces done_with_context builds — completed but
+// degraded or quota-paused. They are downloadable, so they get their own tab
+// rather than being lumped in with failures.
+const STATUS_FILTERS = [
+  { value: 'all',               label: 'All'     },
+  { value: 'running',           label: 'Running' },
+  { value: 'done',              label: 'Done'    },
+  { value: 'done_with_context', label: 'Partial' },
+  { value: 'failed',            label: 'Failed'  },
+] as const;
 
 function MetricCard({ icon, value, label, color }: {
   icon: React.ReactNode;
@@ -111,13 +120,13 @@ export default function Dashboard() {
           <div className="tab-group" role="tablist">
             {STATUS_FILTERS.map(f => (
               <button
-                key={f}
+                key={f.value}
                 role="tab"
-                aria-selected={filter === f}
-                className={`tab${filter === f ? ' active' : ''}`}
-                onClick={() => setFilter(f)}
+                aria-selected={filter === f.value}
+                className={`tab${filter === f.value ? ' active' : ''}`}
+                onClick={() => setFilter(f.value)}
               >
-                {f.charAt(0).toUpperCase() + f.slice(1)}
+                {f.label}
               </button>
             ))}
           </div>

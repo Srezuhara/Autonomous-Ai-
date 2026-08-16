@@ -20,10 +20,13 @@ Changes in this version
 import logging
 import json
 import re
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file, create_file, list_files
+from llm_client import GroqDailyQuotaError
 import config
 
 logger = logging.getLogger(__name__)
@@ -101,6 +104,13 @@ Use the actual endpoint paths, env vars, and file names from the project files a
             else:
                 error = "LLM returned empty README"
 
+        # Phase 21 fix: quota death during README generation used to be recorded
+        # as a DocResult error nobody inspected, so the build was marked a clean
+        # `done` while shipping no README. Propagate instead — the pipeline's
+        # finalisation already wraps this call and writes SESSION_CONTEXT.md.
+        except GroqDailyQuotaError:
+            logger.error("LLM daily quota exhausted during README generation.")
+            raise
         except Exception as e:
             error = str(e)
             logger.error(f"README generation failed: {e}")
@@ -124,6 +134,450 @@ Use the actual endpoint paths, env vars, and file names from the project files a
         )
         logger.info(str(result))
         return result
+
+    # ── Phase 21: SESSION_CONTEXT.md / BUILD_CONTEXT.md handoff generator ──────
+
+    def generate_session_context(
+        self,
+        intent:           dict,
+        architecture:     dict,
+        backend_files:    list[str],
+        frontend_files:   list[str]   = None,
+        completed_steps:  list[str]   = None,
+        pending_steps:    list[str]   = None,
+        reason:           str         = "quota_exhausted",
+        quota_snapshot:   dict        = None,
+        remediation:      Any         = None,
+        progress_percent: float       = 0.0,
+        debug_results:    list        = None,
+        review_results:   list        = None,
+        test_results:     list        = None,
+        error_detail:     str         = "",
+    ) -> str:
+        """
+        Write SESSION_CONTEXT.md (+ BUILD_CONTEXT.md alias) into the project root.
+
+        Called when a build is interrupted by quota exhaustion or completes with
+        unresolved remediation issues. The document tells a developer exactly what
+        exists, what is missing, and what to do next.
+
+        CRITICAL: this method must never make an LLM call on its primary path —
+        the main trigger is quota exhaustion, so the entire document is built
+        from local file inspection and the pipeline's own result objects.
+
+        Returns the written path (e.g. "my_app/SESSION_CONTEXT.md"), or "" if the
+        write failed. Never raises — a failure here must not sink the build.
+        """
+        app_name = intent.get("app_name", "project")
+        root     = architecture.get("root_folder", app_name)
+
+        backend_files   = backend_files   or []
+        frontend_files  = frontend_files  or []
+        completed_steps = completed_steps or []
+        pending_steps   = pending_steps   or []
+
+        try:
+            content = self._build_session_context(
+                app_name         = app_name,
+                root             = root,
+                intent           = intent,
+                architecture     = architecture,
+                backend_files    = backend_files,
+                frontend_files   = frontend_files,
+                completed_steps  = completed_steps,
+                pending_steps    = pending_steps,
+                reason           = reason,
+                quota_snapshot   = quota_snapshot or {},
+                remediation      = remediation,
+                progress_percent = progress_percent,
+                debug_results    = debug_results  or [],
+                review_results   = review_results or [],
+                test_results     = test_results   or [],
+                error_detail     = error_detail,
+            )
+        except Exception as e:
+            logger.error(f"SESSION_CONTEXT.md build failed: {e}", exc_info=True)
+            return ""
+
+        written = ""
+        # The plan document names both filenames; BUILD_CONTEXT.md is an alias so
+        # either name a developer looks for is present in the ZIP.
+        for filename in ("SESSION_CONTEXT.md", "BUILD_CONTEXT.md"):
+            path = f"{root}/{filename}"
+            try:
+                create_file(path, content)
+                written = written or path
+                logger.info(f"  📄 {filename} written ({len(content)} chars)")
+            except Exception as e:
+                logger.warning(f"Could not write {filename}: {e}")
+
+        return written
+
+    def _build_session_context(
+        self,
+        app_name:         str,
+        root:             str,
+        intent:           dict,
+        architecture:     dict,
+        backend_files:    list[str],
+        frontend_files:   list[str],
+        completed_steps:  list[str],
+        pending_steps:    list[str],
+        reason:           str,
+        quota_snapshot:   dict,
+        remediation:      Any,
+        progress_percent: float,
+        debug_results:    list,
+        review_results:   list,
+        test_results:     list,
+        error_detail:     str,
+    ) -> str:
+        """Assemble the markdown body. Pure string building — no LLM, no raising."""
+        all_files = list(backend_files) + list(frontend_files)
+        loc       = self._count_lines(all_files)
+        tree      = self._build_file_tree(root)
+        env_vars  = self._extract_env_vars(root, backend_files)
+        packages  = self._extract_requirements(root)
+        endpoints = self._extract_endpoints(root, backend_files)
+        has_tests = self._has_tests(root)
+        stamp     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        reason_title, reason_body = self._explain_reason(
+            reason, quota_snapshot, error_detail
+        )
+
+        # ── 📊 Progress ───────────────────────────────────────────────────────
+        step_lines = [f"- [x] {s}" for s in completed_steps]
+        step_lines += [f"- [ ] {s}" for s in pending_steps]
+        steps_block = "\n".join(step_lines) or "_No step information recorded._"
+
+        quota_block = self._format_quota_block(quota_snapshot)
+
+        # ── 📁 Artifact inventory ─────────────────────────────────────────────
+        health_rows = self._file_health_rows(
+            all_files, debug_results, review_results, test_results
+        )
+        missing = self._missing_files(architecture, all_files, root)
+        missing_block = (
+            "\n".join(f"- `{p}` — {d}" for p, d in missing)
+            if missing else
+            "_Every file in the architecture was generated._"
+        )
+
+        # ── 🛠️ Remaining work ─────────────────────────────────────────────────
+        todos: list[str] = []
+        if remediation is not None:
+            for item in getattr(remediation, "unresolved", []) or []:
+                todos.append(f"- [ ] {item}")
+        for path, desc in missing:
+            todos.append(f"- [ ] Implement `{path}` — {desc}")
+        if not has_tests and backend_files:
+            todos.append("- [ ] Add a pytest suite under `tests/` — none was generated")
+        todos_block = "\n".join(todos) or "_No outstanding issues were recorded._"
+
+        remediation_block = self._format_remediation_block(remediation)
+
+        env_template = (
+            f"```env\n{env_vars.strip()}\n```"
+            if env_vars else
+            "_No environment variables were detected in the generated code._"
+        )
+        endpoint_block = (
+            f"```\n{endpoints}\n```"
+            if endpoints else
+            "_No routes.py endpoints detected yet._"
+        )
+        packages_block = (
+            f"```\n{packages.strip()}\n```"
+            if packages else
+            "_No requirements.txt found — install FastAPI and Uvicorn manually._"
+        )
+
+        return f"""# 🧩 Session Context — {app_name}
+
+> **This build did not finish cleanly.** Everything generated so far is intact and
+> included in this folder. This document tells you exactly where the build stopped
+> and what to do next.
+
+| | |
+|---|---|
+| **Project** | {app_name} |
+| **Type** | {intent.get('app_type', '—')} |
+| **Complexity** | {intent.get('complexity', '—')} |
+| **Stopped because** | {reason_title} |
+| **Progress** | **{progress_percent:.0f}% complete** |
+| **Files generated** | {len(all_files)} ({len(backend_files)} backend, {len(frontend_files)} frontend) |
+| **Lines of code** | ~{loc:,} |
+| **Generated at** | {stamp} |
+
+---
+
+## 📊 Progress
+
+{reason_body}
+
+### Pipeline steps
+
+{steps_block}
+
+{quota_block}
+
+---
+
+## 📁 Artifact Inventory
+
+### Project tree
+
+```
+{tree}
+```
+
+### File health
+
+{health_rows}
+
+### Files in the plan that were never generated
+
+{missing_block}
+
+---
+
+## 🛠️ Remaining Work
+
+{todos_block}
+
+{remediation_block}
+
+---
+
+## 🚀 How to Finish This Build
+
+### Option A — Resume the automated build (recommended)
+
+{self._resume_instructions(reason, quota_snapshot)}
+
+The builder is idempotent per build: re-running the same prompt produces a fresh
+project folder, so nothing in this folder is overwritten.
+
+### Option B — Finish it by hand
+
+**1. Set up the environment**
+
+```bash
+# Windows (PowerShell)
+python -m venv venv
+.\\venv\\Scripts\\Activate.ps1
+
+# macOS / Linux
+python3 -m venv venv
+source venv/bin/activate
+```
+
+**2. Install dependencies**
+
+{packages_block}
+
+```bash
+pip install -r requirements.txt
+```
+
+**3. Configure environment variables**
+
+{env_template}
+
+**4. Run the backend**
+
+```bash
+cd backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Then open **http://localhost:8000/docs**.
+
+**5. Endpoints detected so far**
+
+{endpoint_block}
+
+**6. Run the tests**
+
+```bash
+{"pytest tests/ -v" if has_tests else "# No test suite was generated — see Remaining Work above."}
+```
+
+**7. Work through the Remaining Work checklist above**, starting with any file
+listed as `import failed` in the File health table — a broken import blocks
+everything downstream of it.
+
+---
+
+*Generated by AI App Builder · Phase 21 session handoff · {stamp}*
+"""
+
+    # ── Session-context helpers ───────────────────────────────────────────────
+
+    def _explain_reason(
+        self, reason: str, quota_snapshot: dict, error_detail: str
+    ) -> tuple[str, str]:
+        """Return (short title, markdown paragraph) explaining why the build stopped."""
+        detail = f"\n\n> Details: `{error_detail}`" if error_detail else ""
+
+        if reason == "quota_exhausted":
+            model = quota_snapshot.get("heavy_model") or "the configured model"
+            return (
+                "🔑 LLM daily quota exhausted",
+                "The build stopped because every available Groq API key hit its daily "
+                f"quota (model `{model}`). This is an organization-level limit, so "
+                "rotating keys does not help — the quota has to reset, or new keys have "
+                "to be added. **No work was lost**: every file generated before the "
+                "limit was hit is in this folder." + detail,
+            )
+        if reason == "remediation_incomplete":
+            return (
+                "🛠️ Automatic repair could not fix everything",
+                "The build completed all nine pipeline steps, but verification found "
+                "issues the automatic repair passes could not resolve. The code is "
+                "packaged and downloadable — the checklist below lists exactly what "
+                "still needs attention." + detail,
+            )
+        if reason == "step_failed":
+            return (
+                "💥 A pipeline step failed",
+                "A build step failed outright, but usable code had already been "
+                "generated, so the build was packaged instead of discarded." + detail,
+            )
+        return (
+            "⚠️ Build ended early",
+            "The build ended before completing normally. Everything generated so far "
+            "is preserved in this folder." + detail,
+        )
+
+    def _resume_instructions(self, reason: str, quota_snapshot: dict) -> str:
+        if reason == "quota_exhausted":
+            hint = quota_snapshot.get("reset_hint") or (
+                "Groq free-tier daily quotas reset at 00:00 UTC."
+            )
+            return (
+                f"{hint}\n\n"
+                "Once quota is available again, either:\n\n"
+                "- add fresh `GROQ_API_KEY` values to `.env`, restart the server, and "
+                "call `POST /admin/reset-keys`; **or**\n"
+                "- wait for the daily reset,\n\n"
+                "then submit the **same prompt** again from the dashboard (or "
+                "`POST /projects`) to rebuild from scratch with full quota."
+            )
+        return (
+            "Submit the same prompt again from the dashboard (or `POST /projects`). "
+            "The builder will regenerate the project into a fresh folder; use the "
+            "checklist above to confirm the new run resolved these issues."
+        )
+
+    def _format_quota_block(self, snapshot: dict) -> str:
+        if not snapshot:
+            return ""
+        lines = [
+            "### 🔑 API key status at the time of the interruption",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Total keys | {snapshot.get('total_keys', '—')} |",
+            f"| Keys still usable | {snapshot.get('available_keys', '—')} |",
+            f"| Keys exhausted (any model) | {snapshot.get('exhausted_keys', '—')} |",
+            f"| Heavy model (`{snapshot.get('heavy_model', '—')}`) | "
+            f"{'exhausted' if snapshot.get('heavy_exhausted') else 'available'} |",
+            f"| Fast model (`{snapshot.get('fast_model', '—')}`) | "
+            f"{'exhausted' if snapshot.get('fast_exhausted') else 'available'} |",
+        ]
+        if snapshot.get("reset_hint"):
+            lines += ["", f"> {snapshot['reset_hint']}"]
+        return "\n".join(lines)
+
+    def _format_remediation_block(self, remediation: Any) -> str:
+        if remediation is None or not getattr(remediation, "ran", False):
+            return ""
+        repaired = getattr(remediation, "repaired_files", []) or []
+        lines = [
+            "### 🔧 What the automatic repair already tried",
+            "",
+            f"- Repair passes run: **{getattr(remediation, 'passes', 0)}**",
+            f"- LLM-backed repair: **{'yes' if getattr(remediation, 'llm_used', False) else 'no (quota unavailable — structural repairs only)'}**",
+        ]
+        if repaired:
+            lines.append(f"- Files repaired: {', '.join(f'`{p}`' for p in repaired[:10])}")
+        return "\n".join(lines)
+
+    def _count_lines(self, file_paths: list[str]) -> int:
+        total = 0
+        for fp in file_paths:
+            try:
+                total += len(read_file(fp).splitlines())
+            except Exception:
+                pass
+        return total
+
+    def _file_health_rows(
+        self,
+        all_files:      list[str],
+        debug_results:  list,
+        review_results: list,
+        test_results:   list,
+    ) -> str:
+        """Markdown table of per-file debug / review / test status."""
+        if not all_files:
+            return "_No files were generated._"
+
+        def _index(results: list) -> dict:
+            out = {}
+            for r in results or []:
+                fp = getattr(r, "file_path", None) or (
+                    r.get("file_path") if isinstance(r, dict) else None
+                )
+                if fp:
+                    out[str(fp).replace("\\", "/")] = r
+            return out
+
+        dbg, rev, tst = _index(debug_results), _index(review_results), _index(test_results)
+
+        rows = [
+            "| File | Imports | Review | Tests |",
+            "|------|---------|--------|-------|",
+        ]
+        for fp in all_files:
+            key = str(fp).replace("\\", "/")
+
+            d = dbg.get(key)
+            debug_cell = "—" if d is None else (
+                "✅ ok" if getattr(d, "success", False) else "❌ import failed"
+            )
+
+            r = rev.get(key)
+            score = getattr(r, "score", None) if r is not None else None
+            review_cell = f"{score}/10" if score else "—"
+
+            t = tst.get(key)
+            if t is None:
+                test_cell = "—"
+            elif getattr(t, "skipped", False):
+                test_cell = f"skipped ({getattr(t, 'skip_reason', 'no reason')})"
+            else:
+                test_cell = f"{getattr(t, 'passed', 0)}/{getattr(t, 'tests_generated', 0)} passing"
+
+            rows.append(f"| `{key}` | {debug_cell} | {review_cell} | {test_cell} |")
+        return "\n".join(rows)
+
+    def _missing_files(
+        self, architecture: dict, all_files: list[str], root: str
+    ) -> list[tuple[str, str]]:
+        """Architecture files that were planned but never written to disk."""
+        written = {str(f).replace("\\", "/") for f in all_files}
+        missing = []
+        for spec in architecture.get("files", []) or []:
+            path = spec.get("path")
+            if not path:
+                continue
+            full = f"{root}/{path}".replace("\\", "/")
+            if full not in written:
+                missing.append((path, spec.get("description", "no description")))
+        return missing
 
     # ── SETUP.md builder ───────────────────────────────────────────────────────
 
@@ -229,6 +683,13 @@ Rules:
             content = self.think(prompt)
             if content and len(content.strip()) > 200:
                 return content
+        # Phase 21 fix: propagate quota death rather than silently downgrading to
+        # the template. SETUP.md still gets written by the fallback path in
+        # _finalise_with_context / the downloads route, so nothing is lost — but
+        # the build now correctly reports WHY it degraded.
+        except GroqDailyQuotaError:
+            logger.error("LLM daily quota exhausted during SETUP.md generation.")
+            raise
         except Exception as e:
             logger.warning(f"LLM SETUP.md generation failed, using template: {e}")
 

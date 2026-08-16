@@ -82,6 +82,10 @@ def initialize_db():
         ("prompt_tokens",     "INTEGER DEFAULT 0"),
         ("completion_tokens", "INTEGER DEFAULT 0"),
         ("total_tokens",      "INTEGER DEFAULT 0"),
+        # Phase 21: why a build ended as done_with_context, and how far it got
+        # before remediation/quota interception took over.
+        ("completion_reason", "TEXT"),
+        ("progress_percent",  "REAL"),
     ]
     with get_connection() as conn:
         for col_name, col_def in new_columns:
@@ -139,7 +143,8 @@ def list_projects(limit: int = 100, offset: int = 0) -> list[dict]:
             """SELECT build_id, prompt, app_name, app_type, complexity, status,
                       debug_score, review_score, test_score, output_path,
                       created_at, completed_at, duration_seconds,
-                      prompt_tokens, completion_tokens, total_tokens
+                      prompt_tokens, completion_tokens, total_tokens,
+                      completion_reason, progress_percent
                FROM projects ORDER BY created_at DESC LIMIT ? OFFSET ?""",
             (limit, offset),
         ).fetchall()

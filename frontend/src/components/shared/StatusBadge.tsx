@@ -1,4 +1,4 @@
-import { CheckCircle, XCircle, Clock, Play } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Play, AlertTriangle } from 'lucide-react';
 
 interface StatusBadgeProps {
   status: string;
@@ -6,6 +6,11 @@ interface StatusBadgeProps {
 
 const STATUS_MAP: Record<string, { icon: typeof Clock; cls: string; label: string }> = {
   done:      { icon: CheckCircle, cls: 'badge-success', label: 'Done'      },
+  // Phase 21: completed but degraded — usable code plus a handoff document.
+  // Warning styling, not error: the build succeeded enough to download.
+  done_with_context: {
+    icon: AlertTriangle, cls: 'badge-warning', label: 'Done (with context)',
+  },
   failed:    { icon: XCircle,     cls: 'badge-error',   label: 'Failed'    },
   cancelled: { icon: XCircle,     cls: 'badge-error',   label: 'Cancelled' },
   running:   { icon: Play,        cls: 'badge-info',    label: 'Running'   },

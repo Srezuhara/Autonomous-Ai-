@@ -21,6 +21,10 @@ from api_platform import database as db
 
 router = APIRouter(tags=["statistics"])
 
+# Phase 21: statuses that represent a build which produced usable, downloadable
+# code. done_with_context is degraded but shipped — see api_platform/runner.py.
+SUCCESS_STATUSES = ("done", "done_with_context")
+
 
 # ── App type classifier ────────────────────────────────────────────────────────
 
@@ -107,14 +111,18 @@ async def get_platform_stats():
         s = r.get("status", "unknown")
         by_status[s] = by_status.get(s, 0) + 1
 
-    done      = by_status.get("done", 0)
-    failed    = by_status.get("failed", 0)
-    completed = done + failed
-    success_rate = round((done / completed * 100), 1) if completed else 0.0
+    # Phase 21: done_with_context builds produced usable, downloadable code —
+    # counting them as failures would understate the platform's success rate.
+    done            = by_status.get("done", 0)
+    done_w_context  = by_status.get("done_with_context", 0)
+    failed          = by_status.get("failed", 0)
+    succeeded       = done + done_w_context
+    completed       = succeeded + failed
+    success_rate    = round((succeeded / completed * 100), 1) if completed else 0.0
 
     durations = []
     for r in rows:
-        if r.get("status") == "done" and r.get("duration_seconds") is not None:
+        if r.get("status") in SUCCESS_STATUSES and r.get("duration_seconds") is not None:
             try:
                 d = float(r["duration_seconds"])
                 if d > 0:
@@ -128,7 +136,7 @@ async def get_platform_stats():
 
     type_counts: dict[str, int] = {}
     for r in rows:
-        if r.get("status") != "done":
+        if r.get("status") not in SUCCESS_STATUSES:
             continue
         refined = _refine_app_type(r.get("app_type"), r.get("prompt"))
         if refined == "unknown":
@@ -139,7 +147,7 @@ async def get_platform_stats():
 
     scores = []
     for r in rows:
-        if r.get("status") == "done" and r.get("review_score") is not None:
+        if r.get("status") in SUCCESS_STATUSES and r.get("review_score") is not None:
             try:
                 scores.append(float(r["review_score"]))
             except (TypeError, ValueError):
@@ -246,7 +254,7 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=90)):
 
         daily[day]["total"] += 1
         status = r.get("status", "unknown")
-        if status == "done":
+        if status in SUCCESS_STATUSES:
             daily[day]["success"] += 1
         elif status in ("failed", "cancelled"):
             daily[day][status] += 1

@@ -771,6 +771,8 @@ PATTERN C — Pure Pydantic models:
       import pytest
       with pytest.raises(Exception):
           {stem}.SomeModel()
+  Do NOT assert that empty strings raise ValueError unless the model code
+  defines @field_validator, @validator, constr(...), or another explicit validator.
 """
         elif is_fastapi:
             pattern_instruction = """

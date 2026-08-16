@@ -44,6 +44,7 @@ import threading
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -99,7 +100,41 @@ class GroqRateLimitError(RuntimeError):
 
 
 class GroqDailyQuotaError(GroqRateLimitError):
-    """Raised when Groq reports a real daily request/token quota limit."""
+    """
+    Raised when Groq reports a real daily request/token quota limit.
+
+    Phase 21: carries structured diagnostics so the pipeline can write an
+    accurate SESSION_CONTEXT.md without re-inspecting llm_client internals.
+    All fields are optional — older raise sites that pass only a message
+    still work unchanged.
+    """
+
+    def __init__(
+        self,
+        message:        str,
+        model:          Optional[str] = None,
+        keys_total:     Optional[int] = None,
+        keys_exhausted: Optional[int] = None,
+        reset_hint:     str = "",
+        reason:         str = "",
+    ):
+        super().__init__(message)
+        self.model          = model
+        self.keys_total     = keys_total
+        self.keys_exhausted = keys_exhausted
+        self.reset_hint     = reset_hint
+        self.reason         = reason
+
+    def details(self) -> dict:
+        """Serializable diagnostics for the session-context generator."""
+        return {
+            "message":        str(self),
+            "model":          self.model,
+            "keys_total":     self.keys_total,
+            "keys_exhausted": self.keys_exhausted,
+            "reset_hint":     self.reset_hint,
+            "reason":         self.reason,
+        }
 
 
 @dataclass
@@ -426,10 +461,13 @@ def _wait_for_model_capacity(model: str, estimated_tokens: int) -> None:
         with _model_state_lock:
             state = _model_rate_states.setdefault(model, ModelRateState())
             if state.daily_limited:
-                raise GroqDailyQuotaError(
-                    f"Groq daily quota is exhausted for model [{model}]. "
-                    "Wait for Groq to reset the org quota or use a higher-limit plan."
-                )
+                daily_reason = state.last_rate_limit_reason or "daily quota already marked"
+            else:
+                daily_reason = ""
+        if daily_reason:
+            raise _make_quota_error(model, daily_reason)
+        with _model_state_lock:
+            state = _model_rate_states.setdefault(model, ModelRateState())
             if state.cooldown_until > now:
                 wait_seconds = state.cooldown_until - now
                 reason = state.last_rate_limit_reason or "model cooldown"
@@ -525,6 +563,97 @@ def _mark_model_daily_limited(model: str, reason: str = "daily quota"):
         f"🔒 Groq daily quota exhausted for [{model}] ({reason}). "
         "This is an organization/model limit; rotating keys will not help."
     )
+
+
+_DEFAULT_RESET_HINT = (
+    "Groq free-tier daily quotas reset at 00:00 UTC. Re-run the same prompt "
+    "after the reset, or add fresh GROQ_API_KEY values to .env and restart."
+)
+
+
+def _make_quota_error(model: str, reason: str = "") -> GroqDailyQuotaError:
+    """
+    Build a fully-populated GroqDailyQuotaError for `model`.
+
+    Phase 21: centralises the diagnostics so every raise site carries the same
+    metadata (model, key counts, reset hint) for SESSION_CONTEXT.md.
+    """
+    with _exhausted_lock:
+        total     = len(_groq_keys)
+        exhausted = len(_exhausted_by_model.get(model, set()))
+    message = (
+        f"Groq daily quota exhausted for model [{model}]. "
+        "Rotating API keys will not help because Groq rate limits apply at the "
+        "organization/model level."
+    )
+    return GroqDailyQuotaError(
+        message,
+        model          = model,
+        keys_total     = total,
+        keys_exhausted = exhausted,
+        reset_hint     = _DEFAULT_RESET_HINT,
+        reason         = reason or "daily request/token quota",
+    )
+
+
+def is_quota_exhausted(model: Optional[str] = None) -> bool:
+    """
+    Phase 21: proactive quota check for the pipeline.
+
+    model given  → True when that model is daily-limited or every key is
+                   exhausted for it.
+    model None   → True only when BOTH the heavy and fast models are dead,
+                   i.e. no Groq call of any kind can succeed. This matches the
+                   "fully_exhausted" semantics used by get_key_status().
+
+    Returns False when no Groq keys are configured at all — in that case the
+    provider routing in generate_text() decides, not the quota tracker.
+    """
+    if not _groq_keys:
+        return False
+
+    def _dead(m: str) -> bool:
+        with _model_state_lock:
+            state = _model_rate_states.get(m)
+            if state is not None and state.daily_limited:
+                return True
+        with _exhausted_lock:
+            exhausted = _exhausted_by_model.get(m, set())
+            usable    = set(range(len(_groq_keys))) - exhausted - _invalid_keys
+        return not usable
+
+    if model:
+        return _dead(model)
+    return _dead(_HEAVY_MODEL) and _dead(_FAST_MODEL)
+
+
+def get_quota_snapshot() -> dict:
+    """
+    Phase 21: serializable quota state embedded verbatim in SESSION_CONTEXT.md.
+
+    Built from the existing get_key_status() / get_rate_limit_status() outputs
+    so there is a single source of truth for these numbers.
+    """
+    keys  = get_key_status()
+    rates = get_rate_limit_status()
+    return {
+        "captured_at":       datetime.now().isoformat(timespec="seconds"),
+        "provider":          LLM_PROVIDER,
+        "heavy_model":       _HEAVY_MODEL,
+        "fast_model":        _FAST_MODEL,
+        "total_keys":        keys["total_keys"],
+        "available_keys":    keys["available_keys"],
+        "exhausted_keys":    keys["exhausted_keys"],
+        "exhausted_heavy":   keys["exhausted_70b"],
+        "exhausted_fast":    keys["exhausted_8b"],
+        "fully_exhausted":   keys["fully_exhausted"],
+        "heavy_exhausted":   is_quota_exhausted(_HEAVY_MODEL),
+        "fast_exhausted":    is_quota_exhausted(_FAST_MODEL),
+        "all_exhausted":     is_quota_exhausted(),
+        "any_daily_limited": rates["any_daily_limited"],
+        "models":            rates["models"],
+        "reset_hint":        _DEFAULT_RESET_HINT,
+    }
 
 
 def _record_per_minute_wait(key: str, wait_secs: float):
@@ -902,11 +1031,7 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                     if info.kind == "daily_limit":
                         reason = info.message or "daily request/token quota"
                         _mark_model_daily_limited(model, reason)
-                        raise GroqDailyQuotaError(
-                            f"Groq daily quota exhausted for model [{model}]. "
-                            "Rotating API keys will not help because Groq rate limits "
-                            "apply at the organization/model level."
-                        )
+                        raise _make_quota_error(model, reason)
 
                     temporary_rate_retries += 1
                     if temporary_rate_retries > GROQ_RATE_LIMIT_MAX_RETRIES:
@@ -950,11 +1075,7 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                     if info.kind == "daily_limit":
                         reason = info.message or "daily request/token quota"
                         _mark_model_daily_limited(model, reason)
-                        raise GroqDailyQuotaError(
-                            f"Groq daily quota exhausted for model [{model}]. "
-                            "Rotating API keys will not help because Groq rate limits "
-                            "apply at the organization/model level."
-                        )
+                        raise _make_quota_error(model, reason)
                     temporary_rate_retries += 1
                     if temporary_rate_retries > GROQ_RATE_LIMIT_MAX_RETRIES:
                         raise GroqRateLimitError(
@@ -1124,6 +1245,40 @@ def generate_text(
     try:
         logger.debug(f"[{agent_name or 'generic'}] model={model} max_tokens={max_tokens}")
         return _call_groq(prompt, system, max_tokens, model)
+
+    # ── Phase 21: preserve the quota exception TYPE ───────────────────────────
+    # Previously this branch was folded into the generic GroqRateLimitError
+    # handler below, which re-raised a plain RuntimeError(...) from None. That
+    # destroyed the GroqDailyQuotaError type at the boundary, so the pipeline
+    # could not tell "daily quota dead, hand off gracefully" apart from "this
+    # step failed, retry it". GroqDailyQuotaError already subclasses
+    # RuntimeError, so every existing `except RuntimeError` caller is unaffected.
+    #
+    # When the heavy model is quota-dead but the fast model still has budget we
+    # retry there first — a dead 70b must not end a build that 8b can finish.
+    except GroqDailyQuotaError as quota_exc:
+        if model == _HEAVY_MODEL and _FAST_MODEL != _HEAVY_MODEL and not is_quota_exhausted(_FAST_MODEL):
+            logger.warning(
+                f"Heavy model [{_HEAVY_MODEL}] is quota-exhausted for "
+                f"[{agent_name or 'generic'}]; retrying on fast model [{_FAST_MODEL}]."
+            )
+            try:
+                return _call_groq(prompt, system, max_tokens, _FAST_MODEL)
+            except GroqDailyQuotaError as fast_quota_exc:
+                logger.error(f"Fast model also quota-exhausted: {fast_quota_exc}")
+                raise
+            except Exception as fast_exc:
+                # Heavy is quota-dead but fast failed for an unrelated reason.
+                # Surfacing the quota error here would tell the pipeline that
+                # ALL models are dead, which is not true — report the real cause.
+                logger.warning(f"Fast-model retry after heavy quota failure: {fast_exc}")
+                raise RuntimeError(
+                    f"Heavy model [{_HEAVY_MODEL}] quota-exhausted; fast-model "
+                    f"retry failed with: {fast_exc}"
+                ) from None
+        logger.error(f"Groq daily quota exhausted for [{model}]: {quota_exc}")
+        raise
+
     except GroqRateLimitError as e:
         logger.error(f"Groq rate limit for [{model}]: {e}")
         raise RuntimeError(
@@ -1142,6 +1297,9 @@ def generate_text(
                     f"[{_FAST_MODEL}] before any fallback."
                 )
                 return _call_groq(prompt, system, max_tokens, _FAST_MODEL)
+            except GroqDailyQuotaError:
+                # Phase 21: keep the type — both models are now quota-dead.
+                raise
             except GroqRateLimitError as fast_rate_exc:
                 logger.error(f"Groq fast model rate limit: {fast_rate_exc}")
                 raise RuntimeError(

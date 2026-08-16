@@ -1,5 +1,30 @@
 export const BASE_URL = (import.meta.env?.VITE_API_URL as string) ?? 'http://localhost:8000';
 
+// ── Build status vocabulary (Phase 21) ─────────────────────────────────────────
+// 'done_with_context' = the build produced usable code but was degraded or paused
+// by an LLM quota limit. It IS downloadable, and the ZIP carries a
+// SESSION_CONTEXT.md explaining what is unfinished.
+
+export type BuildStatus =
+    | 'pending'
+    | 'queued'
+    | 'running'
+    | 'done'
+    | 'done_with_context'
+    | 'failed'
+    | 'cancelled';
+
+export const DOWNLOADABLE_STATUSES: readonly string[] = ['done', 'done_with_context'];
+export const TERMINAL_STATUSES: readonly string[] = [
+    'done', 'done_with_context', 'failed', 'cancelled',
+];
+
+export const isDownloadable = (status?: string): boolean =>
+    !!status && DOWNLOADABLE_STATUSES.includes(status);
+
+export const isTerminal = (status?: string): boolean =>
+    !!status && TERMINAL_STATUSES.includes(status);
+
 // ── Project types ──────────────────────────────────────────────────────────────
 
 export interface Project {
@@ -8,7 +33,7 @@ export interface Project {
     app_name?:         string;
     app_type?:         string;
     complexity?:       string;
-    status:            string;
+    status:            BuildStatus | string;
     debug_score?:      string;
     review_score?:     number;
     test_score?:       string;
@@ -19,6 +44,9 @@ export interface Project {
     prompt_tokens?:     number;
     completion_tokens?: number;
     total_tokens?:      number;
+    // Phase 21: why a build ended as done_with_context, and how far it got
+    completion_reason?: string | null;
+    progress_percent?:  number | null;
 }
 
 export interface ProjectList {
@@ -81,6 +109,10 @@ export interface JobStatus {
     debug_score?:  string;
     test_score?:   string;
     output_path?:  string;
+    // Phase 21
+    completion_reason?: string | null;
+    progress_percent?:  number | null;
+    downloadable?:      boolean;
 }
 
 export interface QueueStats {

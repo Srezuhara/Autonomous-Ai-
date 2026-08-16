@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api_platform.database import get_project, get_project_files, get_build_progress
+from api_platform.runner import DOWNLOADABLE_STATUSES
 
 # Import the canonical forbidden-file set from architect so the two lists
 # are always in sync — no separate definition to maintain.
@@ -59,10 +60,18 @@ async def download_project_zip(build_id: str):
     if not project:
         raise HTTPException(status_code=404, detail=f"Project {build_id} not found")
 
-    if project["status"] not in ("done", "failed"):
+    # Phase 21: done_with_context builds are downloadable too. They contain
+    # usable code plus a SESSION_CONTEXT.md explaining what is unfinished —
+    # refusing them would strand the user's work, which is exactly the failure
+    # mode Phase 21 exists to remove.
+    if project["status"] not in DOWNLOADABLE_STATUSES:
         raise HTTPException(
             status_code=400,
-            detail=f"Project is still {project['status']}. Wait for build to complete.",
+            detail=(
+                f"Project is {project['status']}, so there are no packaged files "
+                "to download yet. Builds can be downloaded once they reach "
+                f"one of: {', '.join(DOWNLOADABLE_STATUSES)}."
+            ),
         )
 
     output_path = project.get("output_path")
@@ -90,6 +99,9 @@ async def download_project_zip(build_id: str):
         "complexity":       project.get("complexity"),
         "prompt":           project.get("prompt"),
         "status":           project.get("status"),
+        # Phase 21: why the build ended this way, and how far it got
+        "completion_reason": project.get("completion_reason"),
+        "progress_percent":  project.get("progress_percent"),
         "review_score":     project.get("review_score"),
         "debug_score":      project.get("debug_score"),
         "test_score":       project.get("test_score"),
@@ -157,6 +169,16 @@ async def download_project_zip(build_id: str):
             zf.writestr(setup_arcname, setup_content)
             file_count += 1
 
+        # ── Phase 21: guarantee a handoff document for degraded builds ────────
+        # The rglob sweep above already picks up SESSION_CONTEXT.md when the
+        # pipeline wrote it. This fallback covers the case where the pipeline
+        # crashed before it could — the user still gets an explanation instead
+        # of a silently incomplete ZIP.
+        context_arcname = root_folder + "SESSION_CONTEXT.md"
+        if project["status"] == "done_with_context" and context_arcname not in added_arcs:
+            zf.writestr(context_arcname, _minimal_context_fallback(project))
+            file_count += 1
+
         # Finalize metadata (include skipped count for transparency)
         metadata["file_count"]         = file_count
         metadata["forbidden_skipped"]  = skipped_forbidden
@@ -179,6 +201,42 @@ async def download_project_zip(build_id: str):
             "X-Forbidden-Skipped": str(skipped_forbidden),
         },
     )
+
+
+# ── Phase 21: last-resort handoff note ────────────────────────────────────────
+
+def _minimal_context_fallback(project: dict) -> str:
+    """
+    Written into the ZIP only when a done_with_context build has no
+    SESSION_CONTEXT.md on disk (pipeline crashed before writing one).
+    """
+    progress = project.get("progress_percent")
+    progress_str = f"{progress:.0f}%" if isinstance(progress, (int, float)) else "unknown"
+    return f"""# 🧩 Session Context — {project.get('app_name') or 'project'}
+
+> This build did not finish cleanly, but the code generated so far is included
+> in this ZIP.
+
+| | |
+|---|---|
+| **Status** | `{project.get('status')}` |
+| **Progress** | {progress_str} |
+| **Reason** | {project.get('completion_reason') or 'not recorded'} |
+| **Review score** | {project.get('review_score') or '—'} |
+| **Debug score** | {project.get('debug_score') or '—'} |
+| **Test score** | {project.get('test_score') or '—'} |
+
+## What to do next
+
+1. Read `SETUP.md` in this ZIP and follow the backend setup steps.
+2. Run the backend — any file that fails to import is where the build stopped.
+3. If the build was paused by an LLM quota limit, wait for the daily reset (or add
+   fresh `GROQ_API_KEY` values and call `POST /admin/reset-keys`), then submit the
+   same prompt again for a complete run.
+
+*The detailed handoff document could not be generated for this build, so this
+summary was assembled from the build record at download time.*
+"""
 
 
 # ── SETUP.md helpers ──────────────────────────────────────────────────────────

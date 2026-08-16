@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { BASE_URL } from '../api/client';
+import { BASE_URL, isTerminal } from '../api/client';
 
 export interface ProgressStep {
     step:      number;
@@ -176,7 +176,9 @@ export function useBuildProgress(buildId: string | undefined) {
                     timestamp: s.at,
                 }));
 
-                if (['done', 'failed', 'cancelled'].includes(status)) {
+                // Phase 21: done_with_context is terminal too — without it the
+                // page polls forever on a build that already finished.
+                if (isTerminal(status)) {
                     setBuildDone(true);
                     setWsStatus('done');
                 }

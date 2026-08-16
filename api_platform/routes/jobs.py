@@ -4,7 +4,11 @@ api_platform/routes/jobs.py  (Phase 14 - fixed + logs endpoint added)
 
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
-from api_platform.runner import job_runner
+from api_platform.runner import (
+    job_runner,
+    TERMINAL_STATUSES,
+    DOWNLOADABLE_STATUSES,
+)
 from api_platform.database import get_project, get_build_progress
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -98,6 +102,10 @@ async def get_job_status(build_id: str):
         "debug_score":  project.get("debug_score"),
         "test_score":   project.get("test_score"),
         "output_path":  project.get("output_path"),
+        # Phase 21: degraded/quota-paused completion metadata
+        "completion_reason": project.get("completion_reason"),
+        "progress_percent":  project.get("progress_percent"),
+        "downloadable":      status in DOWNLOADABLE_STATUSES,
     }
 
     if status == "running":
@@ -159,7 +167,7 @@ async def cancel_job(build_id: str):
     if not project:
         raise HTTPException(status_code=404, detail=f"Build {build_id} not found")
 
-    if project["status"] in ("done", "failed", "cancelled"):
+    if project["status"] in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=409,
             detail=f"Cannot cancel job with status '{project['status']}'"

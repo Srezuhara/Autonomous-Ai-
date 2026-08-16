@@ -26,6 +26,13 @@ import platform
 import sys
 from pathlib import Path
 
+# Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from tools.code_executor import run_command, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -107,6 +114,22 @@ _LOCAL_MODULE_PREFIXES: tuple[str, ...] = (
     "utils", "helpers", "config", "tests",
 )
 
+# ── Known incorrect or hallucinated PyPI packages ────────────────────────────
+# The LLM sometimes imports these incorrectly (e.g., 'import cors' or 'import jwt'),
+# but installing these packages from PyPI is a dead-end or conflicts with
+# other standard libraries/proper packages. The code must be rewritten instead.
+HALLUCINATED_OR_WRONG_PACKAGES: set[str] = {
+    "cors",          # Wrong! FastAPI uses fastapi.middleware.cors.CORSMiddleware
+    "jwt",           # Wrong! direct pip install jwt conflicts with PyJWT. Use PyJWT.
+    "crypto",        # Wrong! Use pycryptodome instead.
+    "sqlite",        # Standard library! Never pip install.
+    "sqlite3",       # Standard library! Never pip install.
+    "postgres",      # Wrong! Use psycopg2-binary instead.
+    "postgresql",    # Wrong! Use psycopg2-binary instead.
+    "mysql",         # Wrong! Use pymysql or mysqlclient instead.
+    "pydantic_core", # Wrong! Internal binary dependency of pydantic.
+}
+
 
 def _is_local_module(package: str) -> bool:
     """Return True if the package name looks like a local project module."""
@@ -138,12 +161,12 @@ def pip_install(package: str) -> ExecutionResult:
     lower = clean.lower().replace("-", "_")
 
     # Guard 1: local module name masquerading as a package
-    if _is_local_module(clean):
+    if _is_local_module(clean) or lower in HALLUCINATED_OR_WRONG_PACKAGES:
         msg = (
-            f"'{clean}' is a local project module, not a PyPI package. "
+            f"'{clean}' is a local module or incorrect/hallucinated package. "
             f"Fix the import path in the source file instead of trying to install it."
         )
-        logger.warning(f"⏭️  Skipping local module: {clean}")
+        logger.warning(f"⏭️  Skipping local/hallucinated package: {clean}")
         return ExecutionResult(success=False, stdout="", stderr=msg, returncode=-1)
 
     # Guard 2: heavy package that always times out
@@ -247,9 +270,14 @@ def extract_missing_package(error_text: str) -> str | None:
             # Handle submodule case: 'package.submodule' → 'package'
             root = raw.split(".")[0]
 
-            # Phase 18: filter out local module names
-            if _is_local_module(raw) or _is_local_module(root):
-                logger.debug(f"extract_missing_package: '{raw}' looks like a local module, skipping")
+            # Phase 18: filter out local module names & known hallucinated packages
+            if (
+                _is_local_module(raw)
+                or _is_local_module(root)
+                or raw.lower() in HALLUCINATED_OR_WRONG_PACKAGES
+                or root.lower() in HALLUCINATED_OR_WRONG_PACKAGES
+            ):
+                logger.debug(f"extract_missing_package: '{raw}' looks like a local or incorrect package, skipping")
                 return None
 
             return root
@@ -298,5 +326,20 @@ if __name__ == "__main__":
     print("\n--- Test 6: pip install (already installed package) ---")
     result3 = pip_install("requests")
     print(result3)
+
+    print("\n--- Test 7: hallucinated package detection ---")
+    error_cors = "ModuleNotFoundError: No module named 'cors'"
+    pkg_cors = extract_missing_package(error_cors)
+    print(f"Extracted: '{pkg_cors}' (should be None)")
+    assert pkg_cors is None, f"Should have been None! Got {pkg_cors}"
+    
+    error_jwt = "ModuleNotFoundError: No module named 'jwt'"
+    pkg_jwt = extract_missing_package(error_jwt)
+    print(f"Extracted: '{pkg_jwt}' (should be None)")
+    assert pkg_jwt is None, f"Should have been None! Got {pkg_jwt}"
+
+    result_cors = pip_install("cors")
+    print(f"cors install blocked: {not result_cors.success}")
+    assert not result_cors.success
 
     print("\n✅ All dependency_installer tests passed!")

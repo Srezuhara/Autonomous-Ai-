@@ -20,8 +20,16 @@ Why not just use --reload-exclude?
     uvicorn's --reload-exclude CLI flag only appeared in recent versions and
     the glob matching is tricky.  This script is more reliable across versions.
 """
+import sys
 import argparse
 import uvicorn
+
+# Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 
 def main():
@@ -64,17 +72,17 @@ def main():
     ]
 
     print(f"""
-╔══════════════════════════════════════════════════════╗
-║         AI App Builder Platform — Starting           ║
-╠══════════════════════════════════════════════════════╣
-║  Host:    {args.host:<43}║
-║  Port:    {args.port:<43}║
-║  Reload:  {str(reload):<43}║
-║  Workers: {args.workers:<43}║
-╠══════════════════════════════════════════════════════╣
-║  IMPORTANT: generated_projects/ is EXCLUDED from     ║
-║  the file watcher so builds won't be interrupted.    ║
-╚══════════════════════════════════════════════════════╝
++------------------------------------------------------+
+|         AI App Builder Platform — Starting           |
++------------------------------------------------------+
+|  Host:    {args.host:<43}|
+|  Port:    {args.port:<43}|
+|  Reload:  {str(reload):<43}|
+|  Workers: {args.workers:<43}|
++------------------------------------------------------+
+|  IMPORTANT: generated_projects/ is EXCLUDED from     |
+|  the file watcher so builds won't be interrupted.    |
++------------------------------------------------------+
 """)
 
     uvicorn_kwargs = dict(

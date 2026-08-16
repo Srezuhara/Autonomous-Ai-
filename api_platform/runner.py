@@ -49,6 +49,16 @@ from api_platform.database import (
 
 logger = logging.getLogger(__name__)
 
+# ── Phase 21: build status vocabulary ─────────────────────────────────────────
+# done               — every verification gate clean
+# done_with_context  — usable code exists but the build was degraded or paused
+#                      by quota; SESSION_CONTEXT.md explains what to do next.
+#                      Downloadable, exactly like `done`.
+# failed             — crashed before producing any usable code
+# cancelled          — user cancelled
+DOWNLOADABLE_STATUSES = ("done", "done_with_context")
+TERMINAL_STATUSES     = ("done", "done_with_context", "failed", "cancelled")
+
 
 # ── Safe score helpers ────────────────────────────────────────────────────────
 
@@ -261,7 +271,7 @@ class JobRunner:
         project = get_project(build_id)
         if not project:
             return {"success": False, "reason": "not_found"}
-        if project["status"] in ("done", "failed", "cancelled"):
+        if project["status"] in TERMINAL_STATUSES:
             return {"success": False, "reason": f"already_{project['status']}"}
 
         with self._lock:
@@ -364,6 +374,7 @@ class JobRunner:
 
         result         = None
         pipeline_error = None
+        quota_error    = None
 
         try:
             from agents.pipeline import Pipeline, PipelineCancelledError
@@ -392,8 +403,24 @@ class JobRunner:
             result = pipeline.run(prompt)
 
         except Exception as exc:
-            pipeline_error = exc
-            logger.exception(f"❌ Build {build_id[:8]} pipeline failed: {exc}")
+            # Phase 21: a quota error that escapes the pipeline is NOT a build
+            # failure — the pipeline already packaged whatever it generated.
+            # Record it separately so the status branch below can mark the build
+            # done_with_context instead of discarding it as failed.
+            try:
+                from llm_client import GroqDailyQuotaError
+                is_quota = isinstance(exc, GroqDailyQuotaError)
+            except Exception:
+                is_quota = False
+
+            if is_quota:
+                quota_error = exc
+                logger.error(
+                    f"🔑 Build {build_id[:8]} stopped on LLM daily quota: {exc}"
+                )
+            else:
+                pipeline_error = exc
+                logger.exception(f"❌ Build {build_id[:8]} pipeline failed: {exc}")
 
         # ── Collect token usage regardless of cancel/fail/success ─────────────
         token_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -437,6 +464,9 @@ class JobRunner:
         intent       = {}
         arch         = {}
         output_path  = None
+        # Phase 21: completion metadata persisted for every outcome
+        completion_reason = ""
+        progress_percent  = None
 
         if result is not None:
             try:
@@ -471,16 +501,29 @@ class JobRunner:
                     debug_results=debug_results_list,
                 )
 
-                import config
-                from pathlib import Path
-                root_folder = arch.get("root_folder") or intent.get("app_name", "project")
-                output_path = str(Path(config.OUTPUT_DIR) / root_folder)
                 logger.info(
                     f"[{build_id[:8]}] Scores — "
                     f"review={review_score}, debug={debug_score!r}, test={test_score!r}"
                 )
             except Exception as score_exc:
                 logger.exception(f"[{build_id[:8]}] Score extraction error: {score_exc}")
+
+            # Phase 21: output_path and completion metadata are computed OUTSIDE
+            # the score try-block. A done_with_context build must always carry an
+            # output_path — the download route refuses without one, which would
+            # defeat the entire point of packaging a partial build.
+            try:
+                import config
+                from pathlib import Path
+                arch        = arch   or _safe_arch(result, build_id)
+                intent      = intent or _safe_intent(result, build_id)
+                root_folder = arch.get("root_folder") or intent.get("app_name", "project")
+                output_path = str(Path(config.OUTPUT_DIR) / root_folder)
+            except Exception as path_exc:
+                logger.exception(f"[{build_id[:8]}] Output path resolution failed: {path_exc}")
+
+            completion_reason = getattr(result, "completion_reason", "") or ""
+            progress_percent  = getattr(result, "progress_percent", None)
 
         # ── Write final status to DB ──────────────────────────────────────────
         try:
@@ -493,17 +536,42 @@ class JobRunner:
                     prompt_tokens     = token_usage["prompt_tokens"],
                     completion_tokens = token_usage["completion_tokens"],
                     total_tokens      = token_usage["total_tokens"],
+                    completion_reason = f"{type(pipeline_error).__name__}: {pipeline_error}"[:500],
                 )
                 self._progress_callback(
                     build_id, -1, "error", "failed",
                     {"error": str(pipeline_error)}
                 )
             else:
+                # ── Phase 21: four-way terminal status ────────────────────────
+                # done_with_context means "usable code exists, but read
+                # SESSION_CONTEXT.md first" — it is downloadable, unlike failed.
                 is_cancelled = getattr(result, "cancelled", False) if result else False
-                final_status = (
-                    "cancelled" if is_cancelled
-                    else ("done" if (result and result.success) else "failed")
+                is_degraded  = bool(
+                    result and (
+                        getattr(result, "degraded", False)
+                        or getattr(result, "quota_paused", False)
+                    )
                 )
+
+                if is_cancelled:
+                    final_status = "cancelled"
+                elif is_degraded:
+                    final_status = "done_with_context"
+                elif result and result.success:
+                    final_status = "done"
+                else:
+                    final_status = "failed"
+
+                # A quota error that escaped the pipeline entirely (result is
+                # None or unmarked) still counts as a context handoff when the
+                # pipeline managed to produce an output directory.
+                if quota_error is not None and final_status == "failed":
+                    final_status      = "done_with_context"
+                    completion_reason = completion_reason or (
+                        f"LLM daily quota exhausted: {quota_error}"
+                    )
+
                 update_project(
                     build_id,
                     status            = final_status,
@@ -519,11 +587,30 @@ class JobRunner:
                     prompt_tokens     = token_usage["prompt_tokens"],
                     completion_tokens = token_usage["completion_tokens"],
                     total_tokens      = token_usage["total_tokens"],
+                    completion_reason = completion_reason[:500] or None,
+                    progress_percent  = progress_percent,
                 )
-                logger.info(
-                    f"✅ Build {build_id[:8]} → {final_status} in {duration:.1f}s "
-                    f"({token_usage['total_tokens']:,} tokens)"
-                )
+
+                if final_status == "done_with_context":
+                    logger.warning(
+                        f"⚠️  Build {build_id[:8]} → done_with_context in {duration:.1f}s "
+                        f"({progress_percent or 0:.0f}% complete, "
+                        f"{token_usage['total_tokens']:,} tokens) — {completion_reason}"
+                    )
+                    self._progress_callback(
+                        build_id, -1, "complete", final_status,
+                        {
+                            "reason":               completion_reason,
+                            "progress_percent":     progress_percent,
+                            "session_context_path": getattr(result, "session_context_path", ""),
+                            "downloadable":         True,
+                        },
+                    )
+                else:
+                    logger.info(
+                        f"✅ Build {build_id[:8]} → {final_status} in {duration:.1f}s "
+                        f"({token_usage['total_tokens']:,} tokens)"
+                    )
         except Exception as db_exc:
             logger.exception(f"[{build_id[:8]}] DB update failed: {db_exc}")
         finally:

@@ -20,6 +20,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file
+from llm_client import GroqDailyQuotaError
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,18 @@ Every suggestion MUST include a specific code fix."""
                 suggestions=data.get("suggestions", []),
                 summary=data.get("summary", ""),
             )
+        # Phase 21 fix: a dead daily quota is NOT a per-file review failure.
+        # Swallowing it here made the reviewer march through every remaining
+        # file producing empty results, so the build finished reporting a
+        # completion reason that had nothing to do with quota. Let it escape
+        # to the pipeline's quota interception, which packages the work and
+        # writes SESSION_CONTEXT.md honestly.
+        except GroqDailyQuotaError:
+            logger.error(
+                f"LLM daily quota exhausted while reviewing {file_path} — "
+                "aborting review step so the build can hand off cleanly."
+            )
+            raise
         except Exception as e:
             logger.error(f"Review failed for {file_path}: {e}")
             return ReviewResult(file_path=file_path, error=str(e))

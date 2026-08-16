@@ -7,7 +7,7 @@ import {
   Zap, ChevronDown, ChevronRight, AlertTriangle
 } from 'lucide-react';
 import { useProjectDetail } from '../hooks/useQueries';
-import { api } from '../api/client';
+import { api, isDownloadable } from '../api/client';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import './ProjectDetail.css';
 
@@ -353,7 +353,7 @@ export default function ProjectDetail() {
         </div>
 
         <div className="pd-actions">
-          {project.status === 'done' && (
+          {isDownloadable(project.status) && (
             <button
               className="btn btn-primary"
               onClick={() => api.downloadZip(id!)}
@@ -401,8 +401,28 @@ export default function ProjectDetail() {
         )}
       </div>
 
-      {/* Score gauges — only for completed builds */}
-      {project.status === 'done' && (
+      {/* Phase 21: explain a degraded / quota-paused completion */}
+      {project.status === 'done_with_context' && (
+        <div className="pd-context-banner card">
+          <AlertTriangle size={16} className="pd-context-icon" />
+          <div>
+            <strong>This build finished with a handoff document.</strong>
+            <p>
+              {project.completion_reason ||
+                'The build produced usable code but did not complete every verification step.'}
+              {project.progress_percent != null &&
+                ` (${Math.round(project.progress_percent)}% of the pipeline completed.)`}
+            </p>
+            <p>
+              Download the ZIP and read <code>SESSION_CONTEXT.md</code> — it lists what
+              was generated, what is missing, and how to finish the build.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Score gauges — shown for any build that produced packaged code */}
+      {isDownloadable(project.status) && (
         <div className="pd-scores">
           <ScoreGauge
             label="Review Score"

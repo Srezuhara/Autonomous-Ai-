@@ -1,3 +1,34 @@
+# =============================================================================
+# agents/debugger.py — RECOVERED BUILD  (see provenance below)
+# =============================================================================
+# The 959-line working-tree version of this file was overwritten on
+# 2026-08-16 00:34 by a 414-line variant. The original source is not in git and
+# was not recoverable from VS Code local history (its only entry is a byte-copy
+# of the 414-line replacement). This file reconstructs it from three sources:
+
+#   [GIT]     771 lines — verbatim from `git show HEAD:agents/debugger.py`.
+#                         This is genuine original code, unmodified.
+
+#   [VERBATIM] Read directly from the 959-line file before it was lost:
+#                - _accept_generated_fix()          (complete method)
+#                - the 2 _apply_structural_import_repairs() calls in run()
+#                - the 2 _accept_generated_fix() guards in _debug_file()
+
+#   [REBUILT]  Reconstructed from bytecode constants in
+#              agents/__pycache__/debugger.cpython-312.pyc (compiled 2026-05-29
+#              from the lost version — confirmed: it contains all five methods
+#              absent from HEAD). Docstrings, regex patterns, log messages and
+#              local variable names are recovered exactly from that bytecode;
+#              the control flow around them is inferred and is NOT guaranteed to
+#              match the original statement-for-statement:
+#                - _apply_structural_import_repairs()
+#                - _strip_concatenated_file_sections()
+#                - _build_local_import_graph()
+#                - _break_obvious_cycles()
+
+# REVIEW THE [REBUILT] METHODS BEFORE RELYING ON THEM. They are the author's
+# best reconstruction, not a byte-exact recovery. Everything else is original.
+# =============================================================================
 """
 agents/debugger.py — Phase 20 (Issue 7 fix)
 ============================================
@@ -167,6 +198,10 @@ class Debugger(BaseAgent):
             if self._inject_syspath(fp):
                 logger.info(f"  💉 Injected sys.path: {fp}")
 
+        structural_fixes = self._apply_structural_import_repairs(py_files)
+        for fix in structural_fixes:
+            logger.info(f"  Structural import repair: {fix}")
+
         results = {}
         for fp in py_files:
             r = self._debug_file(fp)
@@ -176,6 +211,9 @@ class Debugger(BaseAgent):
         failed = [fp for fp, r in results.items() if not r.success]
         if failed:
             logger.info(f"🔁 Pass 2: re-trying {len(failed)} failed files...")
+            structural_fixes = self._apply_structural_import_repairs(py_files)
+            for fix in structural_fixes:
+                logger.info(f"  Pass 2 structural repair: {fix}")
             for fp in failed:
                 r2 = self._debug_file(fp)
                 if r2.success:
@@ -190,6 +228,160 @@ class Debugger(BaseAgent):
         passed = sum(1 for r in final if r.success)
         logger.info(f"🐛 Debug complete: {passed}/{len(final)} files passing")
         return final
+
+    # ── Structural import repair ──────────────────────────────────────────────
+    # [REBUILT] from debugger.cpython-312.pyc constants. Docstrings, regexes and
+    # log strings are exact; surrounding control flow is reconstructed.
+
+    def _apply_structural_import_repairs(self, file_paths: list[str]) -> list[str]:
+        """
+        Deterministically repair import structures that LLM retries handle badly.
+
+        The common failure mode is services.py importing feature modules which
+        themselves import services.py. That creates a circular import cascade
+        where every file fails even though one service-layer import is the root.
+        """
+        fixes: list[str] = []
+        local_modules = {Path(fp).stem for fp in file_paths}
+
+        # 1. Drop copies of other files that the LLM pasted into this one.
+        for fp in file_paths:
+            fixes.extend(self._strip_concatenated_file_sections(fp))
+
+        # 2. services.py must not import sibling feature modules (only models).
+        for fp in file_paths:
+            if Path(fp).name != "services.py":
+                continue
+            try:
+                content = read_file(fp)
+            except Exception:
+                continue
+
+            new_lines = []
+            changed = False
+            for line in content.splitlines(keepends=True):
+                from_match = re.match(r"from\s+([A-Za-z_][\w]*)\s+import\s+(.+)", line)
+                import_match = re.match(r"import\s+([A-Za-z_][\w]*)\b", line)
+
+                module = None
+                if from_match:
+                    module = from_match.group(1)
+                elif import_match:
+                    module = import_match.group(1)
+
+                if (
+                    module
+                    and module in local_modules
+                    and module not in ("models",)
+                    and not line.lstrip().startswith("from .")
+                ):
+                    changed = True
+                    fixes.append(f"{fp}: removed service-layer import of {module}")
+                    continue
+
+                new_lines.append(line)
+
+            if changed:
+                create_file(fp, "".join(new_lines))
+
+        # 3. Break any remaining two-way local import cycles.
+        fixes.extend(self._break_obvious_cycles(file_paths, local_modules))
+        return fixes
+
+    def _strip_concatenated_file_sections(self, file_path: str) -> list[str]:
+        """Remove LLM-added copies of other files inside the target file."""
+        try:
+            content = read_file(file_path)
+        except Exception:
+            return []
+
+        current_name = Path(file_path).name
+        header_re = re.compile(r"^\s*#\s*(?:[\w_\-]+/)*backend/([^/\s]+\.py)\s*$")
+
+        lines = content.splitlines()
+        cut_at = None
+        for i, line in enumerate(lines):
+            match = header_re.match(line)
+            if match and match.group(1) != current_name:
+                cut_at = i
+                break
+
+        if cut_at is None:
+            return []
+
+        create_file(file_path, "\n".join(lines[:cut_at]).rstrip() + "\n")
+        return [f"{file_path}: removed concatenated code for other files"]
+
+    def _build_local_import_graph(
+        self, file_paths: list[str], local_modules: set[str]
+    ) -> dict[str, set[str]]:
+        """Map each local module to the set of local modules it imports."""
+        import ast
+
+        graph: dict[str, set[str]] = {}
+        module_to_file = {Path(fp).stem: fp for fp in file_paths}
+
+        for fp in file_paths:
+            try:
+                tree = ast.parse(read_file(fp))
+            except Exception:
+                continue
+
+            deps: set[str] = set()
+            for node in tree.body:
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    base = node.module.split(".")[0]
+                    if base in module_to_file:
+                        deps.add(base)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        base = alias.name.split(".")[0]
+                        if base in module_to_file:
+                            deps.add(base)
+
+            graph[Path(fp).stem] = deps
+
+        return graph
+
+    def _break_obvious_cycles(
+        self, file_paths: list[str], local_modules: set[str]
+    ) -> list[str]:
+        """Break two-way local imports by removing non-model imports from services.py."""
+        fixes: list[str] = []
+        graph = self._build_local_import_graph(file_paths, local_modules)
+        module_to_file = {Path(fp).stem: fp for fp in file_paths}
+
+        for src_name, deps in graph.items():
+            for dep_name in sorted(deps):
+                # Only a genuine two-way edge is a cycle worth breaking.
+                if src_name not in graph.get(dep_name, set()):
+                    continue
+                # models.py is the leaf of the hierarchy — always cut the other side.
+                if src_name == "models":
+                    continue
+
+                target = module_to_file.get(src_name)
+                other = dep_name
+                if not target:
+                    continue
+
+                try:
+                    content = read_file(target)
+                except Exception:
+                    continue
+
+                new_contents = re.sub(
+                    rf"^\s*(from|import)\s+{re.escape(other)}\b.*\n?",
+                    "",
+                    content,
+                    flags=re.MULTILINE,
+                )
+                if new_contents != content:
+                    create_file(target, new_contents)
+                    fixes.append(f"{target}: broke circular import with {other}")
+                    graph[src_name].discard(other)
+
+        return fixes
 
     # ── Dotted-import rewriter ────────────────────────────────────────────────
 
@@ -657,7 +849,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                     continue
                 if attempt < MAX_ATTEMPTS:
                     fixed = self._generate_fix(file_to_fix, error_text)
-                    if fixed:
+                    if fixed and self._accept_generated_fix(file_to_fix, fixed):
                         create_file(file_to_fix, fixed)
                         result.fixes_applied.append(f"LLM fix on {file_to_fix} attempt {attempt}")
                         self._preflight_fix(file_to_fix)
@@ -707,7 +899,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
             if attempt < MAX_ATTEMPTS:
                 fixed = self._generate_fix(file_to_fix, error_text)
-                if fixed:
+                if fixed and self._accept_generated_fix(file_to_fix, fixed):
                     install_match = re.search(r"#\s*INSTALL:\s*([A-Za-z0-9_\-]+)", fixed)
                     if install_match:
                         pkg = install_match.group(1).strip()
@@ -720,6 +912,25 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
         result.final_error = error_text
         return result
+
+    def _accept_generated_fix(self, file_path: str, fixed: str) -> bool:
+        """Reject LLM fixes that paste multiple files into one module."""
+        try:
+            current = read_file(file_path)
+        except Exception:
+            current = ""
+
+        file_header_count = len(
+            re.findall(r"^\s*#\s*(?:[\w_\-]+/)*backend/[^/\s]+\.py\s*$", fixed, re.MULTILINE)
+        )
+        too_large = bool(current) and len(fixed) > max(len(current) * 1.6, len(current) + 1800)
+        if file_header_count >= 2 or too_large:
+            logger.warning(
+                f"  Rejecting LLM fix for {file_path}: appears to contain "
+                "multiple files or an oversized rewrite."
+            )
+            return False
+        return True
 
     def _generate_fix(self, file_path: str, error_text: str) -> str | None:
         try:

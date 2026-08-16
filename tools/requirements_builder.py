@@ -151,6 +151,7 @@ IMPORT_TO_PYPI: dict[str, str] = {
     "cv2":                  "opencv-python-headless>=4.9.0",
     "seaborn":              "seaborn>=0.13.0",
     "plotly":               "plotly>=5.18.0",
+    "nltk":                 "nltk>=3.8.0",
 
     # ── ISSUE 6: Reporting / document generation ──────────────────────────────
     "reportlab":            "reportlab>=4.0.0",

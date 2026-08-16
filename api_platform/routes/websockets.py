@@ -12,6 +12,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api_platform.database import get_project, get_build_progress
+from api_platform.runner import TERMINAL_STATUSES
 
 router = APIRouter(tags=["websocket"])
 
@@ -72,7 +73,7 @@ async def websocket_progress(websocket: WebSocket, build_id: str):
         return
 
     # If already finished, send history and close
-    if project["status"] in ("done", "failed", "cancelled"):
+    if project["status"] in TERMINAL_STATUSES:
         await _send_full_history(websocket, build_id, project)
         await websocket.send_json({
             "type": "complete",
@@ -110,7 +111,7 @@ async def websocket_progress(websocket: WebSocket, build_id: str):
                 await websocket.send_json({"type": "error", "message": "Project disappeared"})
                 break
 
-            if project["status"] in ("done", "failed", "cancelled"):
+            if project["status"] in TERMINAL_STATUSES:
                 # Drain any final queued events
                 try:
                     while True:

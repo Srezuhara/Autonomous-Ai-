@@ -11,6 +11,13 @@ import sys
 import time
 from pathlib import Path
 
+# Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table

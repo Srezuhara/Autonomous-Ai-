@@ -10,6 +10,13 @@ import time
 import urllib.request
 import urllib.error
 
+# Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 BASE = "http://localhost:8000"
 PASS = []
 FAIL = []

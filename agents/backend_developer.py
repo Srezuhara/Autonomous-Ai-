@@ -235,6 +235,18 @@ Purpose: {description}
 PROJECT STRUCTURE (all planned files):
 {arch_summary}
 
+IMPORT DIRECTION CONTRACT:
+- models.py may not import any local project modules.
+- services.py may import models.py only; it must not import routes.py, main.py, app.py,
+  or sibling feature modules that import services.py.
+- routes.py may import services.py and models.py.
+- main.py may import routes.py only for the API router.
+- Never create circular imports. Never include code for any other file inside this file.
+- Do not invent a different domain. If the app is a CSV/PDF report generator, do not
+  create weather models, weather routes, or weather services.
+- If the user says a UI is optional, choose the planned primary entrypoint and do not
+  wire Streamlit and FastAPI together unless both are explicitly required.
+
 ALREADY WRITTEN FILES (import context — use these exact module names):
 {context if context else "None yet — this is the first file."}
 
