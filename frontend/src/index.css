@@ -1,6 +1,7 @@
 /* Entry point — imports design system */
 @import './styles/tokens.css';
 @import './styles/globals.css';
+@import './styles/primitives.css';
 
 /* Tailwind (keep for Landing page compatibility) */
 @import "tailwindcss";

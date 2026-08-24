@@ -1,0 +1,188 @@
+/* ============================================
+   CHART SURFACES
+   Grid and axes stay recessive; only data has
+   saturation. Text always wears text tokens.
+   ============================================ */
+
+.viz-card {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.022) 0%, rgba(255,255,255,0.005) 100%),
+    var(--color-bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-inset-hairline);
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  min-width: 0;
+}
+
+/* Full-bleed row inside .charts-grid. The class was referenced by the trend
+   chart before it existed, so the grid fell back to two equal columns and left
+   the third card stranded in a half-width row with dead space beside it. */
+.viz-card--wide { grid-column: 1 / -1; }
+
+@media (max-width: 800px) {
+  .viz-card--wide { grid-column: auto; }
+}
+
+.viz-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.viz-card__title {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.viz-card__hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin: 4px 0 0;
+}
+
+/* An empty state is a sentence, not a blank rectangle. */
+.viz-empty {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-lg);
+  max-width: 46ch;
+  margin-inline: auto;
+}
+
+/* ── Tooltip ─────────────────────────────── */
+
+.viz-tip {
+  background: rgba(14, 14, 20, 0.96);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-lg);
+  min-width: 132px;
+}
+
+.viz-tip__title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin: 0 0 6px;
+}
+
+.viz-tip__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.viz-tip__swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.viz-tip__name   { color: var(--text-secondary); }
+.viz-tip__value  {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: var(--font-medium);
+}
+
+/* ── Stacked part-to-whole bar ───────────── */
+
+.viz-stack { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.viz-stack__bar {
+  display: flex;
+  height: 12px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  /* The 2px gaps between segments come from this gap, which shows the card
+     surface through and keeps adjacent fills reading as separate marks. */
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.viz-stack__seg {
+  height: 100%;
+  min-width: 3px;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.viz-stack__bar:hover .viz-stack__seg { opacity: 0.55; }
+.viz-stack__bar .viz-stack__seg:hover { opacity: 1; }
+
+/* First and last segments round to match the track. */
+.viz-stack__seg:first-child { border-radius: var(--radius-full) 0 0 var(--radius-full); }
+.viz-stack__seg:last-child  { border-radius: 0 var(--radius-full) var(--radius-full) 0; }
+.viz-stack__seg:only-child  { border-radius: var(--radius-full); }
+
+/* ── Legend / value table ────────────────── */
+
+.viz-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-legend__item {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.viz-legend__item:last-child { border-bottom: none; }
+
+.viz-legend__swatch { width: 10px; height: 10px; border-radius: 3px; }
+
+.viz-legend__label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.viz-legend__value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  font-weight: var(--font-medium);
+}
+
+.viz-legend__pct {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  min-width: 30px;
+  text-align: right;
+}
+
+/* Direct value labels on bars — text token, never the series colour. */
+.viz-barlabel {
+  fill: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Recharts injects focus outlines on its wrappers; keep them from boxing the
+   whole surface while still allowing keyboard focus to be visible. */
+.viz-card .recharts-wrapper:focus,
+.viz-card .recharts-surface:focus { outline: none; }

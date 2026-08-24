@@ -1,52 +1,72 @@
 /* ============================================
-   DESIGN TOKENS — AI App Builder v3.0
-   Single source of truth for all design vars
+   DESIGN TOKENS — AI App Builder v4.0
+   Vibe archetype:   Ethereal Glass (SaaS / AI / Tech)
+   Layout archetype: Asymmetrical Bento
+   Single source of truth for all design vars.
+
+   Every v3 variable name is preserved so existing
+   stylesheets keep resolving — values are retuned,
+   new tokens are additive.
    ============================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Syne:wght@600;700;800&display=swap');
+/* Geist replaces Inter (banned: generic). Geist Mono replaces JetBrains.
+   Instrument Serif italic is the editorial accent — used sparingly for
+   emphasis words, never for body copy. */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap');
 
 :root {
-  /* ── Color Palette ─────────────────────── */
-  --color-bg-base:        #080B10;
-  --color-bg-surface:     #0D1117;
-  --color-bg-elevated:    #161B22;
-  --color-bg-overlay:     #1C2331;
-  --color-bg-hover:       rgba(255, 255, 255, 0.04);
+  /* ── Color Palette ───────────────────────
+     Deepest OLED black base. The old #080B10 was
+     a washed navy; true near-black makes the glass
+     hairlines and accent glow actually read.       */
+  --color-bg-base:        #050507;
+  --color-bg-surface:     #08080C;
+  --color-bg-elevated:    #0E0E14;
+  --color-bg-overlay:     #14141C;
+  --color-bg-hover:       rgba(255, 255, 255, 0.035);
 
-  /* Accent – Electric Indigo + Violet */
+  /* Accent – Electric Indigo → Violet */
   --color-accent-primary:   #7C6BFA;
   --color-accent-secondary: #A78BFA;
   --color-accent-tertiary:  #C4B5FD;
   --color-accent-glow:      rgba(124, 107, 250, 0.35);
   --color-accent-subtle:    rgba(124, 107, 250, 0.08);
 
+  /* Secondary accent for data-viz contrast pairs */
+  --color-accent-cyan:      #4FD1E8;
+  --color-accent-amber:     #F0B23E;
+
   /* Semantic Colors */
-  --color-success:      #22C55E;
-  --color-success-bg:   rgba(34, 197, 94, 0.08);
-  --color-warning:      #F59E0B;
-  --color-warning-bg:   rgba(245, 158, 11, 0.08);
-  --color-error:        #EF4444;
-  --color-error-bg:     rgba(239, 68, 68, 0.08);
-  --color-info:         #3B82F6;
-  --color-info-bg:      rgba(59, 130, 246, 0.08);
+  --color-success:      #34D399;
+  --color-success-bg:   rgba(52, 211, 153, 0.08);
+  --color-warning:      #F0B23E;
+  --color-warning-bg:   rgba(240, 178, 62, 0.08);
+  --color-error:        #FB7185;
+  --color-error-bg:     rgba(251, 113, 133, 0.08);
+  --color-info:         #60A5FA;
+  --color-info-bg:      rgba(96, 165, 250, 0.08);
 
   /* Text Hierarchy */
-  --text-primary:   #F0F6FC;
-  --text-secondary: #8B949E;
-  --text-tertiary:  #484F58;
+  --text-primary:   #F4F4F6;
+  --text-secondary: #9A9AA8;
+  --text-tertiary:  #55555F;
   --text-accent:    var(--color-accent-secondary);
-  --text-inverted:  #080B10;
+  --text-inverted:  #050507;
 
-  /* Borders */
-  --border-subtle:  rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.10);
-  --border-strong:  rgba(255, 255, 255, 0.18);
-  --border-accent:  rgba(124, 107, 250, 0.30);
+  /* Borders — hairlines only, never 1px solid gray */
+  --border-subtle:  rgba(255, 255, 255, 0.055);
+  --border-default: rgba(255, 255, 255, 0.09);
+  --border-strong:  rgba(255, 255, 255, 0.16);
+  --border-accent:  rgba(124, 107, 250, 0.28);
 
-  /* ── Typography ────────────────────────── */
-  --font-sans:  'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-display: 'Syne', 'Inter', sans-serif;
-  --font-mono:  'JetBrains Mono', 'Fira Code', monospace;
+  /* ── Typography ──────────────────────────
+     Geist is the UI voice. --font-display is the
+     same family at tight tracking; character comes
+     from scale and spacing, not a novelty face.   */
+  --font-sans:    'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-serif:   'Instrument Serif', ui-serif, Georgia, serif;
+  --font-mono:    'Geist Mono', ui-monospace, 'SF Mono', monospace;
 
   /* Type Scale (Major Third 1.25) */
   --text-xs:   0.75rem;   /* 12px */
@@ -59,10 +79,29 @@
   --text-4xl:  2.25rem;   /* 36px */
   --text-5xl:  3rem;      /* 48px */
 
+  /* Fluid display sizes — hero type that scales without media queries */
+  --text-display-sm: clamp(2.25rem, 1.4rem + 3.4vw, 3.5rem);
+  --text-display-md: clamp(2.75rem, 1.2rem + 6.2vw, 5.25rem);
+  /* Capped at 5.25rem, not 7rem: in the split hero the copy column is ~700px,
+     and a 112px face pushed the headline to four lines with "Ship" orphaned
+     on its own. This keeps it to three balanced lines.
+     The 2.25rem floor matters as much as the cap — at a 3rem floor the minimum
+     won on a 390px viewport and the headline overflowed the screen. */
+  --text-display-lg: clamp(2.25rem, 1rem + 6.4vw, 5.25rem);
+
+  /* Tracking — large type needs negative tracking to look engineered */
+  --tracking-display: -0.04em;
+  --tracking-tight:   -0.02em;
+  --tracking-normal:  0;
+  --tracking-wide:    0.02em;
+  --tracking-eyebrow: 0.2em;
+
   /* Line Heights */
-  --leading-tight:  1.25;
-  --leading-snug:   1.375;
-  --leading-normal: 1.5;
+  --leading-none:    1;
+  --leading-display: 0.95;
+  --leading-tight:   1.25;
+  --leading-snug:    1.375;
+  --leading-normal:  1.5;
   --leading-relaxed: 1.625;
 
   /* Font Weights */
@@ -83,6 +122,16 @@
   --space-10: 2.5rem;    /* 40px */
   --space-12: 3rem;      /* 48px */
   --space-16: 4rem;      /* 64px */
+  --space-20: 5rem;      /* 80px */
+  --space-24: 6rem;      /* 96px */
+  --space-32: 8rem;      /* 128px */
+
+  /* Macro-whitespace: sections breathe, but these are PER SIDE — two adjacent
+     sections sum to double. The first pass used 10rem/14rem, which put 320-450px
+     of nothing between blocks and read as a broken page rather than as generous
+     spacing. ~104px/144px per side lands in the py-24…py-40 range once summed. */
+  --section-gap:    clamp(3.5rem, 2.5rem + 3.4vw, 6.5rem);
+  --section-gap-lg: clamp(4.5rem, 3rem + 5vw, 9rem);
 
   /* ── Border Radius ─────────────────────── */
   --radius-sm:  6px;
@@ -90,24 +139,86 @@
   --radius-lg:  14px;
   --radius-xl:  20px;
   --radius-2xl: 28px;
+  --radius-3xl: 32px;
   --radius-full: 9999px;
 
-  /* ── Shadows ───────────────────────────── */
-  --shadow-sm:   0 1px 3px rgba(0,0,0,0.4);
-  --shadow-md:   0 4px 16px rgba(0,0,0,0.5);
-  --shadow-lg:   0 12px 40px rgba(0,0,0,0.6);
-  --shadow-glow: 0 0 24px var(--color-accent-glow);
+  /* Double-bezel: outer shell radius and its concentric inner core.
+     Inner = outer − shell padding, so the curves stay parallel. */
+  --bezel-pad:          6px;
+  --bezel-radius-outer: 28px;
+  --bezel-radius-inner: calc(var(--bezel-radius-outer) - var(--bezel-pad));
 
-  /* ── Transitions ───────────────────────── */
-  --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in:    cubic-bezier(0.4, 0, 1, 1);
-  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration-fast:   120ms;
-  --duration-normal: 220ms;
-  --duration-slow:   350ms;
+  /* ── Shadows ───────────────────────────
+     Diffuse and layered, never a harsh single drop. */
+  --shadow-sm:   0 1px 2px rgba(0,0,0,0.30);
+  --shadow-md:   0 8px 24px -8px rgba(0,0,0,0.55);
+  --shadow-lg:   0 24px 64px -16px rgba(0,0,0,0.70);
+  --shadow-glow: 0 0 40px -8px var(--color-accent-glow);
+  /* Inner highlight that makes a surface read as machined glass */
+  --shadow-inset-hairline: inset 0 1px 0 rgba(255,255,255,0.07);
+
+  /* ── Data-visualisation ────────────────
+     Stepped for the DARK chart surface (#0E0E14), not flipped from a light
+     palette. Verified with the dataviz validator:
+       lightness band  L 0.48–0.67  PASS
+       chroma floor    >= 0.1       PASS
+       CVD separation  worst adjacent 8.8 ΔE (protan)   PASS
+       normal vision   worst adjacent 19.2 ΔE           PASS
+       contrast        all >= 3:1 on surface            PASS
+     `cancelled` is intentionally NEUTRAL: a user-stopped build is not an error,
+     and keeping it achromatic removes a hue from the adjacent pairlist, which
+     is what let the remaining four clear the CVD check. */
+  --viz-done:      #0E9F6E;   /* good      */
+  --viz-degraded:  #C07E14;   /* warning   */
+  --viz-running:   #7C6BFA;   /* accent    */
+  --viz-failed:    #F43F5E;   /* critical  */
+  --viz-cancelled: #5A5A66;   /* neutral   */
+
+  /* Sequential single hue for magnitude comparisons (bar length already
+     encodes the value, so this stays one hue rather than a rainbow). */
+  --viz-seq:       #7C6BFA;
+  --viz-seq-soft:  rgba(124, 107, 250, 0.16);
+
+  /* Recessive chart furniture — grid and axes must never compete with data. */
+  --viz-grid:      rgba(255, 255, 255, 0.055);
+  --viz-axis:      #55555F;
+  /* The gap colour between stacked segments — matches the card surface. */
+  --viz-gap:       var(--color-bg-elevated);
+
+  /* ── Motion ────────────────────────────
+     No bare ease / linear anywhere. These are the
+     only curves the app is allowed to use.        */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);      /* decelerate, default */
+  --ease-in:     cubic-bezier(0.4, 0, 1, 1);
+  --ease-inout:  cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-glide:  cubic-bezier(0.32, 0.72, 0, 1);     /* long, heavy, premium */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);  /* slight overshoot */
+
+  --duration-instant: 90ms;
+  --duration-fast:    150ms;
+  --duration-normal:  260ms;
+  --duration-slow:    420ms;
+  --duration-glide:   700ms;
 
   /* ── Layout ────────────────────────────── */
-  --sidebar-width:    240px;
-  --content-max-width: 1120px;
-  --page-padding:     var(--space-8);
+  --sidebar-width:     240px;
+  --content-max-width: 1180px;
+  --content-wide:      1440px;
+  --page-padding:      var(--space-8);
+}
+
+/* ── Reduced motion ──────────────────────────
+   Mandatory. Kills duration while preserving end
+   state so no layout depends on an animation
+   having run. Applies to Motion/Framer too, which
+   reads the same media query.                     */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,0 +1,300 @@
+/* ============================================
+   PRIMITIVES — the shared visual vocabulary
+   Pairs with components/ui/primitives.tsx
+   ============================================ */
+
+/* ── Ambient mesh background ─────────────────
+   Fixed and pointer-events-none so it never
+   participates in scrolling or hit-testing.
+   Static gradients: one paint, then zero cost.
+   This replaced a WebGL shader that ran a rAF
+   loop for the whole session.                  */
+
+.ambient-mesh {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background: var(--color-bg-base);
+}
+
+.ambient-mesh__orb {
+  position: absolute;
+  border-radius: 50%;
+  /* A large blur radius on a *fixed* element is composited once. */
+  filter: blur(90px);
+  opacity: calc(0.85 * var(--mesh-i, 1));
+}
+
+.ambient-mesh__orb--indigo {
+  width: 46vw;
+  height: 46vw;
+  min-width: 420px;
+  min-height: 420px;
+  top: -14vw;
+  left: -8vw;
+  background: radial-gradient(circle at 50% 50%,
+    rgba(124, 107, 250, 0.42) 0%,
+    rgba(124, 107, 250, 0.14) 45%,
+    transparent 70%);
+}
+
+.ambient-mesh__orb--violet {
+  width: 38vw;
+  height: 38vw;
+  min-width: 340px;
+  min-height: 340px;
+  top: 28vh;
+  right: -10vw;
+  background: radial-gradient(circle at 50% 50%,
+    rgba(167, 139, 250, 0.34) 0%,
+    rgba(167, 139, 250, 0.10) 48%,
+    transparent 72%);
+}
+
+.ambient-mesh__orb--cyan {
+  width: 34vw;
+  height: 34vw;
+  min-width: 300px;
+  min-height: 300px;
+  bottom: -12vw;
+  left: 24vw;
+  background: radial-gradient(circle at 50% 50%,
+    rgba(79, 209, 232, 0.20) 0%,
+    rgba(79, 209, 232, 0.06) 50%,
+    transparent 74%);
+}
+
+/* Fine grain — kills the banding that large soft gradients produce on
+   8-bit displays, and adds a physical, non-digital texture. */
+.ambient-mesh__grain {
+  position: absolute;
+  inset: -50%;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* A faint vignette keeps long-form text legible over the orbs without
+   flattening them back into black. Weighted to the bottom, where copy runs
+   densest; the top stays open so the hero glow is visible. */
+.ambient-mesh::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg,
+    rgba(5, 5, 7, 0.10) 0%,
+    rgba(5, 5, 7, 0.00) 26%,
+    rgba(5, 5, 7, 0.34) 100%);
+}
+
+/* ── Double bezel ────────────────────────────
+   Outer shell (tray) + inner core (glass plate).
+   Concentric radii are the whole point.        */
+
+.bezel {
+  padding: var(--bezel-pad);
+  border-radius: var(--bezel-radius-outer);
+  background: rgba(255, 255, 255, 0.022);
+  border: 1px solid var(--border-subtle);
+  position: relative;
+  transition:
+    transform var(--duration-normal) var(--ease-glide),
+    border-color var(--duration-normal) var(--ease-out),
+    background-color var(--duration-normal) var(--ease-out);
+}
+
+.bezel__core {
+  height: 100%;
+  border-radius: var(--bezel-radius-inner);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.028) 0%, rgba(255,255,255,0.008) 100%),
+    var(--color-bg-elevated);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-inset-hairline);
+  overflow: hidden;
+}
+
+/* Lift on hover — transform only, so no reflow. */
+.bezel:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-default);
+  background: rgba(255, 255, 255, 0.038);
+}
+
+.bezel--featured {
+  background: linear-gradient(140deg,
+    rgba(124, 107, 250, 0.16) 0%,
+    rgba(124, 107, 250, 0.03) 55%,
+    rgba(255, 255, 255, 0.02) 100%);
+  border-color: var(--border-accent);
+  box-shadow: var(--shadow-glow);
+}
+
+.bezel--featured .bezel__core {
+  background:
+    linear-gradient(180deg, rgba(124,107,250,0.07) 0%, rgba(255,255,255,0.006) 100%),
+    var(--color-bg-elevated);
+}
+
+/* ── Eyebrow ─────────────────────────────── */
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-subtle);
+  border: 1px solid var(--border-accent);
+  color: var(--color-accent-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--font-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* ── CTA ─────────────────────────────────── */
+
+.cta__wrap { display: inline-block; }
+
+.cta {
+  --cta-pad: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--cta-pad) var(--cta-pad) var(--cta-pad) var(--space-6);
+  border-radius: var(--radius-full);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  letter-spacing: var(--tracking-tight);
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.cta:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cta--primary {
+  background: linear-gradient(180deg, var(--color-accent-secondary) 0%, var(--color-accent-primary) 100%);
+  color: #0B0713;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.28) inset,
+    0 10px 30px -10px var(--color-accent-glow);
+}
+
+.cta--primary:hover {
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.35) inset,
+    0 14px 38px -10px var(--color-accent-glow);
+}
+
+.cta--ghost {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.cta--ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-strong);
+}
+
+.cta__label { display: inline-block; }
+
+/* The nested capsule. It moves; the button does not. */
+.cta__capsule {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: transform var(--duration-normal) var(--ease-glide),
+              background-color var(--duration-normal) var(--ease-out);
+}
+
+.cta--primary .cta__capsule { background: rgba(11, 7, 19, 0.16); }
+.cta--ghost   .cta__capsule { background: rgba(255, 255, 255, 0.07); }
+
+.cta:hover .cta__capsule {
+  transform: translate(2px, -1px) scale(1.06);
+}
+
+.cta--primary:hover .cta__capsule { background: rgba(11, 7, 19, 0.24); }
+.cta--ghost:hover   .cta__capsule { background: rgba(255, 255, 255, 0.12); }
+
+.cta__capsule svg { width: 14px; height: 14px; }
+
+/* ── Section rhythm ──────────────────────── */
+
+.section {
+  position: relative;
+  z-index: 1;
+  padding-block: var(--section-gap);
+}
+
+.section--lg { padding-block: var(--section-gap-lg); }
+
+.section__inner {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding-inline: var(--space-6);
+}
+
+.section__inner--wide { max-width: var(--content-wide); }
+
+/* ── Display type ────────────────────────── */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: var(--font-semibold);
+  letter-spacing: var(--tracking-display);
+  line-height: var(--leading-display);
+  color: var(--text-primary);
+  text-wrap: balance;
+}
+
+.display--lg { font-size: var(--text-display-lg); }
+.display--md { font-size: var(--text-display-md); }
+.display--sm { font-size: var(--text-display-sm); }
+
+/* The editorial accent. Used on one or two words per page, never more. */
+.display__accent {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  background: linear-gradient(100deg, var(--color-accent-tertiary), var(--color-accent-primary));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  padding-inline-end: 0.06em; /* stop the italic tail from clipping */
+}
+
+.lede {
+  font-size: clamp(1rem, 0.9rem + 0.4vw, 1.1875rem);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+/* ── Mobile collapse ─────────────────────────
+   Asymmetric layouts must fall back hard.      */
+@media (max-width: 767px) {
+  .bezel { --bezel-radius-outer: 22px; }
+  .section__inner { padding-inline: var(--space-4); }
+  .ambient-mesh__orb { filter: blur(60px); }
+}

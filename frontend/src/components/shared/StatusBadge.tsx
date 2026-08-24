@@ -1,4 +1,4 @@
-import { CheckCircle, XCircle, Clock, Play, AlertTriangle } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Play, AlertTriangle, MinusCircle } from 'lucide-react';
 
 interface StatusBadgeProps {
   status: string;
@@ -12,7 +12,10 @@ const STATUS_MAP: Record<string, { icon: typeof Clock; cls: string; label: strin
     icon: AlertTriangle, cls: 'badge-warning', label: 'Done (with context)',
   },
   failed:    { icon: XCircle,     cls: 'badge-error',   label: 'Failed'    },
-  cancelled: { icon: XCircle,     cls: 'badge-error',   label: 'Cancelled' },
+  // Neutral, not error. A user-stopped build did not fail, and status colour is
+  // reserved vocabulary — spending "critical" red on it both overstates the
+  // outcome and disagrees with the charts, where cancelled is achromatic.
+  cancelled: { icon: MinusCircle, cls: 'badge-neutral', label: 'Cancelled' },
   running:   { icon: Play,        cls: 'badge-info',    label: 'Running'   },
   queued:    { icon: Clock,       cls: 'badge-warning', label: 'Queued'    },
 };
