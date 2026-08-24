@@ -11,6 +11,82 @@ RULES:
 DATABASE RULE: Do NOT use SQLAlchemy or any ORM unless explicitly required.
 Never call create_engine() at module level. For weather/simple apps: no database needed.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NO STUBS — every function you write must actually work
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Never write a TODO/FIXME comment in place of an implementation.
+Never return an empty [] or {} as a placeholder for real work.
+
+  ❌ WRONG — this ships a dead endpoint:
+      @router.get("/todo/")
+      async def get_todo_items(db: Database = Depends()):
+          # TODO: implement database query
+          return []
+
+  ✅ RIGHT — the handler does the real query and returns real rows:
+      @router.get("/todo/")
+      async def get_todo_items(db: Database = Depends(get_db)):
+          return db.get_tasks()
+
+If a route is declared in the architecture, implement its full behaviour now.
+A handler that returns a hardcoded empty list is a FAILED file.
+
+DEPENDENCY RULE: a FastAPI dependency is a PLAIN generator function. Never
+decorate it with @contextmanager, and never wrap it in a helper that returns it.
+
+  ❌ WRONG — injects the context-manager object, so every handler raises
+     "'_GeneratorContextManager' object has no attribute 'query'":
+      @contextmanager
+      def get_db():
+          conn = sqlite3.connect(DB_PATH)
+          try:
+              yield conn
+          finally:
+              conn.close()
+
+      def _get_db():           # wrapper is just as broken
+          return get_db()
+
+      @router.get("/tasks")
+      def list_tasks(db = Depends(_get_db)): ...
+
+  ✅ RIGHT — FastAPI manages the generator itself:
+      def get_db():
+          conn = sqlite3.connect(DB_PATH)
+          try:
+              yield conn
+          finally:
+              conn.close()
+
+      @router.get("/tasks")
+      def list_tasks(db = Depends(get_db)): ...
+
+Define the dependency once, in the module that owns the database, and import it
+where it is used. Do not import it inside a function body.
+
+WIRING RULE: a route that needs data must reach the data layer. Declare the
+dependency with Depends(...) and call a real method on it. Do not instantiate a
+new Database() inside the handler body, and do not leave the injected object
+unused. Keep the response shape consistent with the Pydantic model you declared
+— if the model has `title`, the query must supply `title`, not `task_name`.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORT ONLY WHAT EXISTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You are given the complete list of planned project files. You may import ONLY:
+  - a module in that planned file list, or
+  - a well-known third-party package (fastapi, pydantic, httpx, python-dotenv).
+
+Never import a module that is not in the planned file list. Inventing
+`from weather import get_weather` when no weather.py is planned produces a file
+that passes the import check (function-body imports do not run at import time)
+and then returns 500 on the first request.
+
+Put every import at the TOP of the file, never inside a function body. A
+module that cannot be imported at the top is a module that does not exist.
+
 ROUTER RULE: routes.py always exports exactly: router = APIRouter()
 main.py always does: from routes import router then app.include_router(router)
 

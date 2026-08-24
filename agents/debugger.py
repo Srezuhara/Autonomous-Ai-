@@ -383,6 +383,41 @@ class Debugger(BaseAgent):
 
         return fixes
 
+    def _comment_out_statement(self, content: str, start_pattern: str) -> str:
+        """
+        Comment out a whole statement, not just its first line.
+
+        Follows bracket depth from the opening line so multi-line calls are
+        commented in full. Lines already commented are left alone.
+        """
+        pattern = re.compile(start_pattern)
+        lines   = content.splitlines(keepends=True)
+        out: list[str] = []
+        i = 0
+
+        while i < len(lines):
+            if not pattern.match(lines[i]):
+                out.append(lines[i])
+                i += 1
+                continue
+
+            depth = 0
+            while i < len(lines):
+                current = lines[i]
+                code    = current.split("#", 1)[0]
+                depth  += code.count("(") - code.count(")")
+                depth  += code.count("[") - code.count("]")
+                depth  += code.count("{") - code.count("}")
+
+                out.append(current if current.lstrip().startswith("#")
+                           else "# " + current)
+                i += 1
+
+                if depth <= 0:
+                    break
+
+        return "".join(out)
+
     # ── Dotted-import rewriter ────────────────────────────────────────────────
 
     def _rewrite_dotted_imports(self, file_path: str) -> list[str]:
@@ -638,15 +673,21 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 fixes.append("fixed router import name")
 
         if re.search(r'^engine\s*=\s*create_engine', content, re.MULTILINE):
-            content = re.sub(
-                r'^(engine\s*=\s*create_engine[^\n]+)', r'# \1', content, flags=re.MULTILINE
-            )
-            content = re.sub(
-                r'^(Session\s*=\s*sessionmaker[^\n]+)', r'# \1', content, flags=re.MULTILINE
-            )
-            content = re.sub(
-                r'^(Base\.metadata\.create_all[^\n]+)', r'# \1', content, flags=re.MULTILINE
-            )
+            # Phase 22 fix: these used to be `[^\n]+` substitutions, which comment
+            # out only the FIRST line of the statement. A multi-line call —
+            #     engine = create_engine(
+            #         os.getenv("DATABASE_URL"), connect_args={...}
+            #     )
+            # became `# engine = create_engine(` followed by orphaned arguments,
+            # i.e. a SyntaxError. A live build shipped exactly that in
+            # tests/test_backend.py, and the debugger then burned its whole retry
+            # budget failing to fix a file it had broken itself.
+            for pattern in (
+                r'^engine\s*=\s*create_engine',
+                r'^Session\s*=\s*sessionmaker',
+                r'^Base\.metadata\.create_all',
+            ):
+                content = self._comment_out_statement(content, pattern)
             fixes.append("disabled module-level DB connection")
 
         project_dir = self._get_project_dir(file_path)

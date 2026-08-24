@@ -9,27 +9,39 @@ PATTERN A — FastAPI (file contains FastAPI/APIRouter)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   from fastapi.testclient import TestClient
-  from unittest.mock import patch, MagicMock
+  from unittest.mock import patch
   from main import app
 
   client = TestClient(app)
 
+  # Assert on the real response — preferred when the handler needs no fakes.
   def test_endpoint_success():
-      with patch('routes.get_weather') as mock:
-          mock.return_value = {"temp": 20, "humidity": 60}
+      response = client.get('/weather?city=London')
+      assert response.status_code == 200
+      assert "temp" in response.json()
+
+  # Substitute an injected dependency (declared with Depends()).
+  def test_endpoint_with_fake_dependency():
+      from routes import Database
+      app.dependency_overrides[Database] = lambda: FakeDB()
+      try:
+          response = client.get('/items')
+          assert response.status_code == 200
+      finally:
+          app.dependency_overrides.clear()
+
+  # Patch a helper the handler CALLS — only works for imported names.
+  def test_endpoint_helper_patched():
+      with patch('routes.fetch_weather') as mock:   # imported INTO routes.py
+          mock.return_value = {"temp": 20}
           response = client.get('/weather?city=London')
           assert response.status_code == 200
-          assert "temp" in response.json()
 
-  def test_endpoint_not_found():
-      with patch('routes.get_item') as mock:
-          mock.return_value = None
-          response = client.get('/items/9999')
-          assert response.status_code == 404
-
-  def test_missing_required_param():
-      response = client.get('/weather')
-      assert response.status_code == 422
+  ❌ NEVER patch a route handler:
+       with patch('routes.get_weather')   # if get_weather is @router.get(...)
+     FastAPI bound the handler object when the decorator ran. Patching the
+     module attribute afterwards has NO effect — the real handler still runs
+     and the assertion fails. Patch imported helpers, or override Depends().
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PATTERN B — Plain Python (no FastAPI)
@@ -67,10 +79,18 @@ IMPORT RULE — NEVER use dotted module paths:
   conftest.py has already added the source directories to sys.path.
   Use ONLY the file's simple stem name (no folders, no dots).
 
-MOCK RULE — Use the ACTUAL function name from the provided source:
-  If the file provides ACTUAL FUNCTION NAMES, use those EXACTLY.
-  ✅ CORRECT:  patch('routes.fetch_tasks')   ← if fetch_tasks is in routes.py
-  ❌ WRONG:    patch('routes.get_tasks')     ← if the function is actually fetch_tasks
+MOCK RULE — patch only names that are resolved at CALL time:
+  A patch works when the running code looks the name up on the module while it
+  executes. It does NOT work when something else already holds a reference to
+  the object (which is exactly what a route decorator does).
+
+  ✅ CORRECT:  patch('routes.fetch_tasks')   ← fetch_tasks IMPORTED into routes.py
+                                               and called inside a handler
+  ❌ WRONG:    patch('routes.list_tasks')    ← list_tasks IS the @router.get handler
+  ❌ WRONG:    patch('routes.get_tasks')     ← name does not exist in the source
+
+  If the file lists no imported helpers, do not invent a patch target — assert
+  against the real response instead.
 
 OTHER RULES:
 - NEVER add sys.path manipulation — conftest.py handles that

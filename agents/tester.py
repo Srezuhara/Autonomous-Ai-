@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file, create_file
 from tools.code_executor import run_command, run_python
+from tools.code_introspect import analyze_file
 import config
 
 logger = logging.getLogger(__name__)
@@ -346,20 +347,87 @@ class Tester(BaseAgent):
         return has_basemodel and not has_fastapi and not has_functions
 
     def _build_mock_examples(self, file_path: str, func_names: list[str]) -> str:
-        stem = Path(file_path).stem
-        if not func_names:
+        """
+        Phase 22 — route-aware mock guidance.
+
+        The previous version emitted `patch('<stem>.<fn>')` for EVERY function in
+        the file and told the model to copy it verbatim. For routes.py those
+        names are the route handlers, and patching a route handler is a no-op:
+        FastAPI captured the function object at decoration time, so rebinding the
+        module global is never observed. Tests written that way exercised the
+        real (unimplemented) handler and failed — this was the single largest
+        contributor to the todo_app build's 1/9 test score.
+
+        We now distinguish the three cases explicitly.
+        """
+        stem  = Path(file_path).stem
+        facts = analyze_file(file_path)
+
+        if facts.parse_error:
             return ""
-        examples = []
-        for fn in func_names[:4]:
-            examples.append(
-                f"  with patch('{stem}.{fn}') as mock_{fn}:\n"
-                f"      mock_{fn}.return_value = {{\"result\": \"ok\"}}"
+
+        blocks: list[str] = []
+
+        # 1. Route handlers — the code under test. Never patch these.
+        if facts.route_handlers:
+            handlers = ", ".join(facts.route_handlers[:6])
+            blocks.append(
+                "ROUTE HANDLERS IN THIS FILE — these are the code UNDER TEST:\n"
+                f"  {handlers}\n"
+                f"  NEVER write patch('{stem}.{facts.route_handlers[0]}') or patch any\n"
+                "  other handler name. FastAPI stored the function object when the\n"
+                "  decorator ran, so patching the module attribute afterwards has NO\n"
+                "  effect — the real handler still runs and your assertion fails.\n"
+                "  Call these through the TestClient and assert on the real response."
             )
-        return (
-            "\n\nEXACT MOCK SYNTAX — copy-paste these:\n"
-            + "\n".join(examples)
-            + "\n\nCRITICAL: ONLY use the function names above in ALL patch() calls."
-        )
+
+        # 2. Depends(...) dependencies — override, don't patch.
+        if facts.depends_names:
+            dep = facts.depends_names[0]
+            overrides = "\n".join(
+                f"  app.dependency_overrides[{d}] = lambda: fake_{d.lower()}"
+                for d in facts.depends_names[:4]
+            )
+            blocks.append(
+                "DEPENDENCIES — injected with Depends(). Override them, never patch:\n"
+                f"{overrides}\n"
+                "  Import the dependency from its module, override BEFORE the request,\n"
+                "  and clear it afterwards:\n"
+                f"    from {stem} import {dep}\n"
+                "    app.dependency_overrides.clear()   # in teardown"
+            )
+
+        # 3. Imported callables the handlers actually call — the valid targets.
+        if facts.mockable:
+            examples = "\n".join(
+                f"  with patch('{stem}.{name}') as mock_{name.lower()}:\n"
+                f"      mock_{name.lower()}.return_value = ...   # shape it to the real return type"
+                for name in facts.mockable[:4]
+            )
+            blocks.append(
+                "VALID PATCH TARGETS — imported into this module and called by the\n"
+                "handlers, so the global IS resolved at call time:\n" + examples
+            )
+        elif facts.route_handlers:
+            blocks.append(
+                "NOTE: this file imports no helper functions that the handlers call,\n"
+                "so there is NOTHING here that can be meaningfully patched. Do not\n"
+                "invent a patch target. Write tests that call the endpoint and assert\n"
+                "on the real status code and response shape."
+            )
+
+        # 4. Plain (non-route) functions are patchable/callable normally.
+        if not facts.route_handlers and facts.plain_functions:
+            names = [f for f in facts.plain_functions if not f.startswith("_")][:4]
+            if names:
+                blocks.append(
+                    "FUNCTIONS IN THIS FILE — call them directly, using these EXACT names:\n"
+                    + "\n".join(f"  {stem}.{n}(...)" for n in names)
+                )
+
+        if not blocks:
+            return ""
+        return "\n\n" + "\n\n".join(blocks)
 
     def _get_sibling_import_context(self, file_path: str, root: str) -> str:
         stem  = Path(file_path).stem
@@ -778,22 +846,43 @@ PATTERN C — Pure Pydantic models:
             pattern_instruction = """
 PATTERN A — FastAPI:
   from fastapi.testclient import TestClient
-  from unittest.mock import patch, MagicMock
+  from unittest.mock import patch
   from main import app
   client = TestClient(app)
-  def test_endpoint_success():
-      with patch('routes.fetch_items') as mock:
-          mock.return_value = [{"id": 1, "name": "test"}]
+
+  # A. Endpoint returns its real response — no mocking at all.
+  def test_endpoint_returns_ok():
+      response = client.get('/items')
+      assert response.status_code == 200
+      assert isinstance(response.json(), list)
+
+  # B. Replace an injected dependency (anything declared with Depends()).
+  #    This is the ONLY correct way to substitute a dependency.
+  def test_endpoint_with_fake_dependency():
+      from routes import Database          # the Depends() target
+      class FakeDB:
+          def get_items(self):
+              return [{"id": 1, "name": "test"}]
+      app.dependency_overrides[Database] = lambda: FakeDB()
+      try:
           response = client.get('/items')
           assert response.status_code == 200
-  def test_endpoint_not_found():
-      with patch('routes.fetch_item') as mock:
-          mock.return_value = None
-          response = client.get('/items/999')
-          assert response.status_code == 404
-  def test_missing_required_param():
-      response = client.post('/items', json={})
-      assert response.status_code == 422
+      finally:
+          app.dependency_overrides.clear()
+
+  # C. Patch a HELPER the handler calls — never the handler itself.
+  def test_endpoint_helper_patched():
+      with patch('routes.fetch_items') as mock:   # fetch_items is IMPORTED into routes
+          mock.return_value = [{"id": 1}]
+          response = client.get('/items')
+          assert response.status_code == 200
+
+FORBIDDEN — this silently does nothing and the test will fail:
+      with patch('routes.list_items'):   # list_items is a @router.get handler
+  FastAPI captured the handler object at decoration time. Patching the module
+  attribute afterwards is never observed; the real handler still runs.
+  Patch only names the handler LOOKS UP when it runs (imported helpers), or
+  override Depends() dependencies via app.dependency_overrides.
 """
         else:
             pattern_instruction = f"""

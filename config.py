@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ── LLM settings ───────────────────────────────────────────
 LLM_PROVIDER    = os.getenv("LLM_PROVIDER", "groq")      # groq | ollama | both
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL      = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b-instruct-q4_K_M")
 GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "900"))

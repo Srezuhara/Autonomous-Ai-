@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 from agents.base_agent import BaseAgent
 from tools.file_writer import create_file, read_file
+from tools.code_introspect import analyze_file, find_phantom_imports
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +112,290 @@ class BackendDeveloper(BaseAgent):
             written.append(full_path)
             logger.info(f"✅ Generated: {full_path}")
 
+        # ── Phase 22: fill SQL schema files nothing else owns ─────────────────
+        written.extend(self._generate_sql_files(intent, architecture, root, written))
+
+        # ── Phase 22: deterministic defect scan + targeted repair ─────────────
+        # Runs before requirements validation so any import the repair pass
+        # removes or adds is reflected in requirements.txt.
+        self._verify_and_repair(intent, architecture, root, written)
+
         # ── Phase 19.1: validate and fix requirements.txt ─────────────────────
         self._validate_requirements(root, written)
 
         return written
+
+    # ── Phase 22: SQL schema generation ───────────────────────────────────────
+
+    def _generate_sql_files(
+        self, intent: dict, architecture: dict, root: str, written: list[str]
+    ) -> list[str]:
+        """
+        Fill .sql files planned by the architect.
+
+        No generator owned these: BackendDeveloper filtered on type=="python"
+        and FrontendGenerator on the JS/CSS/HTML types, so a planned schema.sql
+        kept its scaffold placeholder all the way into the shipped ZIP — while
+        SETUP.md told the user to run it.
+        """
+        sql_files = [
+            f for f in architecture.get("files", [])
+            if str(f.get("path", "")).lower().endswith(".sql")
+        ]
+        if not sql_files:
+            return []
+
+        # The data layer is the useful context for a schema: models + db access.
+        model_context = ""
+        for path in written:
+            name = Path(path).name.lower()
+            if name in ("models.py", "schemas.py", "db.py", "database.py"):
+                try:
+                    model_context += f"\n--- {name} ---\n{read_file(path)[:1200]}\n"
+                except Exception:
+                    pass
+
+        created: list[str] = []
+        for file_info in sql_files:
+            path      = file_info["path"]
+            full_path = f"{root}/{path}"
+            logger.info(f"🗄️  [Phase 22] Generating SQL schema: {full_path}")
+
+            prompt = f"""Write the complete SQL schema for this file.
+
+FILE: {path}
+PURPOSE: {file_info.get('description', 'database schema')}
+
+APP SPEC:
+{json.dumps(intent, indent=2)[:900]}
+
+THE PYTHON DATA LAYER THIS SCHEMA MUST MATCH:
+{model_context if model_context else "(no models generated)"}
+
+RULES:
+- Plain SQLite-compatible SQL. No ORM syntax, no Python.
+- Use CREATE TABLE IF NOT EXISTS for every table.
+- Column names and types MUST match what the Python data layer reads and writes.
+- Include PRIMARY KEY and NOT NULL constraints where appropriate.
+- No INSERT statements of fake seed data.
+- SQL comments use `--`, never `#`.
+
+Return ONLY raw SQL. No markdown, no explanation."""
+            try:
+                sql = self.think(prompt)
+            except Exception as e:
+                logger.warning(f"⚠️  [Phase 22] SQL generation failed for {path}: {e}")
+                continue
+
+            if not sql or not sql.strip():
+                continue
+
+            create_file(full_path, sql)
+            created.append(full_path)
+            logger.info(f"✅ [Phase 22] Generated: {full_path}")
+
+        return created
+
+    # ── Phase 22: self-verification ───────────────────────────────────────────
+
+    def _planned_modules(self, architecture: dict) -> set[str]:
+        """Module names that the architecture says will exist."""
+        modules: set[str] = set()
+        for f in architecture.get("files", []):
+            path = f.get("path", "")
+            if not path:
+                continue
+            p = Path(path)
+            if p.suffix == ".py":
+                modules.add(p.stem)
+            for part in p.parts[:-1]:
+                modules.add(part)
+        return modules
+
+    def _scan_defects(
+        self, path: str, planned: set[str], ctx_managers: set[str] | None = None
+    ) -> list[str]:
+        """Deterministic, zero-token defect list for one generated file."""
+        facts = analyze_file(path)
+        if facts.parse_error:
+            return [f"the file does not parse: {facts.parse_error}"]
+
+        defects: list[str] = []
+
+        # A @contextmanager used as a FastAPI dependency injects the context
+        # manager object instead of the yielded value. Every handler that touches
+        # it then dies with "'_GeneratorContextManager' object has no attribute
+        # ...". The definition and the use are usually in different files, so the
+        # set of context managers is collected across the whole project.
+        known_ctx = set(ctx_managers or ()) | set(facts.contextmanagers)
+        for dep in facts.depends_names:
+            wrapped = facts.returns_call_to.get(dep, "")
+            if dep in known_ctx:
+                culprit, how = dep, f"`{dep}` is decorated with @contextmanager"
+            elif wrapped and wrapped in known_ctx:
+                culprit, how = wrapped, (
+                    f"`{dep}` returns `{wrapped}()`, and `{wrapped}` is decorated "
+                    f"with @contextmanager"
+                )
+            else:
+                continue
+            defects.append(
+                f"{how}, but it is used as a FastAPI dependency via Depends({dep}). "
+                f"FastAPI injects the context-manager object rather than the yielded "
+                f"value, so every handler using it raises "
+                f"\"'_GeneratorContextManager' object has no attribute ...\" at "
+                f"request time. Make the dependency a plain generator function that "
+                f"yields (drop @contextmanager from `{culprit}`), and have handlers "
+                f"depend on it directly."
+            )
+
+        stub_handlers = [f for f in facts.stub_functions if f in facts.route_handlers]
+        other_stubs   = [f for f in facts.stub_functions if f not in facts.route_handlers]
+
+        if stub_handlers:
+            defects.append(
+                f"{len(stub_handlers)} route handler(s) are unimplemented stubs "
+                f"({', '.join(stub_handlers)}). They return a placeholder instead of "
+                f"real data. Implement the actual query/logic for each one."
+            )
+        if other_stubs:
+            defects.append(
+                f"{len(other_stubs)} function(s) are unimplemented stubs "
+                f"({', '.join(other_stubs)}). Write their real bodies."
+            )
+
+        for module, fn_name in find_phantom_imports(facts, planned):
+            where = f" inside {fn_name}()" if fn_name else ""
+            defects.append(
+                f"imports `{module}`{where}, which is not a planned project file and "
+                f"is not an installed package. Remove it and use a module that exists, "
+                f"or implement the behaviour inline."
+            )
+
+        local_deferred = [
+            (m, fn) for m, fn in facts.deferred_imports
+            if m.split(".")[0] in planned
+        ]
+        for module, fn_name in local_deferred:
+            defects.append(
+                f"imports `{module}` inside {fn_name}() instead of at module level. "
+                f"Move it to the top of the file."
+            )
+
+        return defects
+
+    def _verify_and_repair(
+        self, intent: dict, architecture: dict, root: str, written: list[str]
+    ) -> None:
+        """
+        Scan every generated file for defects the import check cannot see, and
+        spend ONE targeted LLM call per offending file to fix them.
+
+        Costs zero tokens on a clean generation. The defects targeted here
+        (stub handlers, phantom imports, function-body imports) all pass the
+        `python <file>` import gate, so nothing downstream would catch them —
+        the todo_app build shipped all three.
+        """
+        planned = self._planned_modules(architecture)
+
+        # Collect @contextmanager definitions across the whole project first —
+        # a dependency is typically defined in main.py and consumed in routes.py.
+        ctx_managers: set[str] = set()
+        for path in written:
+            if path.endswith(".py"):
+                try:
+                    ctx_managers.update(analyze_file(path).contextmanagers)
+                except Exception:
+                    pass
+
+        repaired, failed = 0, 0
+
+        for path in written:
+            if not path.endswith(".py"):
+                continue
+            try:
+                defects = self._scan_defects(path, planned, ctx_managers)
+            except Exception as e:
+                logger.warning(f"⚠️  [Phase 22] defect scan failed for {path}: {e}")
+                continue
+            if not defects:
+                continue
+
+            logger.info(f"🔧 [Phase 22] {path}: {len(defects)} defect(s) — repairing")
+            for d in defects:
+                logger.info(f"     • {d}")
+
+            try:
+                fixed = self._repair_file(intent, architecture, path, defects)
+            except Exception as e:
+                logger.warning(f"⚠️  [Phase 22] repair call failed for {path}: {e}")
+                failed += 1
+                continue
+
+            if not fixed or not fixed.strip():
+                failed += 1
+                continue
+
+            create_file(path, fixed)
+
+            remaining = self._scan_defects(path, planned, ctx_managers)
+            if remaining:
+                failed += 1
+                logger.warning(
+                    f"⚠️  [Phase 22] {path}: {len(remaining)} defect(s) remain after repair"
+                )
+            else:
+                repaired += 1
+                logger.info(f"✅ [Phase 22] {path}: clean after repair")
+
+        if repaired or failed:
+            logger.info(
+                f"🔧 [Phase 22] Self-verification complete: "
+                f"{repaired} file(s) repaired, {failed} still degraded"
+            )
+        else:
+            logger.info("✅ [Phase 22] Self-verification: all generated files clean")
+
+    def _repair_file(
+        self, intent: dict, architecture: dict, path: str, defects: list[str]
+    ) -> str:
+        """One targeted repair call. Returns the corrected full file source."""
+        try:
+            current = read_file(path)
+        except Exception:
+            return ""
+
+        planned_list = "\n".join(
+            f"- {f.get('path')}" for f in architecture.get("files", [])
+        )
+        defect_list = "\n".join(f"{i}. {d}" for i, d in enumerate(defects, 1))
+
+        prompt = f"""This generated file has defects that must be fixed.
+
+FILE: {path}
+
+DEFECTS FOUND:
+{defect_list}
+
+PLANNED PROJECT FILES (the ONLY local modules you may import):
+{planned_list}
+
+APP SPEC:
+{json.dumps(intent, indent=2)[:1200]}
+
+CURRENT CODE:
+{current}
+
+Rewrite the file so every defect above is resolved:
+- Replace every stub with a real, working implementation.
+- Import only planned project modules or installed third-party packages.
+- All imports at the top of the file, never inside a function body.
+- Keep the existing public names (router, function names, model classes) so the
+  rest of the project still imports correctly.
+- Do not add code belonging to any other file.
+
+Return ONLY the complete corrected Python code. No markdown, no explanation."""
+        return self.think(prompt)
 
     # ── Phase 19.4: CORS origin detection ─────────────────────────────────────
 

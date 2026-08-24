@@ -7,6 +7,8 @@ Usage:
 """
 import argparse
 import logging
+import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -31,8 +33,13 @@ from rich.align import Align
 
 console = Console()
 
-# Suppress INFO logs — Rich handles the UI
-logging.basicConfig(level=logging.WARNING)
+# Rich handles the UI, so INFO logs are suppressed by default. LOG_LEVEL was
+# documented in .env but ignored here, which made it impossible to watch what the
+# pipeline was actually doing during a build — set LOG_LEVEL=INFO to see the
+# per-step detail (generation, repairs, the runtime smoke test).
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "WARNING").upper(), logging.WARNING)
+)
 
 
 # ── Step definitions ───────────────────────────────────────────────────────────
@@ -48,6 +55,23 @@ STEPS = [
     (8, "Running tests",         "🧪"),
     (9, "Writing documentation", "📝"),
 ]
+
+# Maps Pipeline's internal step names to the CLI's labels. Keys must match the
+# `step_name` values emitted by Pipeline._emit_progress().
+_STEP_DISPLAY = {
+    "intent_analyzer":    ("Analyzing intent",       "🔍"),
+    "planner":            ("Planning build steps",   "📋"),
+    "architect":          ("Designing architecture", "🏗️ "),
+    "backend_developer":  ("Generating backend",     "⚙️ "),
+    "frontend_generator": ("Generating frontend",    "🎨"),
+    "frontend_debugger":  ("Checking frontend",      "🩹"),
+    "debugger":           ("Debugging code",         "🐛"),
+    "reviewer":           ("Reviewing quality",      "🔍"),
+    "tester":             ("Running tests",          "🧪"),
+    "remediation":        ("Repairing and verifying","🔧"),
+    "documenter":         ("Writing documentation",  "📝"),
+    "session_context":    ("Writing handoff notes",  "📋"),
+}
 
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -147,9 +171,17 @@ def print_summary(result, elapsed: float):
     console.print(Rule("[bold blue]Build Complete[/bold blue]", style="blue"))
     console.print()
 
-    # Summary panel
-    status_color = "green" if result.success else "red"
-    status_text  = "✅ SUCCESS" if result.success else "❌ FAILED"
+    # Summary panel. Phase 21 gave the pipeline a four-state vocabulary; a
+    # binary SUCCESS/FAILED banner reported a quota-paused build that generated
+    # zero files as a clean success.
+    if getattr(result, "quota_paused", False):
+        status_color, status_text = "yellow", "⏸  QUOTA PAUSED"
+    elif getattr(result, "degraded", False):
+        status_color, status_text = "yellow", "⚠️  DONE (WITH CONTEXT)"
+    elif result.success:
+        status_color, status_text = "green", "✅ SUCCESS"
+    else:
+        status_color, status_text = "red", "❌ FAILED"
 
     summary = Table.grid(padding=(0, 2))
     summary.add_column(style="bold dim", justify="right")
@@ -165,9 +197,27 @@ def print_summary(result, elapsed: float):
         f"[green]{avg_score:.1f}/10[/green]" if avg_score >= 7
         else f"[yellow]{avg_score:.1f}/10[/yellow]")
     summary.add_row("Tests:",
-        f"[green]{tests_passed}/{tests_total}[/green]" if tests_passed == tests_total
+        "[dim]none run[/dim]" if tests_total == 0
+        else f"[green]{tests_passed}/{tests_total}[/green]" if tests_passed == tests_total
         else f"[yellow]{tests_passed}/{tests_total}[/yellow]")
     summary.add_row("Docs:", f"[green]{doc_status}[/green]" if "✅" in doc_status else f"[red]{doc_status}[/red]")
+
+    # Phase 22: whether the generated app actually responds.
+    smoke = getattr(result, "smoke_summary", "")
+    if smoke:
+        # Green only when every probed route answered; "1/4 routes responded"
+        # is a failing app, not a passing one.
+        match = re.match(r"(\d+)/(\d+)", smoke)
+        all_ok = bool(match) and match.group(1) == match.group(2)
+        summary.add_row(
+            "Runtime:",
+            f"[green]{smoke}[/green]" if all_ok else f"[yellow]{smoke}[/yellow]",
+        )
+
+    reason = getattr(result, "completion_reason", "")
+    if reason:
+        summary.add_row("Reason:", f"[yellow]{reason}[/yellow]")
+
     summary.add_row("Time:", f"{elapsed:.1f}s")
 
     console.print(Panel(
@@ -202,65 +252,51 @@ def run_with_ui(user_prompt: str) -> None:
     ))
     console.print()
 
-    pipeline = Pipeline()
     start = time.time()
 
-    # Monkey-patch pipeline.run to show step progress
-    original_run = pipeline.run
+    # The CLI used to re-implement the 9 steps as a flat loop of direct agent
+    # calls. That quietly bypassed everything Pipeline.run() adds around those
+    # calls — the frontend_debugger step, the forbidden-file purge, the Phase 21
+    # self-healing remediation and static audit, the Phase 22 runtime smoke test,
+    # and the quota interception that writes SESSION_CONTEXT.md instead of
+    # crashing. A CLI build and an API build were running different pipelines.
+    #
+    # It now drives the real pipeline and renders its progress callbacks.
+    _seen_steps: set = set()
 
-    def run_with_steps(prompt):
-        from agents import (
-            IntentAnalyzer, Planner, Architect,
-            BackendDeveloper, FrontendGenerator,
-            Debugger, Reviewer, Tester, Documenter,
+    def on_progress(event: dict) -> None:
+        name   = event.get("step_name", "")
+        status = event.get("status", "")
+        num    = event.get("step", 0)
+
+        label, emoji = _STEP_DISPLAY.get(name, (name.replace("_", " ").title(), "•"))
+
+        if status == "running" and (num, name) not in _seen_steps:
+            _seen_steps.add((num, name))
+            print_step(num, label, emoji, "running")
+        elif status == "done":
+            print_step(num, label, emoji, "done")
+        elif status == "failed":
+            print_step(num, label, emoji, "done")
+
+    pipeline = Pipeline(progress_callback=on_progress)
+    result   = pipeline.run(user_prompt)
+
+    if result.debug_results:
+        print_debug_results(result.debug_results)
+    if result.review_results:
+        print_review_results(result.review_results)
+    if result.test_results:
+        print_test_results(result.test_results)
+
+    if result.error:
+        console.print(f"\n[bold red]💥 Pipeline failed:[/bold red] {result.error}")
+    if getattr(result, "smoke_summary", ""):
+        console.print(f"[dim]Runtime check:[/dim] {result.smoke_summary}")
+    if getattr(result, "session_context_path", ""):
+        console.print(
+            f"[yellow]Handoff document written:[/yellow] {result.session_context_path}"
         )
-        from agents.pipeline import BuildResult
-        from dataclasses import field
-
-        result = BuildResult(user_prompt=prompt)
-
-        step_agents = [
-            (1, "Analyzing intent",       "🔍", lambda: pipeline.intent_analyzer.run(prompt)),
-            (2, "Planning build steps",   "📋", lambda: pipeline.planner.run(result.intent)),
-            (3, "Designing architecture", "🏗️ ", lambda: pipeline.architect.run(result.intent, result.steps)),
-            (4, "Generating backend",     "⚙️ ", lambda: pipeline.backend_developer.run(result.intent, result.architecture)),
-            (5, "Generating frontend",    "🎨", lambda: pipeline.frontend_generator.run(result.intent, result.architecture)),
-            (6, "Debugging code",         "🐛", lambda: pipeline.debugger.run(result.backend_files)),
-            (7, "Reviewing quality",      "🔍", lambda: pipeline.reviewer.run(result.backend_files)),
-            (8, "Running tests",          "🧪", lambda: pipeline.tester.run(result.backend_files, result.architecture, result.debug_results)),
-            (9, "Writing documentation",  "📝", lambda: pipeline.documenter.run(result.intent, result.architecture, result.backend_files, result.review_results)),
-        ]
-
-        attr_map = [
-            "intent", "steps", "architecture",
-            "backend_files", "frontend_files",
-            "debug_results", "review_results", "test_results", "doc_result",
-        ]
-
-        try:
-            for i, (num, label, emoji, fn) in enumerate(step_agents):
-                print_step(num, label, emoji, "running")
-                val = fn()
-                setattr(result, attr_map[i], val)
-                print_step(num, label, emoji, "done")
-
-                # Print sub-results after key steps
-                if num == 6:
-                    print_debug_results(result.debug_results)
-                elif num == 7:
-                    print_review_results(result.review_results)
-                elif num == 8:
-                    print_test_results(result.test_results)
-
-            result.success = True
-
-        except Exception as e:
-            result.error = str(e)
-            console.print(f"\n[bold red]💥 Pipeline failed:[/bold red] {e}")
-
-        return result
-
-    result = run_with_steps(user_prompt)
     elapsed = time.time() - start
     print_summary(result, elapsed)
 

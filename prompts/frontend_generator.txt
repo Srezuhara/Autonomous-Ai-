@@ -8,3 +8,14 @@ RULES:
 - Use axios for API calls to http://localhost:8000
 - Handle loading and error states.
 - Export component as default.
+
+IMPORT RULE — only import files that already exist:
+  You are shown the list of files already written and the full planned file
+  list. Import ONLY from those. Do not import a component you assume someone
+  else will create — if `./TodoList` was never planned, that import dangles and
+  the frontend fails to build.
+  If a piece of UI is needed and no file for it exists, write it inline in this
+  file rather than importing it from a file that does not exist.
+
+NO STUBS: no TODO comments, no placeholder `return null` standing in for real
+UI. Implement the component's actual behaviour.

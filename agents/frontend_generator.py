@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from agents.base_agent import BaseAgent
 from tools.file_writer import create_file, read_file
+from tools.code_introspect import find_dangling_js_imports
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,195 @@ class FrontendGenerator(BaseAgent):
             written.append(full_path)
             logger.info(f"✅ Generated: {full_path}")
 
+        # ── Phase 22: create components that were imported but never planned ──
+        written.extend(self._resolve_dangling_imports(intent, root, written))
+
         return written
+
+    # ── Phase 22: dangling import resolution ──────────────────────────────────
+
+    MAX_GENERATED_COMPONENTS = 6
+
+    def _resolve_dangling_imports(
+        self, intent: dict, root: str, written: list[str]
+    ) -> list[str]:
+        """
+        Generate components that existing files import but the architecture
+        never planned.
+
+        The generator only ever writes files listed in the architecture, so when
+        App.jsx imports `./TodoList` and no TodoList was planned, the import
+        simply dangles. Plain-JS projects receive no tsc validation, so nothing
+        downstream catches it — the frontend just fails to build. Creating the
+        component is the right repair: the import expresses a real requirement.
+        """
+        try:
+            import config
+            project_dir = Path(config.OUTPUT_DIR) / root
+        except Exception:
+            return []
+
+        try:
+            dangling = find_dangling_js_imports(project_dir)
+        except Exception as e:
+            logger.warning(f"⚠️  [Phase 22] dangling-import scan failed: {e}")
+            return []
+
+        if not dangling:
+            logger.info("✅ [Phase 22] Frontend: no dangling imports")
+            return []
+
+        # One component per missing target, even if several files import it.
+        by_target: dict[str, tuple[str, str]] = {}
+        for importer, spec, target in dangling:
+            if not self._should_create_component(project_dir, importer, spec, target):
+                continue
+            by_target.setdefault(target, (importer, spec))
+
+        if not by_target:
+            logger.info("✅ [Phase 22] Frontend: no missing components to create")
+            return []
+
+        created: list[str] = []
+        overflow = len(by_target) - self.MAX_GENERATED_COMPONENTS
+        for target, (importer, spec) in list(by_target.items())[
+            : self.MAX_GENERATED_COMPONENTS
+        ]:
+            ext  = Path(importer).suffix or ".jsx"
+            dest = Path(target)
+            if not dest.suffix:
+                dest = dest.with_suffix(ext)
+
+            logger.info(
+                f"🎨 [Phase 22] Creating missing component {dest.name} "
+                f"(imported as {spec})"
+            )
+            try:
+                code = self._generate_missing_component(
+                    intent, dest.stem, spec, importer
+                )
+            except Exception as e:
+                logger.warning(f"⚠️  [Phase 22] could not generate {dest.name}: {e}")
+                continue
+
+            if not code or not code.strip():
+                continue
+
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(code, encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"⚠️  [Phase 22] could not write {dest}: {e}")
+                continue
+
+            created.append(str(dest))
+            logger.info(f"✅ [Phase 22] Created: {dest}")
+
+        if overflow > 0:
+            logger.warning(
+                f"⚠️  [Phase 22] {overflow} further missing component(s) left "
+                f"unresolved (cap is {self.MAX_GENERATED_COMPONENTS})"
+            )
+        return created
+
+    # Importers whose broken imports must NOT spawn new source files.
+    _TEST_MARKERS = ("__tests__", ".test.", ".spec.", "/tests/", "\\tests\\")
+
+    def _should_create_component(
+        self, project_dir: Path, importer: str, spec: str, target: str
+    ) -> bool:
+        """
+        Decide whether a dangling import means "the component is missing" or
+        "the import path is wrong".
+
+        Creating a file is the right repair only for the first case. A live
+        build produced `tests/test_frontend.js` importing
+        `../todo_app/frontend/src/app.js` — a path that duplicates the project
+        name and resolves outside the source tree. Generating a component there
+        buried a junk copy of the app at `todo_app/todo_app/frontend/src/app.js`
+        instead of fixing anything.
+        """
+        imp = importer.replace("\\", "/").lower()
+
+        # 1. A test file with a broken path needs its path fixed, not a new
+        #    component invented to match the typo.
+        if any(marker.replace("\\", "/") in imp for marker in self._TEST_MARKERS):
+            logger.info(
+                f"  ↳ [Phase 22] Ignoring dangling import {spec} from a test file "
+                f"({Path(importer).name}) — the import path is wrong, not the component"
+            )
+            return False
+
+        # Resolve every path before comparing — mixing a resolved importer with
+        # an unresolved target makes relative_to() fail on paths that are
+        # actually fine.
+        target_path  = Path(target).resolve()
+        project_root = Path(project_dir).resolve()
+
+        # 2. Never write outside the project.
+        try:
+            target_path.relative_to(project_root)
+        except ValueError:
+            logger.warning(
+                f"  ↳ [Phase 22] Refusing to create {target_path} — outside the project"
+            )
+            return False
+
+        # 3. Stay inside the importer's own source root. An import that climbs
+        #    out of src/ is malformed rather than unsatisfied.
+        importer_path = Path(importer).resolve()
+        source_root = None
+        for parent in importer_path.parents:
+            if parent.name.lower() == "src":
+                source_root = parent
+                break
+        if source_root is None:
+            source_root = importer_path.parent
+
+        try:
+            target_path.relative_to(source_root)
+        except ValueError:
+            logger.warning(
+                f"  ↳ [Phase 22] Refusing to create {target_path.name} — {spec} "
+                f"resolves outside {source_root.name}/, so the import path is malformed"
+            )
+            return False
+
+        return True
+
+    def _generate_missing_component(
+        self, intent: dict, name: str, spec: str, importer: str
+    ) -> str:
+        """Generate one component to satisfy an existing import."""
+        try:
+            importer_code = read_file(importer)[:1500]
+        except Exception:
+            importer_code = ""
+
+        ext = Path(importer).suffix
+        lang = "TypeScript React" if ext in (".ts", ".tsx") else "JavaScript React"
+
+        prompt = f"""Create the missing React component `{name}`.
+
+It is imported as `{spec}` by {Path(importer).name}, but the file was never
+created. Write it so that import resolves and the app builds.
+
+APP SPEC:
+{json.dumps(intent, indent=2)[:900]}
+
+THE FILE THAT IMPORTS IT:
+{importer_code}
+
+REQUIREMENTS:
+- Language: {lang}
+- Export the component as the DEFAULT export, named `{name}`.
+- Accept exactly the props the importing file passes to it.
+- Implement real, working behaviour — no TODO comments, no placeholder returns.
+- Style with Tailwind CSS classes.
+- Do not import any other component that does not already exist.
+
+Return ONLY the raw component code. No markdown, no explanation."""
+        return self.think(prompt)
 
     # ── Phase 19.2: full-header multi-file context ────────────────────────────
 

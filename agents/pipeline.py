@@ -131,6 +131,9 @@ class BuildResult:
     completed_steps:          list  = field(default_factory=list)
     pending_steps:            list  = field(default_factory=list)
 
+    # ── Phase 22: runtime verification ────────────────────────────────────────
+    smoke_summary:            str   = ""   # "N/M routes responded without a 5xx"
+
     @property
     def all_files(self):
         return self.backend_files + self.frontend_files
@@ -674,6 +677,70 @@ class Pipeline:
             f"{', '.join(sorted(stubs)[:6])}"
         ]
 
+    # ── Phase 22: runtime smoke test (no LLM, no quota cost) ──────────────────
+
+    def _smoke_test_runtime(self, result: BuildResult) -> list[str]:
+        """
+        Boot the generated app and call every route it declares.
+
+        This is the first check in the pipeline that asks the user's question —
+        "does the app respond?" — rather than "does the file import?". The
+        todo_app build passed debug 3/3 with an endpoint that raised on every
+        request, because the offending import sat inside a handler body and
+        nothing ever sent a request.
+
+        Findings are advisory: they mark the build degraded and are written into
+        SESSION_CONTEXT.md. Never raises.
+        """
+        root = result.architecture.get("root_folder", "")
+        if not root:
+            return []
+
+        try:
+            from tools.runtime_smoke import smoke_test_app
+            smoke = smoke_test_app(root)
+        except Exception as e:
+            logger.warning(f"  ⚠️  Runtime smoke test failed to run: {e}")
+            return []
+
+        # Record it on the build so the documenter and API can report it.
+        try:
+            result.smoke_summary = smoke.summary()
+        except Exception:
+            pass
+
+        if not smoke.ran or not smoke.entry:
+            logger.info("  ℹ️  Runtime smoke test skipped (no FastAPI entry point)")
+            return []
+
+        if not smoke.app_loaded:
+            logger.warning(f"  🚨 App failed to boot: {smoke.error[:200]}")
+            return [
+                f"the application does not start: {smoke.error[:200]}. "
+                f"Every endpoint is unreachable."
+            ]
+
+        if not smoke.probes:
+            return []
+
+        logger.info(f"  🔥 Runtime smoke test: {smoke.summary()}")
+        for probe in smoke.probes:
+            mark = "✅" if probe.ok else "🚨"
+            logger.info(f"     {mark} {probe.method:6} {probe.path} → {probe.status}")
+
+        failures = smoke.failures
+        if not failures:
+            return []
+
+        detail = ", ".join(
+            f"{p.method} {p.path} → {p.status or 'no response'}" for p in failures[:5]
+        )
+        return [
+            f"{len(failures)} of {smoke.total} endpoint(s) return a server error when "
+            f"called: {detail}. These fail at request time, which the import check "
+            f"cannot see."
+        ]
+
     def _quota_available(self) -> bool:
         """True when at least one Groq model still has usable daily quota."""
         try:
@@ -739,6 +806,10 @@ class Pipeline:
         # that was never generated, placeholder files, and dangling frontend
         # imports. None of that is visible to the import/test gates.
         advisory = self._audit_generated_output(result)
+
+        # Phase 22: actually run the app. Static analysis cannot tell a handler
+        # that works from one that raises the moment a request arrives.
+        advisory = advisory + self._smoke_test_runtime(result)
 
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")

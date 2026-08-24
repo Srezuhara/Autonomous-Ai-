@@ -168,8 +168,12 @@ def _get_config(attr: str, default):
 
 
 # ── Dual-model configuration ──────────────────────────────────────────────────
-_HEAVY_MODEL = os.getenv("GROQ_MODEL_HEAVY", "llama-3.3-70b-versatile")
-_FAST_MODEL  = os.getenv("GROQ_MODEL_FAST",  "llama-3.1-8b-instant")
+# Defaults track what Groq currently serves. The llama-3.x models this project
+# was originally built against were decommissioned — they now return HTTP 404 on
+# every key, which surfaces as "all keys tried without success" rather than as a
+# model error, so keep these current.
+_HEAVY_MODEL = os.getenv("GROQ_MODEL_HEAVY", "openai/gpt-oss-120b")
+_FAST_MODEL  = os.getenv("GROQ_MODEL_FAST",  "openai/gpt-oss-20b")
 
 _legacy = os.getenv("GROQ_MODEL", "")
 if _legacy:
@@ -240,6 +244,80 @@ if GROQ_FREE_TIER_CONSERVE:
     })
 
 _DEFAULT_MAX_TOKENS = 1024
+
+
+# ── Phase 22: reasoning-model support ─────────────────────────────────────────
+#
+# Groq decommissioned the llama-3.x models this project was built against. The
+# replacements (openai/gpt-oss-*) are REASONING models: they spend part of the
+# completion budget on a private chain of thought returned in a separate
+# `reasoning` field, and only the remainder on `content`.
+#
+# Measured on the live API with max_tokens=950 and a 4-endpoint routes.py prompt:
+#
+#   gpt-oss-20b   no effort param   → finish_reason=length  (code TRUNCATED)
+#   gpt-oss-120b  no effort param   → finish_reason=length  (code TRUNCATED)
+#   gpt-oss-120b  reasoning_effort=low → finish_reason=stop, 3541 chars, 849 tokens
+#
+# Truncated code is worse than useless — it is a syntax error that the debugger
+# then burns retries on. `reasoning_effort=low` fixes it outright and costs
+# FEWER tokens, because the budget goes to code instead of deliberation.
+#
+# gpt-oss-20b rejects reasoning_effort with HTTP 400 ("Tool choice is none, but
+# model called a tool"), so it is excluded and given a larger budget floor
+# instead — it needs ~1600 tokens to finish the same prompt cleanly.
+
+_REASONING_MODEL_MARKERS = ("gpt-oss", "qwen3", "deepseek-r1")
+
+# Models verified to accept the `reasoning_effort` parameter on Groq.
+_REASONING_EFFORT_SUPPORTED = ("gpt-oss-120b",)
+
+_REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
+
+# Floor applied to reasoning models that cannot be told to think less.
+_REASONING_MIN_TOKENS = int(os.getenv("GROQ_REASONING_MIN_TOKENS", "1600"))
+
+
+def _is_reasoning_model(model: str) -> bool:
+    low = (model or "").lower()
+    return any(marker in low for marker in _REASONING_MODEL_MARKERS)
+
+
+def _supports_reasoning_effort(model: str) -> bool:
+    low = (model or "").lower()
+    return any(marker in low for marker in _REASONING_EFFORT_SUPPORTED)
+
+
+def _apply_reasoning_budget(model: str, max_tokens: int) -> int:
+    """
+    Reasoning models that cannot be told to think less need a bigger cap, or the
+    answer is cut off mid-statement.
+
+    max_tokens is a CAP, not a spend — raising it costs nothing unless the model
+    actually uses it, and a truncated file is discarded anyway.
+    """
+    if not _is_reasoning_model(model) or _supports_reasoning_effort(model):
+        return max_tokens
+    if max_tokens >= _REASONING_MIN_TOKENS:
+        return max_tokens
+    logger.debug(
+        f"Raising [{model}] max_tokens {max_tokens} → {_REASONING_MIN_TOKENS} "
+        f"(reasoning model without reasoning_effort support)"
+    )
+    return _REASONING_MIN_TOKENS
+
+
+def _build_groq_payload(model: str, messages: list, max_tokens: int) -> dict:
+    """Assemble the chat-completions body, adapting to reasoning models."""
+    payload = {
+        "model":       model,
+        "messages":    messages,
+        "max_tokens":  _apply_reasoning_budget(model, max_tokens),
+        "temperature": 0.2,
+    }
+    if _supports_reasoning_effort(model) and _REASONING_EFFORT:
+        payload["reasoning_effort"] = _REASONING_EFFORT
+    return payload
 
 
 def get_model_for_agent(agent_name: str) -> str:
@@ -1017,12 +1095,7 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                             "Authorization": f"Bearer {key}",
                             "Content-Type":  "application/json",
                         },
-                        json={
-                            "model":       model,
-                            "messages":    messages,
-                            "max_tokens":  max_tokens,
-                            "temperature": 0.2,
-                        },
+                        json=_build_groq_payload(model, messages, max_tokens),
                     )
                 _update_rate_state_from_headers(model, resp.headers)
 
