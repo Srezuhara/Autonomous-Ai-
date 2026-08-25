@@ -198,3 +198,95 @@ test.describe('the full journey', () => {
     await expect(page.getByRole('button', { name: /Build app/ })).toBeEnabled();
   });
 });
+
+/**
+ * The status filter must actually change what is on screen.
+ *
+ * This guards a bug that every other check on the project was blind to. The
+ * chip fired, the request went out with `?status=failed`, the backend returned
+ * the seven failed builds, and React re-rendered the list with them — while the
+ * DOM went on showing all fifty rows of every status.
+ *
+ * `exit="exit"` on the list wrapper is a variant *label*, so Framer propagated
+ * it to all fifty rows; those per-row exits stalled, the wrapper's exit never
+ * reported completion, and the enclosing `AnimatePresence mode="wait"` sat
+ * waiting for an exit that never finished. The fix is `exit={appListExit}` — an
+ * object, which stays on the wrapper. See `lib/motion.ts`.
+ *
+ * Typecheck, lint, the 191 component tests and the existing motion specs were
+ * all green throughout: the component's own output was correct, and only the
+ * rendered DOM disagreed. Hence an assertion on badges actually in the page.
+ */
+test.describe('the dashboard status filter', () => {
+  /** Chip label → the badge text every visible row must carry. */
+  const FILTERS = [
+    { chip: 'Failed',    badge: 'Failed' },
+    { chip: 'Done',      badge: 'Done' },
+    { chip: 'Cancelled', badge: 'Cancelled' },
+    { chip: 'Partial',   badge: 'Done (with context)' },
+  ];
+
+  for (const { chip, badge } of FILTERS) {
+    test(`"${chip}" shows only ${badge} builds`, async ({ page }) => {
+      await page.goto(ROUTES.dashboard);
+      await page.waitForLoadState('networkidle');
+
+      const before = await page.locator('.build-card').count();
+      test.skip(before === 0, 'no builds in this instance to filter');
+
+      await page.getByRole('button', { name: chip, exact: true }).click();
+
+      /**
+       * Poll the assertion itself, not a proxy for it.
+       *
+       * The first version polled `count() <= before`, which the *stale* list
+       * satisfies on the very first sample — so under a loaded parallel run the
+       * test read the old rows and failed, while passing in isolation. The swap
+       * runs through a loading state and two presence transitions, so the only
+       * safe thing to wait on is the set of statuses actually on screen.
+       */
+      const rows = page.locator('.build-card');
+      await expect
+        .poll(async () => {
+          const badges = await rows.locator('[class*="badge"]').allTextContents();
+          return [...new Set(badges.map(t => t.trim()))].sort().join('|');
+        }, { timeout: 8000 })
+        .toBe(badge);
+
+      // Every row carries a badge, so the set above covers all of them and a
+      // row cannot slip through unlabelled.
+      const n = await rows.count();
+      expect(await rows.locator('[class*="badge"]').count()).toBe(n);
+      expect(n).toBeGreaterThan(0);
+      expect(n).toBeLessThanOrEqual(before);
+
+      // And exactly one list is mounted: a stalled exit used to leave the
+      // outgoing list in the DOM alongside the incoming one.
+      await expect(page.locator('.dash-results')).toHaveCount(1);
+    });
+  }
+
+  test('switching back to All restores the full list', async ({ page }) => {
+    await page.goto(ROUTES.dashboard);
+    await page.waitForLoadState('networkidle');
+
+    const all = await page.locator('.build-card').count();
+    test.skip(all === 0, 'no builds in this instance to filter');
+    test.skip(
+      (await page.getByRole('button', { name: 'Failed', exact: true }).count()) === 0,
+      'no Failed filter rendered',
+    );
+
+    await page.getByRole('button', { name: 'Failed', exact: true }).click();
+    await expect
+      .poll(async () => {
+        const badges = await page.locator('.build-card [class*="badge"]').allTextContents();
+        return [...new Set(badges.map(t => t.trim()))].join('|');
+      }, { timeout: 8000 })
+      .toBe('Failed');
+
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await expect.poll(async () => page.locator('.build-card').count(), { timeout: 8000 })
+      .toBe(all);
+  });
+});

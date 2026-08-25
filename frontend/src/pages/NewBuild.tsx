@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Send, X, Globe, Terminal, Code2, Database,
   AlertCircle, Sparkles,
@@ -72,7 +72,17 @@ const PIPELINE = [
 ] as const;
 
 export default function NewBuild() {
-  const [prompt, setPrompt] = useState('');
+  /**
+   * Landing's prompt preview hands its text over through router state, so a
+   * visitor who starts typing on the marketing page arrives here with what
+   * they wrote already in the composer rather than facing an empty box.
+   *
+   * Read once as `useState`'s initial value, not synced: after the first
+   * render this field belongs to the user, and re-applying the navigation
+   * state would fight their edits on every re-render.
+   */
+  const { state } = useLocation() as { state?: { prompt?: string } };
+  const [prompt, setPrompt] = useState(state?.prompt ?? '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);

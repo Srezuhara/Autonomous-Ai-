@@ -1,15 +1,16 @@
 # Session Progress — start here
 
-**Last session: 2026-08-25 (motion pass).** Everything in
-`FRONTEND_COMPLETION_PLAN.md` (phases 1 through 5) is executed and verified,
-and a **motion pass** has since been applied across every app surface (§2.6).
-Nothing is committed: the work sits in the working tree on `main`, on top of
-`a4dadd8`.
+**Last session: 2026-08-25 (landing restructure).** `FRONTEND_LANDING_PLAN.md` is
+now **fully executed** — all three phases. See §2.7 below for what shipped.
+The change is in the working tree and **not yet committed**; the commit before it
+is `48d3ae7` "Restructured frontend".
 
-> **Read §3.0 before you commit anything.** A `.gitignore` rule is currently
-> hiding `frontend/src/lib/` — which now contains the motion vocabulary the
-> whole frontend imports. A commit made without fixing that produces a tree
-> that does not build.
+> The motion pass and everything in `FRONTEND_COMPLETION_PLAN.md` (phases 1-5)
+> remains executed, verified, committed and pushed as `48d3ae7`.
+
+> **The `.gitignore` blocker described in the old §3.0 is FIXED.** The unanchored
+> `lib/` rule was anchored to `/lib/`, the UTF-16 corruption on the last line was
+> repaired, and `frontend/src/lib/` is now tracked and on the remote. Nothing to do.
 
 Read this file first. Then:
 
@@ -50,7 +51,9 @@ npm run typecheck      # tsc -b across app / node / test projects
 npm run lint           # eslint
 npm run build          # vite build
 npm run test           # 191 Vitest, ~15s
-npm run test:e2e       # 75 Playwright + axe (74 pass, 1 skips) — needs BOTH servers up
+npm run test:e2e       # 80 Playwright + axe — needs BOTH servers up
+                       # 79 pass, 1 skips, 0 fail (stable over 3 runs).
+                       # 5 new: the dashboard status-filter guard, §2.8.
 
 # Backend (test_phase17 needs the server running)
 venv/Scripts/python.exe test_phase17.py                  # 54/54
@@ -118,7 +121,7 @@ npm 7 high → **0**. Python: every request-path package clean.
 
 ---
 
-## 2.6 The motion pass (most recent work)
+## 2.6 The motion pass
 
 Motion.dev / `framer-motion@12` was already a dependency, and `lib/motion.ts`
 already held a motion vocabulary — but it was wired into **only** Landing,
@@ -141,7 +144,8 @@ paid on every repaint, and on a 50-row build list it is visible jank.
 ### New exports in `lib/motion.ts`
 
 `appItem`, `appStagger()`, `popIn`, `disclose`, `routeTransition`, `liftable`,
-`layoutSpring`, `NAV_RAIL_ID`, `CHIP_ID`.
+`layoutSpring`, `NAV_RAIL_ID`, `CHIP_ID` — plus **`appListExit`**, added later by
+§2.8. Read that entry before giving any AnimatePresence child `exit="exit"`.
 
 ### Where motion now lives
 
@@ -197,11 +201,137 @@ without `motion.spec.ts` every animation could be broken with both files green.
 
 ---
 
+## 2.7 The landing restructure
+
+`FRONTEND_LANDING_PLAN.md`, all three phases. Frontend only; no backend change.
+The plan's locked decision — **real data everywhere, nothing fabricated** — held
+throughout, and it is what most of the work consists of.
+
+### The bug the plan was right about
+`PIPELINE_AGENTS` carried **eight** entries (Architect was missing) while the page
+claimed a "9-agent pipeline" in four places. The list is now nine, named exactly as
+`STEP_NAMES_FALLBACK` in `StepTracker.tsx` names them.
+
+### A second contradiction, surfaced by the live data
+The hero asserted `<8min` average build and the lede said "in under eight minutes"
+— while the proof rail three screens down now reads **11.6m** off this instance.
+The static claim is gone: the hero's fourth stat is `formatBuildTime(stats)` with
+the label "Avg build here", the lede no longer quotes a duration, and the first FAQ
+answer explains that the figure is computed from the database rather than written
+into the page. `NewBuild.tsx:281` still says "Typical run is 3-8 minutes" — that is
+an app screen and was out of this plan's scope, but it is the same claim.
+
+### What is new on the page
+
+| Section | Data behind it |
+|---|---|
+| Prompt preview (§3) | The real `PromptComposer`. Text carries to `/build` via router state |
+| Stage-card artifacts | `top_app_types` and `average_review_score` from `/stats`; a fixed deliverables list |
+| Agent topology SVG | Static — 9 nodes and the conditional repair branch. `components/landing/AgentTopology.tsx` |
+| Key pool | `health.llm.keys[]` — real count, real per-key state |
+| Hero health footer | `worker_pool`, `groq_keys_available/total`, `llm.status` |
+| Recent builds feed | `useBuilds()` → the real `BuildCard`, last 5, failures included |
+| Analytics | `StatusBreakdown` + four figures; absorbed the old `Proof` rail |
+
+### Three decisions worth keeping
+
+1. **`ChartFrame` and `StatusBreakdown` moved to `components/charts/frame.tsx`.**
+   Both are pure DOM and CSS, but `charts/index.tsx` imports Recharts at the top
+   level, so importing either one from Landing would have pulled the whole library
+   into the entry chunk. `charts/index.tsx` re-exports them, so no call site changed.
+   **Entry chunk went 147 → 150.94 kB gzip.** A jump toward ~250 kB means Recharts
+   leaked back in.
+2. **Key suffixes are not rendered.** `/health` returns the tail of each live API
+   key. The card shows `Key 01…Key 08` with real states instead: the argument —
+   this many keys, this many holding quota — survives the redaction intact, and the
+   page does not publish fragments of live credentials.
+3. **Empty means absent, not skeletal.** With no builds, the feed renders nothing
+   at all and the analytics block does not appear; the proof rail falls back to em
+   dashes. Verified against a mocked-empty `/stats` and `/projects`.
+
+### Verified
+- typecheck / lint / 191 Vitest / `npm run build` — all clean.
+- Landing at 1440×900 in three data states (populated, empty, `/health` blocked):
+  **0 axe violations, 0 console errors, no horizontal overflow** in each.
+- Prompt hand-off asserted end to end: typing on `/` and pressing the button lands
+  on `/build` with the composer prefilled; an empty field carries nothing.
+- The no-loop law holds — the only infinite animation on the page is the hero
+  StepTracker's in-flight spinner, which is the sanctioned exception.
+
+### The E2E suite is green again — and why it was not
+
+Two `motion.spec.ts` tests were failing (route-transition residual opacity, and
+the sidebar rail). They failed on the committed baseline too, so they were not
+caused by the landing work — but they were **not** the test-timing flakes they
+looked like. They were the same defect as §2.8: animations that never completed
+left Framer with pending work, so the route wrapper really was still mid-opacity
+when the test sampled it. Fixing the exit deadlock fixed both.
+
+**79 pass, 1 skips, 0 fail**, stable across three consecutive full runs.
+
+## 2.8 The dashboard status filter was dead — root cause and fix (most recent work)
+
+Reported after the landing work and **present in `48d3ae7`**, so it predates it.
+Clicking any status chip left all fifty rows of every status on screen.
+
+### Everything upstream of the DOM was correct
+The chip fired, `useBuilds(filter)` requested `?status=failed`, the backend
+returned exactly the seven failed builds, and the component re-rendered with
+them — instrumented and confirmed: `{filter:"failed", n:7, first:"failed"}` while
+the DOM still held 50 rows. The count pill beside the chips even updated to
+"7 builds", because it sits outside the list's `AnimatePresence`.
+
+### The cause
+`Dashboard.tsx` gave the list wrapper `exit="exit"`. That is a variant **label**,
+and Framer propagates a label down the entire variant subtree — so all fifty
+`BuildCard` rows began their own exit animation. Those per-row exits stall partway
+(the rows carry `layout`, and the projection freezes their value animations while
+the subtree is being removed; measured: parent reached `opacity: 0`, the last row
+reached `0`, the first row sat at `1` forever). The wrapper's exit therefore never
+reported completion, and the enclosing `AnimatePresence mode="wait"` waited on it
+indefinitely: the outgoing list was never removed and the incoming one was never
+mounted.
+
+Without `mode="wait"` the same defect showed differently — the stale list *and*
+the new list *and* the loading skeletons all stacked in the DOM at once.
+
+### The fix
+`lib/motion.ts` — `appStagger()` no longer carries an `exit` variant (it was the
+trap), and exports **`appListExit`**, an explicit prop object. `Dashboard.tsx`
+uses `exit={appListExit}` on both list wrappers, so the exit stays on the wrapper:
+one opacity animation, one completion, ~90ms. That is also the correct motion
+call — fifty rows leaving one after another is a 750ms wipe, well past the
+≤120ms exit budget.
+
+Every other `exit="exit"` in the app was audited: they all sit on single elements
+using `disclose` or `popIn`, with no staggered children, and are unaffected.
+
+### The guard
+`e2e/integration.spec.ts` → "the dashboard status filter": five tests asserting
+that every badge visible after a filter click is that status, and that exactly one
+`.dash-results` is mounted. **Verified to fail when the bug is reintroduced** —
+all five go red on `exit="exit"`.
+
+Its first version was itself wrong in an instructive way: it polled
+`count() <= before`, which the *stale* list satisfies on the first sample, so it
+passed alone and failed under a loaded parallel run. It now polls the assertion
+itself — the set of statuses actually on screen.
+
+### Not fixed, deliberately
+Each filter is its own react-query key, so switching filters has no cached data
+and flashes the loading skeletons before the rows arrive. `placeholderData:
+keepPreviousData` on `useBuilds` would remove the flash. It is a separate UX
+change touching a hook Landing also uses, so it was left out of a bug fix.
+
 ## 3. What is NOT done
 
-### 3.0 Blocker — `.gitignore` is hiding `frontend/src/lib/`
+### 3.0 ~~Blocker~~ RESOLVED — `.gitignore` was hiding `frontend/src/lib/`
 
-**Fix this before committing.** The root `.gitignore` carries a Python
+> **Fixed in `48d3ae7`.** `lib/` was anchored to `/lib/`, the UTF-16 corruption on
+> the final line was repaired, and all six `frontend/src/lib/*` files are committed
+> and pushed. The rest of this section is kept as the record of what was wrong.
+
+The root `.gitignore` carried a Python
 packaging rule at line 57:
 
 ```gitignore
@@ -236,8 +366,10 @@ template and was only ever meant to match a build artefact at the root.
 
 ### 3.1 Everything else
 
-1. **Nothing is committed.** The work sits in the working tree. Review and
-   commit is the obvious next step — after §3.0.
+1. **The landing restructure is not committed.** It sits in the working tree
+   (`git status`: Landing.tsx, landing.css, NewBuild.tsx, charts/index.tsx, plus
+   the new `charts/frame.tsx` and `components/landing/`). Review and commit is
+   the obvious next step. Everything before it is committed as `48d3ae7`.
 2. **`chromadb` and `langchain` are declared in `requirements.txt` and never
    imported.** Verified: "chromadb" occurs twice, both as a *string* and both
    about **generated** projects, not this app — `_HEAVY_IMPORT_PACKAGES` in
@@ -256,8 +388,11 @@ template and was only ever meant to match a build artefact at the root.
 5. **Token pricing is hardcoded** in `lib/pricing.ts` ($0.59/$0.79 per 1M). The
    API sends no pricing field. One module now, so it cannot drift between
    screens, but still an assumption.
-6. **The `dist/` served at :8000 is stale** relative to the working tree. Run
-   `npm run build` if you want the one-command path current.
+6. **`dist/` is current** as of the landing restructure — `npm run build` was
+   the last thing run against it. Rebuild after any further source change if you
+   use the one-command path at :8000.
+
+7. **The skeleton flash on filter change** is unfixed by choice — see §2.8.
 
 ---
 
@@ -276,6 +411,9 @@ template and was only ever meant to match a build artefact at the root.
 | A `layoutId` assertion fails by 1–2px at random | You sampled a mid-flight frame. Layout springs take longer under a loaded parallel run; poll to settlement rather than measuring once. |
 | A `height: auto` disclosure collapses to a sliver, not to nothing | The animated element has its own padding/border. A border-box element at `height: 0` still paints them. Animate a bare wrapper instead (`.nb-error-slot`, `.pd-logs__reveal`). |
 | E2E fails with connection errors | The backend isn't running. Playwright starts Vite but deliberately not the backend (it owns a DB and worker pool). |
+| A list ignores a filter: the request is right, the response is right, React re-renders with the right rows, and the DOM keeps the old ones | `exit="exit"` on an `AnimatePresence` child that holds many `variants` children. The label propagates to every child, those exits stall, the wrapper's exit never completes, and `mode="wait"` waits forever. Use an **object** (`exit={appListExit}`). See §2.8. |
+| An animation elsewhere "settles late" for no reason | A stalled exit anywhere leaves Framer with work that never completes. Two `motion.spec.ts` tests failed for months on exactly this and looked like sampling flakes. |
+| A UI test passes while the screen is visibly wrong | It asserted the component's inputs, not the rendered DOM. The filter guard in `integration.spec.ts` asserts the badges actually on screen, and was checked to fail when the bug is put back. |
 
 ---
 
@@ -328,6 +466,10 @@ frontend/src/
     PromptComposer.tsx/.css     the ONE prompt field — NewBuild and RebuildModal share it
     StatTile.tsx/.css           the ONE KPI tile — Dashboard and Statistics share it
     RebuildModal.tsx/.css       rewritten; was 437 lines with 260 of injected CSS
+  components/landing/
+    AgentTopology.tsx           the pipeline as a shape: 9 nodes + the repair branch
+  components/charts/
+    frame.tsx                   ChartFrame + StatusBreakdown, Recharts-free on purpose
   components/layout/
     MobileBar.tsx/.css          the <900px top bar; drawer toggle lives here
   hooks/
@@ -335,6 +477,7 @@ frontend/src/
     useMediaQuery.ts            useSyncExternalStore; no setState-in-effect
   lib/                          ⚠ CURRENTLY GITIGNORED — see §3.0
     motion.ts                   the motion vocabulary; marketing half + app half
+                                `appListExit` — read §2.8 before using exit="exit"
     prompt.ts                   the 2000-char contract + readout state machine
     scores.ts                   one interpretation of the three score formats
     pricing.ts                  token rates, formatting, cost

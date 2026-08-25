@@ -121,6 +121,22 @@
   .preview { padding: var(--space-4); }
 }
 
+/* The live state of this instance, under the hero preview. Mono and recessive:
+   it is a status strip, not a fourth call to action. */
+.hstat {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.hstat__cell { display: inline-flex; align-items: center; gap: 8px; }
+.hstat__text { letter-spacing: 0.02em; }
+
 /* ── Agent rail ──────────────────────────── */
 
 /* `.section.agents` rather than `.agents`: this file is imported from the
@@ -169,6 +185,51 @@
 }
 
 .agents__chip svg { color: var(--color-accent-secondary); }
+
+/* ── Prompt preview ────────────── */
+
+/* Copy left, the live composer right. The composer is the widest instrument on
+   the page and it carries the accent surface, so it takes the larger column and
+   the prose stays inside a readable measure beside it. */
+.prompt-try {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(2rem, 1rem + 4vw, 4.5rem);
+  align-items: center;
+}
+
+.prompt-try__copy  { max-width: 46ch; }
+.prompt-try__field { min-width: 0; }
+
+.prompt-try__hints {
+  list-style: none;
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.prompt-try__hints li {
+  position: relative;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
+  text-wrap: pretty;
+}
+
+/* A hairline rather than a bullet glyph — three dots stacked beside a lede
+   read as a feature list, and these are footnotes to the field. */
+.prompt-try__hints li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 8px;
+  height: 1px;
+  background: var(--border-accent);
+}
 
 /* ── Section heads ───────────────────────── */
 
@@ -219,6 +280,39 @@
   margin: 0;
   text-wrap: pretty;
 }
+
+/* ── Stage card artifacts ────────────────── */
+
+.stage-art { margin-top: var(--space-5); }
+
+.stage-art--tags {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* The count rides inside the tag as a mono figure so a type and its frequency
+   read as one object rather than as two adjacent chips. */
+.stage-art__count {
+  margin-left: 7px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.stage-art__score { display: flex; flex-direction: column; gap: 8px; }
+
+.stage-art__scorehead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.stage-art__of { color: var(--text-tertiary); font-size: var(--text-sm); }
 
 /* ── Feature bento ───────────────────────── */
 
@@ -412,6 +506,181 @@
   text-wrap: pretty;
 }
 
+/* ── Agent topology (feature bento) ─────── */
+
+.topo {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: var(--space-6);
+  overflow: visible;
+}
+
+.topo__edge {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+/* Dashed because the branch is conditional — it runs only when something the
+   generators wrote failed to import or run. */
+.topo__edge--repair {
+  stroke: var(--color-accent-tertiary);
+  stroke-dasharray: 3 4;
+  opacity: 0.85;
+}
+
+.topo__node {
+  fill: var(--color-bg-elevated);
+  stroke: var(--border-accent);
+  stroke-width: 1;
+}
+
+.topo__num {
+  fill: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+.topo__label {
+  fill: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-anchor: middle;
+}
+
+.topo__branch {
+  fill: var(--color-accent-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-anchor: end;
+}
+
+/* ── Key pool (feature bento) ───────────── */
+
+.keypool { margin-top: var(--space-5); }
+
+.keypool__grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px var(--space-4);
+}
+
+.keypool__key {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.keypool__name  { color: var(--text-secondary); letter-spacing: 0.03em; }
+.keypool__state { color: var(--text-tertiary); }
+
+.keypool__note {
+  margin: var(--space-4) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/* ── Recent builds feed ──────────────────── */
+
+/* A dashboard-weight island inside a marketing page. The Bezel is what makes
+   that legible: inside it the surfaces, the type and the motion are the app's,
+   and the frame says so deliberately rather than looking like a section that
+   forgot to be designed. */
+.feed__bezel { width: 100%; }
+
+.feed {
+  padding: clamp(1rem, 0.7rem + 1vw, 1.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.feed__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.feed__all {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.feed__all:hover { color: var(--color-accent-tertiary); }
+.feed__all svg   { transition: transform var(--duration-fast) var(--ease-out); }
+.feed__all:hover svg { transform: translate(1px, -1px); }
+
+/* ── Analytics ───────────────────────────── */
+
+/* The outcome meter is the argument, so it takes the wider column; the figures
+   beside it are supporting detail and read as a stack, not as a second grid
+   competing with it. */
+.analytics {
+  margin-top: var(--space-6);
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.analytics__chart { min-width: 0; }
+.analytics__chart .viz-frame { height: 100%; }
+
+.analytics__figures {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.afig {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.afig__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-accent-secondary);
+}
+
+/* The icon carries the accent; the label stays on `.ulabel`'s text token so the
+   row reads as one micro-label rather than two coloured things. */
+.afig__head .ulabel { color: var(--text-tertiary); }
+
+.afig__value { color: var(--text-primary); }
+
+.afig__note {
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
+  text-wrap: pretty;
+}
+
 /* ── Closing CTA ─────────────────────────── */
 
 .closing__bezel { width: 100%; }
@@ -429,6 +698,19 @@
 .closing__lede  { margin: 0; text-align: center; }
 .closing__actions { margin-top: var(--space-3); }
 
+/* The deliverables, between the lede and the button. Centred to match the
+   column, and on `.tag` so they are the same object as the app's own metadata
+   chips rather than a landing-page-only pill. */
+.closing__delivery {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
 /* ── Responsive collapse ─────────────────── */
 
 @media (max-width: 1023px) {
@@ -443,6 +725,9 @@
   .proof__cell:nth-child(2) { border-right: none; }
   .proof__cell:nth-child(1),
   .proof__cell:nth-child(2) { border-bottom: 1px solid var(--border-subtle); }
+  .analytics   { grid-template-columns: minmax(0, 1fr); }
+  .prompt-try  { grid-template-columns: minmax(0, 1fr); }
+  .prompt-try__copy { max-width: none; }
 }
 
 @media (max-width: 767px) {
@@ -454,4 +739,6 @@
   .proof__rail  { grid-template-columns: minmax(0, 1fr); }
   .proof__cell  { border-right: none; border-bottom: 1px solid var(--border-subtle); }
   .proof__cell:last-child { border-bottom: none; }
+  .analytics__figures { grid-template-columns: minmax(0, 1fr); }
+  .feed__all    { align-self: stretch; justify-content: space-between; }
 }

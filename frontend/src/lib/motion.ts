@@ -230,9 +230,36 @@ export function appStagger(step = 0.03, delay = 0): Variants {
   return {
     hidden: {},
     visible: { transition: { staggerChildren: step, delayChildren: delay } },
-    exit:    { transition: { staggerChildren: 0.015, staggerDirection: -1 } },
+    /* Deliberately no `exit` variant — see `appListExit` below. */
   };
 }
+
+/**
+ * Exit for a list wrapper that holds many `appItem` children, as an explicit
+ * prop object rather than a variant label.
+ *
+ * This is not a style preference, it is a correctness requirement, and it cost
+ * a live bug to find. `exit="exit"` is a variant *label*, and Framer propagates
+ * a label down the whole variant subtree — so every one of the 50 rows starts
+ * its own exit animation. Those per-row exits stall partway (the rows carry
+ * `layout`, and the projection freezes their value animations as the subtree is
+ * being removed), the wrapper's own exit therefore never reports completion,
+ * and an `AnimatePresence mode="wait"` around it waits forever: the outgoing
+ * list stays on screen and the incoming one is never mounted.
+ *
+ * On the Dashboard that read as "the status filter does nothing" — the request
+ * went out, the right rows came back, React re-rendered with them, and the DOM
+ * kept showing the stale list.
+ *
+ * Passing the exit as an object keeps it on the wrapper alone: one opacity
+ * animation, one completion, ~90ms. That is also the right motion call. Fifty
+ * rows leaving one after another is a 750ms wipe, well past the ≤120ms exit
+ * budget above, and the enter cascade is the half that carries meaning anyway.
+ */
+export const appListExit = {
+  opacity: 0,
+  transition: { duration: DURATION.instant, ease: EASE.in },
+} as const;
 
 /**
  * A value or status that has just *changed* in place.

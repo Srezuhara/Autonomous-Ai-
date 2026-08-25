@@ -7,7 +7,7 @@ import {
 import { useBuilds, useStats } from '../hooks/useQueries';
 import { BuildCard } from '../components/shared/BuildCard';
 import { StatTile } from '../components/shared/StatTile';
-import { appItem, appStagger, popIn, CHIP_ID, layoutSpring } from '../lib/motion';
+import { appItem, appStagger, appListExit, popIn, CHIP_ID, layoutSpring } from '../lib/motion';
 import './Dashboard.css';
 
 /**
@@ -204,7 +204,7 @@ export default function Dashboard() {
               variants={appStagger(0.05)}
               initial="hidden"
               animate="visible"
-              exit="exit"
+              exit={appListExit}
             >
               {Array.from({ length: 4 }, (_, i) => (
                 <motion.div key={i} className="panel dash-skeleton" variants={appItem} />
@@ -278,7 +278,9 @@ export default function Dashboard() {
               variants={appStagger(0.028)}
               initial="hidden"
               animate="visible"
-              exit="exit"
+              /* An object, never `exit="exit"`. A label propagates to all 50
+                 rows and the swap deadlocks — see `appListExit` in lib/motion. */
+              exit={appListExit}
             >
               {data.projects.map(project => (
                 <BuildCard key={project.build_id} project={project} />
