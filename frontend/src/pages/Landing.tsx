@@ -22,6 +22,9 @@ import {
   AmbientMesh, Bezel, Eyebrow, CTA, Reveal, RevealGroup, RevealItem,
 } from '@/components/ui/primitives';
 import { fadeUp, fadeUpTight, EASE, DURATION } from '@/lib/motion';
+import { useStats } from '@/hooks/useQueries';
+import { StepTracker } from '@/components/shared/StepTracker';
+import type { ProgressStep } from '@/hooks/useBuildProgress';
 import '@/styles/landing.css';
 
 /* Lucide defaults to a 2px stroke, which reads heavy and generic at these
@@ -32,11 +35,18 @@ const STROKE = 1.25;
    Content
 ───────────────────────────────────────────── */
 
+/**
+ * Facts about the system, not claims about its record. "18 Endpoints" was
+ * wrong (there are 17 public ones) and, like the proof rail below, it was a
+ * hardcoded number presented as measurement. What is genuinely fixed — the
+ * agent count, the typical run time — stays here; anything that varies with
+ * real usage now comes from `/stats`.
+ */
 const HERO_STATS = [
-  { value: '9',     label: 'AI agents'   },
-  { value: '18',    label: 'Endpoints'   },
-  { value: '<8min', label: 'Avg build'   },
-  { value: '24/7',  label: 'Available'   },
+  { value: '9',     label: 'AI agents'  },
+  { value: '4',     label: 'App types'  },
+  { value: '<8min', label: 'Avg build'  },
+  { value: '24/7',  label: 'Available'  },
 ];
 
 const PIPELINE_AGENTS = [
@@ -47,7 +57,7 @@ const PIPELINE_AGENTS = [
   { name: 'Reviewer',  icon: CheckCircle2 },
   { name: 'Debugger',  icon: Terminal     },
   { name: 'Tester',    icon: BarChart3    },
-  { name: 'Packager',  icon: Database     },
+  { name: 'Documenter', icon: Database    },
 ];
 
 const STEPS = [
@@ -57,12 +67,25 @@ const STEPS = [
   { num: '04', title: 'Test & Document',  desc: 'pytest suites are generated and executed, then the Documenter writes a README with real setup instructions.' },
 ];
 
-const PROOF_STATS = [
-  { value: '150+', label: 'Projects built',  icon: CheckCircle2 },
-  { value: '98%',  label: 'Success rate',    icon: TrendingUp   },
-  { value: '7.5m', label: 'Avg build time',  icon: Zap          },
-  { value: '24/7', label: 'Uptime',          icon: Activity     },
+/**
+ * Shown only until `/stats` answers, and only as the honest version of itself:
+ * an em dash, not an invented number. The page used to assert "150+ Projects
+ * built" and a "98% Success rate" on an instance that might have run nothing
+ * at all.
+ */
+const PROOF_FALLBACK = [
+  { value: '—',    label: 'Builds run',     icon: CheckCircle2 },
+  { value: '—',    label: 'Success rate',   icon: TrendingUp   },
+  { value: '—',    label: 'Avg build time', icon: Zap          },
+  { value: '9',    label: 'Agents',         icon: Activity     },
 ];
+
+/** 412 → "6.9m", 45 → "45s", null → "—". */
+function formatBuildTime(seconds: number | null | undefined): string {
+  if (seconds == null || isNaN(seconds)) return '—';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  return `${(seconds / 60).toFixed(1)}m`;
+}
 
 const FAQS = [
   { q: 'How long does it take to build an application?', a: 'The 9-agent pipeline typically completes a full-stack application in under 8 minutes, including code generation, review, debugging, testing and packaging.' },
@@ -89,12 +112,16 @@ function Hero() {
             </Eyebrow>
           </motion.div>
 
+          {/* Deliberately outside the cascade below. The headline is the page's
+              primary message; blurring it and holding it back 60ms meant it was
+              only fully legible around 480ms, which reads as a slow page rather
+              than a considered one. It rises 6px and is sharp from the first
+              frame — the cascade now flows *from* it instead of after it. */}
           <motion.h1
             className="display display--lg hero__title"
-            initial="hidden"
-            animate="visible"
-            variants={fadeUp}
-            transition={{ delay: 0.06 }}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: DURATION.normal, ease: EASE.out }}
           >
             {/* U+2011 non-breaking hyphen — a plain "-" lets the browser break
                 the line after "full-", which read as a typo at display size.
@@ -108,11 +135,11 @@ function Hero() {
             initial="hidden"
             animate="visible"
             variants={fadeUp}
-            transition={{ delay: 0.13 }}
+            transition={{ delay: 0.06 }}
           >
             Describe the product. Nine specialised agents plan the architecture,
             write the code, debug it until it runs, test it, and hand you a
-            packaged repository — in under eight minutes.
+            packaged repository, in under eight minutes.
           </motion.p>
 
           <motion.div
@@ -120,7 +147,7 @@ function Hero() {
             initial="hidden"
             animate="visible"
             variants={fadeUp}
-            transition={{ delay: 0.2 }}
+            transition={{ delay: 0.13 }}
           >
             <CTA to="/build" icon={<ArrowRight strokeWidth={STROKE} />}>
               Start building
@@ -135,7 +162,7 @@ function Hero() {
             initial="hidden"
             animate="visible"
             variants={fadeUp}
-            transition={{ delay: 0.27 }}
+            transition={{ delay: 0.2 }}
           >
             {HERO_STATS.map((s) => (
               <div className="hero__stat" key={s.label}>
@@ -165,43 +192,35 @@ function Hero() {
  * loop — a perpetually "running" fake build is attention-seeking motion that
  * ages badly and competes with the real dashboard.
  */
+/**
+ * The hero visual is the product's own `StepTracker`, not a mock-up of it.
+ *
+ * It used to be a hand-built imitation: a div with three macOS traffic-light
+ * dots, a fake title bar, list rows styled to look like a task list, and a
+ * progress footer. A fake product UI assembled out of divs is the most
+ * recognisable tell in an AI-built landing page, and it carries a second cost:
+ * it drifts. The real spine could be redesigned and this picture of it would
+ * go quietly out of date.
+ *
+ * Rendering the real component means the hero cannot lie about what the app
+ * looks like, and the pipeline names below are the ones the backend actually
+ * emits.
+ */
 function PipelinePreview() {
-  const rows = [
-    { step: 'intent_analyzer',   state: 'done',    ms: '1.7s'  },
-    { step: 'planner',           state: 'done',    ms: '2.4s'  },
-    { step: 'architect',         state: 'done',    ms: '6.1s'  },
-    { step: 'backend_developer', state: 'running', ms: '—'     },
-    { step: 'frontend_generator', state: 'queued', ms: '—'     },
-    { step: 'debugger',          state: 'queued',  ms: '—'     },
+  // Sample data — a build partway through step 5. Shaped exactly like the
+  // events the runner emits, so the component renders as it does in the app.
+  const SAMPLE_STEPS: ProgressStep[] = [
+    { step: 1, step_name: 'intent_analyzer',    status: 'done',    timestamp: '2026-08-25T10:00:02.000Z', data: { app_type: 'web_app' } },
+    { step: 2, step_name: 'planner',            status: 'done',    timestamp: '2026-08-25T10:00:14.000Z', data: { steps_count: 7 } },
+    { step: 3, step_name: 'architect',          status: 'done',    timestamp: '2026-08-25T10:00:41.000Z', data: { files_count: 12 } },
+    { step: 4, step_name: 'backend_developer',  status: 'done',    timestamp: '2026-08-25T10:01:58.000Z', data: { files_generated: 8 } },
+    { step: 5, step_name: 'frontend_generator', status: 'running', timestamp: '2026-08-25T10:02:20.000Z' },
   ];
 
   return (
     <Bezel featured className="hero__panel-bezel">
-      <div className="preview">
-        <header className="preview__bar">
-          <span className="preview__dots" aria-hidden>
-            <i /><i /><i />
-          </span>
-          <span className="preview__title">build · todo_app</span>
-          <span className="preview__badge">running</span>
-        </header>
-
-        <ul className="preview__rows">
-          {rows.map((r) => (
-            <li key={r.step} className={`preview__row preview__row--${r.state}`}>
-              <span className="preview__state" aria-hidden />
-              <span className="preview__step">{r.step}</span>
-              <span className="preview__ms">{r.ms}</span>
-            </li>
-          ))}
-        </ul>
-
-        <footer className="preview__foot">
-          <div className="preview__meter" aria-hidden>
-            <span style={{ width: '58%' }} />
-          </div>
-          <span className="preview__foot-label">4 / 9 steps · 58%</span>
-        </footer>
+      <div className="preview" aria-label="Example of a build in progress">
+        <StepTracker steps={SAMPLE_STEPS} totalSteps={9} />
       </div>
     </Bezel>
   );
@@ -245,7 +264,6 @@ function HowItWorks() {
     <section className="section section--lg" id="how">
       <div className="section__inner section__inner--wide">
         <div className="head">
-          <Reveal><Eyebrow>How it works</Eyebrow></Reveal>
           <Reveal delay={0.05}>
             <h2 className="display display--md head__title">
               Four stages, <span className="display__accent">no babysitting</span>
@@ -290,19 +308,21 @@ function Features() {
   return (
     <section className="section section--lg" id="features">
       <div className="section__inner section__inner--wide">
-        <div className="head head--split">
-          <div>
-            <Reveal><Eyebrow>Built for real work</Eyebrow></Reveal>
-            <Reveal delay={0.05}>
-              <h2 className="display display--md head__title">
-                Not a demo. A <span className="display__accent">pipeline</span>
-              </h2>
-            </Reveal>
-          </div>
+        {/* Stacked, not split. A big left headline with a small explainer
+            paragraph floating in a right-hand column is a templated section
+            header; one focused message reads better and survives a narrow
+            viewport without the aside becoming an orphan. */}
+        <div className="head">
+          <Reveal><Eyebrow>Built for real work</Eyebrow></Reveal>
+          <Reveal delay={0.05}>
+            <h2 className="display display--md head__title">
+              Not a demo. A <span className="display__accent">pipeline</span>
+            </h2>
+          </Reveal>
           <Reveal delay={0.1}>
-            <p className="lede head__aside">
-              Quota-aware, self-repairing and honest about what it produced —
-              a degraded build still ships code and tells you what is wrong.
+            <p className="lede">
+              Quota-aware, self-repairing, and honest about what it produced.
+              A degraded build still ships code and tells you what is wrong.
             </p>
           </Reveal>
         </div>
@@ -315,7 +335,7 @@ function Features() {
                 <h3 className="feature__title">Nine-agent pipeline</h3>
                 <p className="feature__desc">
                   An autonomous multi-agent system covering every stage of
-                  delivery — requirements analysis, architecture, code
+                  delivery: requirements analysis, architecture, code
                   generation, debugging, review, testing, packaging and
                   documentation. Each agent is specialised and independently
                   verifiable.
@@ -365,12 +385,39 @@ function Features() {
 ───────────────────────────────────────────── */
 
 function Proof() {
+  const { data: stats } = useStats();
+
+  /**
+   * Real numbers when this instance has any, honest blanks when it does not.
+   * A fresh install shows dashes rather than someone else's track record.
+   */
+  const cells = stats && stats.total_builds > 0
+    ? [
+        {
+          value: String(stats.total_builds),
+          label: stats.total_builds === 1 ? 'Build run' : 'Builds run',
+          icon: CheckCircle2,
+        },
+        {
+          value: `${(stats.success_rate_percent ?? 0).toFixed(0)}%`,
+          label: 'Success rate',
+          icon: TrendingUp,
+        },
+        {
+          value: formatBuildTime(stats.avg_duration_seconds ?? stats.duration_seconds?.average),
+          label: 'Avg build time',
+          icon: Zap,
+        },
+        { value: '9', label: 'Agents', icon: Activity },
+      ]
+    : PROOF_FALLBACK;
+
   return (
     <section className="section proof">
       <div className="section__inner section__inner--wide">
         <Bezel className="proof__bezel">
           <RevealGroup className="proof__rail" step={0.06}>
-            {PROOF_STATS.map((s) => {
+            {cells.map((s) => {
               const Icon = s.icon;
               return (
                 <RevealItem key={s.label} className="proof__cell" variants={fadeUpTight}>
@@ -400,13 +447,12 @@ function Faq() {
           scroll past it, instead of stranding half the viewport empty. */}
       <div className="section__inner section__inner--wide faq">
         <div className="faq__aside">
-          <Reveal><Eyebrow>FAQ</Eyebrow></Reveal>
           <Reveal delay={0.05}>
             <h2 className="display display--sm faq__title">Common questions</h2>
           </Reveal>
           <Reveal delay={0.1}>
             <p className="faq__note">
-              Still unsure? Start a build — the pipeline explains itself as it runs.
+              Still unsure? Start a build. The pipeline explains itself as it runs.
             </p>
           </Reveal>
         </div>

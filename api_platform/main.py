@@ -7,8 +7,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import config
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from api_platform.database import initialize_db
 from api_platform.runner import job_runner
@@ -63,17 +67,33 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    # `127.0.0.1` is a different origin from `localhost` as far as the browser is
+    # concerned, and Vite hands out whichever the user typed. Additive only —
+    # the existing entries are untouched. In dev the Vite proxy makes requests
+    # same-origin anyway, so this is now a belt-and-braces entry rather than the
+    # thing the app depends on.
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
+# Order matters. `analytics_router` carries the literal path
+# `DELETE /projects/cleanup`, while `projects.router` carries the parameterised
+# `DELETE /projects/{build_id}`. FastAPI matches in registration order, so with
+# projects first the literal route was unreachable — "cleanup" was swallowed as
+# a build_id and the endpoint 404'd on a build that does not exist.
+#
+# Nothing else collides: analytics' other paths are `/stats`, `/stats/daily` and
+# `POST /projects/{build_id}/rebuild`, none of which shadow a projects route.
+app.include_router(analytics_router)
 app.include_router(projects.router)
 app.include_router(jobs.router)
 app.include_router(downloads_router)
-app.include_router(analytics_router)
 app.include_router(ws_router)
 
 
@@ -181,3 +201,83 @@ async def reset_keys():
         "keys_available": ks["available_keys"],
         "keys": ks["keys"],
     }
+
+
+# ── SPA mount ─────────────────────────────────────────────────────────────────
+# Serves the built frontend from this same origin, so one command runs the whole
+# product: no second port, no CORS, no proxy.
+#
+# Registered LAST, and only if `frontend/dist` exists. Every API route above is
+# already bound by the time this runs, so nothing here can shadow one; with no
+# build present the whole block is a no-op and the app behaves exactly as it did
+# before.
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+# Client-side routes that collide with a real API path. `GET /projects/{id}`
+# returns JSON to the app and must keep doing so, but the *same* URL typed into
+# the address bar is a page the SPA owns. The two are told apart by `Accept`:
+# a browser navigation asks for text/html, `fetch` does not.
+_SPA_ROUTE_PREFIXES = ("/dashboard", "/build", "/projects", "/stats")
+
+
+def _wants_html(request) -> bool:
+    return "text/html" in request.headers.get("accept", "")
+
+
+if FRONTEND_DIST.is_dir():
+
+    app.mount(
+        "/assets",
+        StaticFiles(directory=FRONTEND_DIST / "assets"),
+        name="spa-assets",
+    )
+
+    @app.middleware("http")
+    async def spa_navigation(request, call_next):
+        """
+        Hand browser *navigations* to the SPA before routing sees them.
+
+        Without this, opening `/projects/{id}` directly — a deep link, a
+        refresh, a bookmark — renders the API's JSON in the browser instead of
+        the build report, because that path really is an API route. Only GETs
+        that explicitly ask for HTML are diverted, so every programmatic call
+        still reaches its endpoint untouched.
+        """
+        path = request.url.path
+        if (
+            request.method == "GET"
+            and _wants_html(request)
+            and any(path == p or path.startswith(p + "/") for p in _SPA_ROUTE_PREFIXES)
+        ):
+            index = FRONTEND_DIST / "index.html"
+            if index.is_file():
+                return FileResponse(index)
+        return await call_next(request)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """
+        History fallback for every other client-side route.
+
+        A request for a file that genuinely exists in dist (favicon, manifest)
+        is served as itself; anything else gets the shell and React Router
+        takes it from there.
+        """
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        # Containment check: a crafted path must not escape the dist directory.
+        if full_path and candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST):
+            return FileResponse(candidate)
+
+        index = FRONTEND_DIST / "index.html"
+        if not index.is_file():
+            raise HTTPException(status_code=404, detail="Frontend build not found")
+        return FileResponse(index)
+
+    logger.info(f"🖥️  Serving SPA from {FRONTEND_DIST}")
+
+else:
+    logger.info(
+        "🖥️  No frontend/dist — API only "
+        "(run `npm run build` in frontend/ to serve the SPA too)"
+    )

@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright failure artifacts (traces, screenshots) and the HTML report.
+# Regenerated on every run; never worth committing.
+test-results
+playwright-report
+blob-report
+.playwright

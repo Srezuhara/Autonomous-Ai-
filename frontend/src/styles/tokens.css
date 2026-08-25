@@ -32,6 +32,13 @@
   --color-accent-glow:      rgba(124, 107, 250, 0.35);
   --color-accent-subtle:    rgba(124, 107, 250, 0.08);
 
+  /* The one primary-action fill. Was three different gradients: this one on the
+     landing CTA and the sidebar button, and a 135deg indigo pair with two
+     hardcoded hexes on `.btn-primary`. */
+  --gradient-accent: linear-gradient(180deg,
+    var(--color-accent-secondary) 0%,
+    var(--color-accent-primary) 100%);
+
   /* Secondary accent for data-viz contrast pairs */
   --color-accent-cyan:      #4FD1E8;
   --color-accent-amber:     #F0B23E;
@@ -49,9 +56,19 @@
   /* Text Hierarchy */
   --text-primary:   #F4F4F6;
   --text-secondary: #9A9AA8;
-  --text-tertiary:  #55555F;
+  /* Was #55555F, which measured 2.57:1 against the elevated surface — every
+     mono micro-label in the system (`.ulabel`, `.page-head__kicker`, the
+     sidebar's nav label) failed WCAG AA, and axe flagged it as serious on
+     every route. #80808B is the smallest step that clears 4.5:1 against all
+     three backgrounds while keeping the cool tint and staying clearly
+     recessive against --text-secondary. */
+  --text-tertiary:  #80808B;
   --text-accent:    var(--color-accent-secondary);
   --text-inverted:  #050507;
+  /* Text sitting ON the accent gradient. Deliberately not `--text-inverted`:
+     a touch warmer, which keeps it from going cold against the violet. It was
+     the literal `#0B0713`, duplicated in Sidebar.css and primitives.css. */
+  --text-on-accent: #0B0713;
 
   /* Borders — hairlines only, never 1px solid gray */
   --border-subtle:  rgba(255, 255, 255, 0.055);

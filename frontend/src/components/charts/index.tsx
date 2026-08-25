@@ -57,7 +57,14 @@ function Tip({ title, rows }: { title: string; rows: TipRow[] }) {
   );
 }
 
-/** Card shell: title, optional action, and a guaranteed empty state. */
+/**
+ * Frame: title, optional action, and a guaranteed empty state.
+ *
+ * On `.panel` like every other surface in the app. It used to be `.viz-card`,
+ * a third card style whose only difference from `.panel` was `--radius-xl`
+ * instead of `--radius-lg` — visible as a mismatched corner wherever a chart
+ * sat beside a panel, which on Statistics is everywhere.
+ */
 export function ChartFrame({
   title, hint, children, empty, emptyLabel = 'No data yet', className = '', action,
 }: {
@@ -70,15 +77,17 @@ export function ChartFrame({
   action?: ReactNode;
 }) {
   return (
-    <section className={`viz-card ${className}`}>
-      <header className="viz-card__head">
+    <section className={`panel panel--pad viz-frame ${className}`.trim()}>
+      <header className="viz-frame__head">
         <div>
-          <h3 className="viz-card__title">{title}</h3>
-          {hint && <p className="viz-card__hint">{hint}</p>}
+          <h3 className="viz-frame__title">{title}</h3>
+          {hint && <p className="viz-frame__hint">{hint}</p>}
         </div>
         {action}
       </header>
-      {empty ? <div className="viz-empty">{emptyLabel}</div> : children}
+      {empty
+        ? <div className="empty empty--inset"><p className="empty__body">{emptyLabel}</p></div>
+        : children}
     </section>
   );
 }
@@ -112,7 +121,7 @@ export function BuildTrendChart({ data, days }: { data: DailyRow[]; days: number
       hint={hasAny ? undefined : 'No builds recorded in this window'}
       empty={!hasAny}
       emptyLabel="No builds in this period — the range control above changes the window"
-      className="viz-card--wide"
+      className="viz-frame--wide"
     >
       {/* Columns, not an area. Daily build counts are sparse discrete events —
           with one active day in fourteen, an area collapses to a flat line on
@@ -161,9 +170,19 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   running:           { label: 'Running',   color: 'var(--viz-running)' },
   failed:            { label: 'Failed',    color: 'var(--viz-failed)' },
   cancelled:         { label: 'Cancelled', color: 'var(--viz-cancelled)' },
+  // `queued` and `pending` were absent from both maps, so builds in either
+  // state were excluded from the total while the frame's hint still read
+  // "N builds total" from a different count — every percentage below was
+  // computed against the wrong denominator. Both are pre-work states, so they
+  // share the achromatic treatment `cancelled` uses.
+  queued:            { label: 'Queued',    color: 'var(--viz-cancelled)' },
+  pending:           { label: 'Pending',   color: 'var(--viz-cancelled)' },
 };
 
-const STATUS_ORDER = ['done', 'done_with_context', 'running', 'cancelled', 'failed'];
+/* Pipeline order: not yet started → in flight → outcomes. */
+const STATUS_ORDER = [
+  'done', 'done_with_context', 'running', 'queued', 'pending', 'cancelled', 'failed',
+];
 
 /**
  * Part-to-whole across build outcomes. This replaced a chart labelled
@@ -182,11 +201,17 @@ export function StatusBreakdown({ byStatus }: { byStatus: Record<string, number>
     <ChartFrame
       title="Build outcomes"
       hint={total ? `${total} builds total` : undefined}
+      /* `total` is the sum of the segments actually drawn, so the label and
+         the percentages below it always agree. */
       empty={!total}
       emptyLabel="No builds recorded yet"
     >
       <div className="viz-stack">
-        <div className="viz-stack__bar" role="img" aria-label="Build outcome distribution">
+        <div
+          className="meter meter--split viz-stack__bar"
+          role="img"
+          aria-label="Build outcome distribution"
+        >
           {entries.map((e) => (
             <span
               key={e.key}

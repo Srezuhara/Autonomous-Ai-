@@ -1,68 +1,47 @@
-/* Dashboard Page */
+/* ============================================
+   DASHBOARD — the build index
+   Built from app-shell.css (.page-head / .panel /
+   .chip / .figure). No surface style is invented
+   here; only layout and the three list states.
+   ============================================ */
 
-.dashboard {
+/* Doubled with `.page-wrapper` deliberately — this file is imported from the
+   component while globals.css arrives via index.css, so import order is not
+   guaranteed and an equal-specificity override would silently lose. */
+.dashboard.page-wrapper {
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
 }
 
-/* Header */
-.dashboard-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  padding-top: var(--space-2);
-}
+/* ── KPI row ──────────────────────────────────
+   Four up, then two, then one. Tiles never go
+   narrower than ~180px, below which the label
+   wraps and the figure loses its baseline.      */
 
-.dashboard-title {
-  font-size: var(--text-3xl);
-  color: var(--text-primary);
-}
-
-.dashboard-subtitle {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  margin-top: var(--space-1);
-}
-
-.dashboard-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-/* Metrics Grid */
-.dashboard-metrics {
+.dash-metrics {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-4);
 }
 
-@media (max-width: 900px) {
-  .dashboard-metrics { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 1020px) {
+  .dash-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-.metric-card {
+@media (max-width: 520px) {
+  .dash-metrics { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── Body ─────────────────────────────────── */
+
+.dash-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-5);
+  gap: var(--space-5);
 }
 
-.metric-card-icon {
-  margin-bottom: var(--space-1);
-}
-
-/* Body */
-.dashboard-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.dashboard-controls {
+.dash-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -70,21 +49,73 @@
   flex-wrap: wrap;
 }
 
-.dashboard-count {
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-}
-
-/* Build list */
-.build-list {
+.dash-filters {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
-.skeleton-stack {
+.dash-count {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* ── List ─────────────────────────────────────
+   Each BuildCard is its own .panel, so rows are
+   separated by space rather than by a shared
+   rule — no doubled hairlines between them.     */
+
+.dash-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* The rows now sit inside their own element so <AnimatePresence> has one node
+   per list state to swap. It repeats `.dash-list`'s column rather than being
+   `display: contents`, because a `display: contents` box has no layout of its
+   own and Framer cannot animate or measure it — the enter would apply to
+   nothing and `layout` on the rows inside would resolve against the wrong
+   ancestor. */
+.dash-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ── Loading ──────────────────────────────────
+   Empty panels at the height of a real row, so
+   the list does not jump when data lands. The
+   old skeletons shimmered on an infinite loop
+   with a staggered delay per row; a placeholder
+   that animates forever reads as activity that
+   is not happening.                             */
+
+.dash-skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dash-skeleton {
+  height: 92px;
+  opacity: 0.5;
+}
+
+/* ── Empty / error ────────────────────────────
+   Shape and type come from `.empty` in
+   app-shell.css; the charts use the same class.
+   Only the inline code chip is local.           */
+
+.dash-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  white-space: nowrap;
 }

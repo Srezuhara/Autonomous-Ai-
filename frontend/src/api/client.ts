@@ -1,4 +1,33 @@
-export const BASE_URL = (import.meta.env?.VITE_API_URL as string) ?? 'http://localhost:8000';
+/**
+ * Relative by default, so every request is same-origin.
+ *
+ * In dev, Vite proxies the API paths to the backend (see vite.config.ts); in
+ * production the backend serves the built SPA from the same origin. Either way
+ * the port and the `localhost` / `127.0.0.1` distinction stop mattering, and
+ * CORS never enters the picture.
+ *
+ * `VITE_API_URL` still overrides it for the case where the two genuinely are
+ * on different origins.
+ */
+export const BASE_URL = (import.meta.env?.VITE_API_URL as string) ?? '';
+
+/**
+ * WebSocket URL for a path like `/ws/jobs/{id}`.
+ *
+ * A relative BASE_URL cannot be string-concatenated into a `ws://` URL — the
+ * old code derived the host by stripping the scheme off BASE_URL, which now
+ * yields an empty host and the unconnectable `ws:///ws/jobs/x`. When BASE_URL
+ * is relative the host comes from the page; when it is absolute it comes from
+ * BASE_URL, and the scheme follows whichever one supplied the host.
+ */
+export function wsUrl(path: string): string {
+    if (BASE_URL) {
+        const proto = BASE_URL.startsWith('https') ? 'wss' : 'ws';
+        return `${proto}://${BASE_URL.replace(/^https?:\/\//, '')}${path}`;
+    }
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${window.location.host}${path}`;
+}
 
 // ── Build status vocabulary (Phase 21) ─────────────────────────────────────────
 // 'done_with_context' = the build produced usable code but was degraded or paused

@@ -7,6 +7,13 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
 
+    /* `strict` was absent, so strictNullChecks, noImplicitAny and the rest of
+       the family were all off — the compiler was accepting code it should have
+       rejected. Verified before enabling: the existing source produces ZERO
+       errors under strict, so this costs nothing and starts catching the class
+       of bug the config was silently permitting. */
+    "strict": true,
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -26,5 +33,9 @@
     "noFallthroughCasesInSwitch": true,
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* Tests live beside the code they cover but are typechecked by
+     tsconfig.test.json, which supplies the Node and Vitest globals the app
+     itself must never have access to. */
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"]
 }

@@ -1,195 +1,185 @@
-/* NewBuild Page */
+/* ============================================
+   NEW BUILD — prompt entry
+   Built from app-shell.css (.panel / .ulabel /
+   .chip / .figure). No card style is invented
+   here; only layout and the composer's internals.
+   ============================================ */
 
-.new-build {
+/* Doubled with `.page-wrapper` deliberately. This file is imported from the
+   component while globals.css comes through index.css, so import order is not
+   guaranteed; at equal specificity the max-width override silently loses. */
+.new-build.page-wrapper {
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
-  max-width: 740px;
+  /* Wider than the default wrapper: the layout is a two-column split, and at
+     1180px the rail squeezed the composer below a comfortable measure. */
+  max-width: 1240px;
 }
 
-/* Header */
-.new-build-header {
+.nb-head { margin-bottom: calc(var(--space-2) * -1); }
+
+/* ── Split ────────────────────────────────────
+   Asymmetric, per the layout archetype. The
+   composer gets the dominant column; the rail is
+   fixed-width reference material.               */
+
+.nb-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 312px;
+  gap: var(--space-6);
+  align-items: start;
+}
+
+/* Below this the rail no longer has room to be a column, so it becomes a
+   block underneath — still useful, no longer competing. */
+@media (max-width: 1020px) {
+  .nb-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.nb-compose {
   display: flex;
   flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/* Composer internals now live in components/shared/PromptComposer.css —
+   the rebuild modal uses the same control. */
+
+/* ── Error ────────────────────────────────── */
+
+/* The clipping wrapper the error discloses inside. It carries no padding and
+   no border, so at `height: 0` it renders as literally nothing — see the note
+   in NewBuild.tsx. */
+.nb-error-slot { overflow: hidden; }
+
+.nb-error {
+  display: flex;
+  align-items: flex-start;
   gap: var(--space-3);
-  padding-top: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border-color: rgba(244, 63, 94, 0.28);
+  background: rgba(244, 63, 94, 0.05);
 }
 
-.new-build-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--color-accent-secondary);
-  background: var(--color-accent-subtle);
-  border: 1px solid var(--border-accent);
-  padding: 5px 12px;
-  border-radius: var(--radius-full);
-  width: fit-content;
+.nb-error__icon {
+  color: var(--viz-failed);
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
-.new-build-title {
-  font-size: var(--text-4xl);
-  color: var(--text-primary);
-}
-
-.new-build-subtitle {
-  font-size: var(--text-base);
-  color: var(--text-secondary);
-  line-height: var(--leading-relaxed);
-  max-width: 540px;
-}
-
-/* Prompt Card */
-.prompt-card {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-  transition:
-    border-color var(--duration-normal) var(--ease-out),
-    box-shadow var(--duration-normal) var(--ease-out);
-}
-
-.prompt-card:focus-within {
-  border-color: var(--border-accent);
-  box-shadow: 0 0 0 1px var(--border-accent), var(--shadow-glow);
-}
-
-.prompt-card--over {
-  border-color: rgba(239, 68, 68, 0.4) !important;
-}
-
-.prompt-textarea {
-  width: 100%;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: var(--text-base);
-  line-height: var(--leading-relaxed);
-  resize: none;
-  padding: var(--space-5) var(--space-5) var(--space-4);
-  min-height: 160px;
-}
-
-.prompt-textarea::placeholder { color: var(--text-tertiary); }
-
-.prompt-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  background: rgba(0,0,0,0.15);
-}
-
-.char-count {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  transition: color var(--duration-fast) var(--ease-out);
-}
-
-.char-count--warn  { color: var(--color-warning); }
-.char-count--error { color: var(--color-error); }
-
-.prompt-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-/* Error */
-.new-build-error {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
+.nb-error__title {
   font-size: var(--text-sm);
-  color: var(--color-error);
-  border-color: rgba(239, 68, 68, 0.2);
-  background: var(--color-error-bg);
-  padding: var(--space-4);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+  margin: 0 0 2px;
 }
 
-/* Hint */
-.new-build-hint {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
-kbd {
-  display: inline-block;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--border-default);
-  padding: 2px 6px;
-  border-radius: 5px;
+.nb-error__body {
   font-family: var(--font-mono);
-  font-size: 0.85em;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
   color: var(--text-secondary);
+  margin: 0;
+  word-break: break-word;
 }
 
-/* Examples */
-.examples-section {
+/* ── Examples ─────────────────────────────── */
+
+.nb-examples {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-inline: var(--space-1);
+}
+
+.nb-examples__row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ── Pipeline rail ────────────────────────────
+   Reference column. Quiet by construction: mono
+   numerals, no icons, no hover states — nothing
+   here is clickable and it should not pretend
+   otherwise.                                    */
+
+.nb-rail {
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  position: sticky;
+  top: var(--space-8);
 }
 
-.examples-heading {
+@media (max-width: 1020px) {
+  .nb-rail { position: static; }
+}
+
+.nb-rail__head {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--text-secondary);
-}
-
-.examples-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  align-items: baseline;
+  justify-content: space-between;
   gap: var(--space-3);
 }
 
-@media (max-width: 600px) {
-  .examples-grid { grid-template-columns: 1fr; }
-}
+.nb-rail__count { color: var(--color-accent-tertiary); }
 
-.example-card {
-  text-align: left;
-  padding: var(--space-4) var(--space-5);
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    background var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.example-card:hover {
-  border-color: var(--border-accent);
-  background: var(--color-accent-subtle);
-  transform: translateY(-1px);
-}
-
-.example-card-label {
+.nb-rail__list {
+  list-style: none;
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  color: var(--color-accent-secondary);
-  letter-spacing: 0.04em;
-  margin-bottom: var(--space-2);
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
 }
 
-.example-card-text {
+.nb-step {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.nb-step:first-child { border-top: none; padding-top: 0; }
+.nb-step:last-child  { padding-bottom: 0; }
+
+.nb-step__n {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding-top: 3px;
+  flex-shrink: 0;
+  width: 18px;
+}
+
+.nb-step__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nb-step__name {
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.nb-step__role {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
   line-height: var(--leading-snug);
+}
+
+.nb-rail__note {
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
   margin: 0;
-  font-family: var(--font-sans);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
 }

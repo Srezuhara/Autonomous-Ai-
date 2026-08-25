@@ -1,14 +1,45 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, RefreshCw, Sparkles, ChevronRight } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { X, RefreshCw, Sparkles, Plus } from 'lucide-react';
+import { dialogIn, backdropIn } from '../../lib/motion';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { PromptComposer } from './PromptComposer';
+import { promptState } from '../../lib/prompt';
+import './RebuildModal.css';
 
 interface RebuildModalProps {
-  isOpen:        boolean;
-  onClose:       () => void;
-  onRebuild:     (customPrompt: string) => void;
+  isOpen:         boolean;
+  onClose:        () => void;
+  onRebuild:      (customPrompt: string) => void;
   originalPrompt: string;
-  appName:       string;
-  isRebuilding:  boolean;
+  appName:        string;
+  isRebuilding:   boolean;
 }
+
+/**
+ * RebuildModal — re-run the pipeline, optionally with new instructions.
+ *
+ * Rewritten off a 260-line CSS-in-JS template literal that was injected into
+ * the document through a `<style>` tag on every mount. That literal was a
+ * second stylesheet: its own chip vocabulary, its own tab vocabulary,
+ * hardcoded rgba throughout, and `transition: all` on several rules. All of it
+ * is now RebuildModal.css built from `.panel` / `.chip` / `.ulabel` / `.btn`.
+ *
+ * It was also not a dialog in any accessible sense — no `role`, no
+ * `aria-modal`, no focus trap, no Escape handler and no focus restoration.
+ * `useFocusTrap` supplies the last three; the roles are below.
+ *
+ * The custom-instruction field is the same `PromptComposer` as NewBuild, so
+ * both textareas in the product enforce the same 2000-character contract. The
+ * old one counted down from 500 while the API rejected above 500 with a 422 —
+ * two different wrong numbers on one screen.
+ *
+ * Enter and exit are both real. The first version returned `null` when closed,
+ * so a full-viewport blurred overlay was deleted between two frames — the most
+ * abrupt state change in the product, on a confirmation flow. `AnimatePresence`
+ * holds it mounted long enough to fade, and the exit is subtler than the enter
+ * (opacity only, shorter) so it recedes rather than retracing its arrival.
+ */
 
 const REBUILD_SUGGESTIONS = [
   'Add user authentication with JWT tokens',
@@ -21,6 +52,13 @@ const REBUILD_SUGGESTIONS = [
   'Add API rate limiting and security headers',
 ];
 
+const MODES = [
+  { value: 'same',   label: 'Same prompt',         icon: RefreshCw },
+  { value: 'custom', label: 'Custom instructions', icon: Sparkles  },
+] as const;
+
+type Mode = (typeof MODES)[number]['value'];
+
 export function RebuildModal({
   isOpen,
   onClose,
@@ -29,409 +67,186 @@ export function RebuildModal({
   appName,
   isRebuilding,
 }: RebuildModalProps) {
-  const [mode, setMode]               = useState<'same' | 'custom'>('same');
+  const [mode, setMode] = useState<Mode>('same');
   const [customPrompt, setCustomPrompt] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const dialogRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
+
+  // Switching to the custom tab hands focus to the field it just revealed.
+  // Nothing here sets state, so it does not cascade a render the way the old
+  // reset-on-close effect did.
   useEffect(() => {
-    if (isOpen && mode === 'custom') {
-      setTimeout(() => textareaRef.current?.focus(), 100);
-    }
+    if (isOpen && mode === 'custom') textareaRef.current?.focus();
   }, [isOpen, mode]);
 
+  // While the dialog is up the page behind it must not scroll under the
+  // overlay — on touch especially, that reads as the modal drifting.
   useEffect(() => {
-    if (!isOpen) {
-      setMode('same');
-      setCustomPrompt('');
-    }
+    if (!isOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  const { isValid } = promptState(customPrompt);
+  const canSubmit = !isRebuilding && (mode === 'same' || isValid);
 
   const handleSubmit = () => {
-    if (mode === 'same') {
-      onRebuild('');
-    } else {
-      if (!customPrompt.trim()) return;
-      onRebuild(customPrompt.trim());
-    }
+    if (!canSubmit) return;
+    onRebuild(mode === 'same' ? '' : customPrompt.trim());
   };
 
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose();
+  /**
+   * The state reset lives here rather than in an effect keyed on `isOpen`.
+   * That effect ran on every close and set two pieces of state during the
+   * commit, which is the cascading-render pattern the React lint rule flags;
+   * doing it on the way out is both cheaper and easier to follow.
+   */
+  const handleClose = () => {
+    setMode('same');
+    setCustomPrompt('');
+    onClose();
   };
 
-  const canSubmit = !isRebuilding && (mode === 'same' || customPrompt.trim().length > 10);
+  const addSuggestion = (text: string) => {
+    setCustomPrompt(prev => (prev ? `${prev}\n${text}` : text));
+    textareaRef.current?.focus();
+  };
 
   return (
-    <div className="modal-backdrop" onClick={handleBackdropClick}>
-      <div className="rebuild-modal">
-
-        {/* Header */}
-        <div className="rebuild-modal-header">
-          <div className="rebuild-modal-title-row">
-            <RefreshCw size={18} style={{ color: 'var(--color-accent-secondary)' }} />
-            <h2 className="rebuild-modal-title">Rebuild <span>{appName}</span></h2>
+    <AnimatePresence>
+      {isOpen && (
+      <motion.div
+        className="modal-backdrop"
+        onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
+        variants={backdropIn}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+      >
+      <motion.div
+        ref={dialogRef}
+        className="panel rebuild"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rebuild-title"
+        tabIndex={-1}
+        variants={dialogIn}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+      >
+        <header className="rebuild__head">
+          <div className="rebuild__title-row">
+            <RefreshCw size={16} className="rebuild__title-icon" aria-hidden />
+            <h2 id="rebuild-title" className="rebuild__title">
+              Rebuild <em>{appName}</em>
+            </h2>
           </div>
-          <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={handleClose}
+            aria-label="Close dialog"
+            disabled={isRebuilding}
+          >
             <X size={16} />
           </button>
+        </header>
+
+        <div className="rebuild__modes" role="group" aria-label="Rebuild mode">
+          {MODES.map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              className="chip"
+              aria-pressed={mode === value}
+              onClick={() => setMode(value)}
+              disabled={isRebuilding}
+            >
+              <Icon size={12} strokeWidth={2} />
+              {label}
+            </button>
+          ))}
         </div>
 
-        {/* Mode selector */}
-        <div className="rebuild-mode-tabs">
-          <button
-            className={`rebuild-mode-tab${mode === 'same' ? ' active' : ''}`}
-            onClick={() => setMode('same')}
-          >
-            <RefreshCw size={14} />
-            Same Prompt
-          </button>
-          <button
-            className={`rebuild-mode-tab${mode === 'custom' ? ' active' : ''}`}
-            onClick={() => setMode('custom')}
-          >
-            <Sparkles size={14} />
-            Custom Instructions
-          </button>
-        </div>
-
-        {/* Content */}
-        {mode === 'same' ? (
-          <div className="rebuild-same-content">
-            <p className="rebuild-same-label">Will rebuild using the original prompt:</p>
-            <div className="rebuild-original-prompt">
-              <p>{originalPrompt}</p>
-            </div>
-            <p className="rebuild-same-note">
-              The pipeline will re-run all 9 agents from scratch with the same requirements.
-              Useful for getting a fresh build after bugs or improvements to the pipeline itself.
-            </p>
-          </div>
-        ) : (
-          <div className="rebuild-custom-content">
-            <p className="rebuild-same-label">Describe what you want changed or improved:</p>
-            <textarea
-              ref={textareaRef}
-              className="rebuild-textarea"
-              placeholder={`e.g. "Keep the same task manager but add user authentication, a SQLite database to persist tasks, and improve the UI with better colors and animations"`}
-              value={customPrompt}
-              onChange={e => setCustomPrompt(e.target.value)}
-              rows={5}
-            />
-            <p className="rebuild-char-count" style={{
-              color: customPrompt.length > 450 ? 'var(--color-warning)' : 'var(--text-tertiary)'
-            }}>
-              {500 - customPrompt.length} chars remaining
-            </p>
-
-            {/* Quick suggestions */}
-            <div className="rebuild-suggestions">
-              <p className="rebuild-suggestions-label">Quick add:</p>
-              <div className="rebuild-suggestions-list">
-                {REBUILD_SUGGESTIONS.map(s => (
-                  <button
-                    key={s}
-                    className="rebuild-suggestion-chip"
-                    onClick={() => setCustomPrompt(prev =>
-                      prev ? `${prev}\n${s}` : s
-                    )}
-                  >
-                    <ChevronRight size={11} />
-                    {s}
-                  </button>
-                ))}
+        <div className="rebuild__body">
+          {mode === 'same' ? (
+            <>
+              <p className="rebuild__lede">
+                The pipeline re-runs all nine agents from scratch against the
+                original prompt — useful for a fresh build after a failure, or
+                after the pipeline itself has improved.
+              </p>
+              <div className="rebuild__quote">
+                <span className="ulabel">Original prompt</span>
+                <p>{originalPrompt}</p>
               </div>
-            </div>
+            </>
+          ) : (
+            <>
+              <PromptComposer
+                ref={textareaRef}
+                id="rebuild-prompt-input"
+                /* `.panel` is what carries the border and the focus-within
+                   ring. Without it this field had NO visible focus indicator
+                   at all: the composer suppresses the textarea's own outline
+                   on the assumption that its surface lights up instead, and
+                   that assumption only holds when the caller supplies one. */
+                className="panel"
+                label="What should change"
+                value={customPrompt}
+                onChange={setCustomPrompt}
+                onSubmit={handleSubmit}
+                disabled={isRebuilding}
+                minHeight={132}
+                idleText="Describe what you want changed"
+                placeholder={
+                  'Keep the same task manager, but add user accounts, persist '
+                  + 'tasks in SQLite, and tighten up the input validation…'
+                }
+              />
 
-            {/* Original prompt reference */}
-            <details className="rebuild-original-ref">
-              <summary>View original prompt</summary>
-              <p>{originalPrompt}</p>
-            </details>
-          </div>
-        )}
+              <div className="rebuild__suggestions">
+                <span className="ulabel">Quick add</span>
+                <div className="rebuild__suggestion-row">
+                  {REBUILD_SUGGESTIONS.map(s => (
+                    <button
+                      key={s}
+                      type="button"
+                      className="chip"
+                      onClick={() => addSuggestion(s)}
+                      disabled={isRebuilding}
+                    >
+                      <Plus size={11} strokeWidth={2} />
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-        {/* Footer */}
-        <div className="rebuild-modal-footer">
-          <button className="btn btn-secondary" onClick={onClose} disabled={isRebuilding}>
+              <details className="rebuild__ref">
+                <summary>View original prompt</summary>
+                <p>{originalPrompt}</p>
+              </details>
+            </>
+          )}
+        </div>
+
+        <footer className="rebuild__foot">
+          <button className="btn btn-secondary" onClick={handleClose} disabled={isRebuilding}>
             Cancel
           </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-          >
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={!canSubmit}>
             {isRebuilding
               ? <><div className="spinner" /> Launching rebuild…</>
-              : <><RefreshCw size={14} /> Start Rebuild</>
+              : <><RefreshCw size={14} /> Start rebuild</>
             }
           </button>
-        </div>
-      </div>
-
-      <style>{MODAL_CSS}</style>
-    </div>
+        </footer>
+      </motion.div>
+      </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
-
-const MODAL_CSS = `
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  animation: backdropIn 0.2s ease-out;
-}
-
-@keyframes backdropIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-.rebuild-modal {
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: 20px;
-  width: 100%;
-  max-width: 600px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
-  animation: modalIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  overflow: hidden;
-}
-
-@keyframes modalIn {
-  from { opacity: 0; transform: translateY(16px) scale(0.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.rebuild-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.rebuild-modal-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.rebuild-modal-title {
-  font-size: 1.125rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  font-family: var(--font-display);
-  letter-spacing: -0.02em;
-}
-
-.rebuild-modal-title span {
-  color: var(--color-accent-secondary);
-}
-
-/* Mode tabs */
-.rebuild-mode-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 12px 24px;
-  background: var(--color-bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.rebuild-mode-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 16px;
-  border-radius: 10px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  background: transparent;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.rebuild-mode-tab:hover {
-  color: var(--text-secondary);
-  background: var(--color-bg-hover);
-}
-
-.rebuild-mode-tab.active {
-  color: var(--text-primary);
-  background: var(--color-bg-elevated);
-  border-color: var(--border-accent);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-}
-
-/* Same mode */
-.rebuild-same-content {
-  padding: 20px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.rebuild-same-label {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.rebuild-original-prompt {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 14px 16px;
-}
-
-.rebuild-original-prompt p {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  margin: 0;
-}
-
-.rebuild-same-note {
-  font-size: 0.8125rem;
-  color: var(--text-tertiary);
-  line-height: 1.6;
-  margin: 0;
-}
-
-/* Custom mode */
-.rebuild-custom-content {
-  padding: 20px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: 70vh;
-  overflow-y: auto;
-}
-
-.rebuild-textarea {
-  width: 100%;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: 10px;
-  padding: 12px 14px;
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  resize: vertical;
-  min-height: 100px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  outline: none;
-}
-
-.rebuild-textarea:focus {
-  border-color: var(--border-accent);
-  box-shadow: 0 0 0 1px var(--border-accent), var(--shadow-glow);
-}
-
-.rebuild-textarea::placeholder {
-  color: var(--text-tertiary);
-  font-size: 0.875rem;
-}
-
-.rebuild-char-count {
-  font-size: 0.75rem;
-  font-family: var(--font-mono);
-  text-align: right;
-  margin: 0;
-}
-
-/* Suggestions */
-.rebuild-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.rebuild-suggestions-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-  margin: 0;
-}
-
-.rebuild-suggestions-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.rebuild-suggestion-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  text-align: left;
-}
-
-.rebuild-suggestion-chip:hover {
-  background: var(--color-accent-subtle);
-  border-color: var(--border-accent);
-  color: var(--text-primary);
-}
-
-/* Original ref */
-.rebuild-original-ref {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.rebuild-original-ref summary {
-  padding: 8px 12px;
-  font-size: 0.8125rem;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-.rebuild-original-ref summary:hover { color: var(--text-secondary); }
-
-.rebuild-original-ref p {
-  padding: 0 12px 10px;
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  margin: 0;
-}
-
-/* Footer */
-.rebuild-modal-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 16px 24px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--color-bg-surface);
-}
-`;

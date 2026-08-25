@@ -1,0 +1,224 @@
+/* ============================================
+   REBUILD MODAL
+   Replaces the 260-line MODAL_CSS template
+   literal that was injected via <style> on every
+   mount. Surfaces come from .panel, controls from
+   .chip / .btn / .ulabel — nothing is redefined
+   here except the overlay and this dialog's own
+   layout.
+   ============================================ */
+
+/* The one place `backdrop-filter` is allowed: a fixed overlay repaints once,
+   unlike the scrolling surfaces the app-shell rules keep it off. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: rgba(5, 5, 7, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.rebuild {
+  width: 100%;
+  max-width: 620px;
+  max-height: min(84vh, 780px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-color: var(--border-default);
+  box-shadow: var(--shadow-inset-hairline), 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+/* Enter and exit are Framer variants now (`dialogIn` / `backdropIn` in
+   lib/motion.ts) rather than CSS keyframes — a keyframe cannot express an exit
+   for a component that unmounts, which is exactly what was missing here.
+   Entry stays 4px and unscaled: the old one came in from 16px at 0.97 scale,
+   which on a 620px dialog is a visible zoom. */
+
+.rebuild:focus { outline: none; }
+
+/* ── Head ─────────────────────────────────── */
+
+.rebuild__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.rebuild__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.rebuild__title-icon {
+  color: var(--color-accent-secondary);
+  flex-shrink: 0;
+}
+
+.rebuild__title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  letter-spacing: var(--tracking-display);
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The same editorial accent the page heads use, so the app name reads as the
+   subject of the sentence rather than as a coloured highlight. */
+.rebuild__title em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--color-accent-tertiary);
+}
+
+/* ── Modes ────────────────────────────────────
+   Two chips, not a bespoke tab strip. The old
+   `.rebuild-mode-tab` animated `transition: all`
+   and duplicated the pressed state that `.chip`
+   already carries.                               */
+
+.rebuild__modes {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5) 0;
+  flex-shrink: 0;
+}
+
+/* ── Body ─────────────────────────────────────
+   The only scrolling region. Head and foot stay
+   pinned so the actions never leave the screen
+   with a long suggestion list open.              */
+
+.rebuild__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.rebuild__lede {
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+}
+
+/* ── Quoted prompt ────────────────────────────
+   A rule on the leading edge instead of a second
+   bordered box inside the dialog.                */
+
+.rebuild__quote {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-inline-start: var(--space-4);
+  border-inline-start: 2px solid var(--border-accent);
+}
+
+.rebuild__quote p {
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* ── Suggestions ──────────────────────────── */
+
+.rebuild__suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.rebuild__suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Suggestions are long phrases, so these chips wrap rather than forcing a
+   horizontal scroll the way `.chip`'s default nowrap would. */
+.rebuild__suggestion-row .chip {
+  white-space: normal;
+  text-align: left;
+}
+
+/* ── Original prompt reference ────────────── */
+
+.rebuild__ref summary {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.rebuild__ref summary::-webkit-details-marker { display: none; }
+
+.rebuild__ref summary::before {
+  content: '+ ';
+  color: var(--text-tertiary);
+}
+
+.rebuild__ref[open] summary::before { content: '– '; }
+
+.rebuild__ref summary:hover { color: var(--text-secondary); }
+
+.rebuild__ref summary:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.rebuild__ref p {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ── Foot ─────────────────────────────────── */
+
+.rebuild__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.22);
+  flex-shrink: 0;
+}
+
+@media (max-width: 560px) {
+  .modal-backdrop { padding: var(--space-3); }
+
+  .rebuild { max-height: 92vh; }
+
+  /* Full-width, primary last — the thumb reaches the bottom-right first. */
+  .rebuild__foot > .btn { flex: 1; justify-content: center; }
+}
+
+/* Framer Motion reads `prefers-reduced-motion` through the same media query the
+   global rule in tokens.css uses, so the dialog's enter and exit collapse to
+   their end states without a separate override here. */

@@ -4,27 +4,21 @@
    saturation. Text always wears text tokens.
    ============================================ */
 
-.viz-card {
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.022) 0%, rgba(255,255,255,0.005) 100%),
-    var(--color-bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-inset-hairline);
-  padding: var(--space-5) var(--space-5) var(--space-4);
-  min-width: 0;
-}
+/* The frame is `.panel panel--pad` — see app-shell.css. Only the head's
+   layout and the wide-row modifier live here. */
+
+.viz-frame { min-width: 0; }
 
 /* Full-bleed row inside .charts-grid. The class was referenced by the trend
    chart before it existed, so the grid fell back to two equal columns and left
    the third card stranded in a half-width row with dead space beside it. */
-.viz-card--wide { grid-column: 1 / -1; }
+.viz-frame--wide { grid-column: 1 / -1; }
 
-@media (max-width: 800px) {
-  .viz-card--wide { grid-column: auto; }
+@media (max-width: 900px) {
+  .viz-frame--wide { grid-column: auto; }
 }
 
-.viz-card__head {
+.viz-frame__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -32,7 +26,7 @@
   margin-bottom: var(--space-5);
 }
 
-.viz-card__title {
+.viz-frame__title {
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   font-weight: var(--font-medium);
@@ -41,28 +35,12 @@
   margin: 0;
 }
 
-.viz-card__hint {
+.viz-frame__hint {
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.06em;
   color: var(--text-tertiary);
   margin: 4px 0 0;
-}
-
-/* An empty state is a sentence, not a blank rectangle. */
-.viz-empty {
-  min-height: 150px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: var(--space-6);
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  border: 1px dashed var(--border-subtle);
-  border-radius: var(--radius-lg);
-  max-width: 46ch;
-  margin-inline: auto;
 }
 
 /* ── Tooltip ─────────────────────────────── */
@@ -106,13 +84,12 @@
 
 .viz-stack { display: flex; flex-direction: column; gap: var(--space-5); }
 
+/* `.meter meter--split` supplies the track, radius and clipping. This only
+   raises the height — an outcome mix is the section's primary graphic, not a
+   3px progress hairline — and opens the 2px gaps that keep adjacent fills
+   reading as separate marks. */
 .viz-stack__bar {
-  display: flex;
   height: 12px;
-  border-radius: var(--radius-full);
-  overflow: hidden;
-  /* The 2px gaps between segments come from this gap, which shows the card
-     surface through and keeps adjacent fills reading as separate marks. */
   gap: 2px;
   background: rgba(255, 255, 255, 0.04);
 }
@@ -120,7 +97,13 @@
 .viz-stack__seg {
   height: 100%;
   min-width: 3px;
-  transition: opacity var(--duration-fast) var(--ease-out);
+  /* Width is transitioned so the mix reads as a quantity settling rather than
+     a static graphic that was always there. Recharts elsewhere runs with
+     `isAnimationActive={false}` because those charts repoll every 30s; this bar
+     is CSS, so the same transition covers both the first paint and every
+     subsequent update without re-running an entrance. */
+  transition: opacity var(--duration-fast) var(--ease-out),
+              width var(--duration-slow) var(--ease-out);
 }
 
 .viz-stack__bar:hover .viz-stack__seg { opacity: 0.55; }
@@ -184,5 +167,17 @@
 
 /* Recharts injects focus outlines on its wrappers; keep them from boxing the
    whole surface while still allowing keyboard focus to be visible. */
-.viz-card .recharts-wrapper:focus,
-.viz-card .recharts-surface:focus { outline: none; }
+.viz-frame .recharts-wrapper:focus,
+.viz-frame .recharts-surface:focus { outline: none; }
+
+/* The empty state and the chart it replaces are the same object in two states,
+   so the range control's flip between them is a crossfade rather than a swap.
+   150ms — long enough to connect them, short enough not to delay the read. */
+.viz-frame .empty--inset {
+  animation: vizEmptyIn var(--duration-fast) var(--ease-out);
+}
+
+@keyframes vizEmptyIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

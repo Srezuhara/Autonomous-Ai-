@@ -1,16 +1,19 @@
-/* BuildCard Component */
+/* ============================================
+   BUILD CARD — one row in the build index
+   Surface comes from .panel / .panel--interactive.
+   This file is layout and typography only.
+   ============================================ */
 
 .build-card {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-5);
   padding: var(--space-4) var(--space-5);
-  margin-bottom: var(--space-3);
   text-decoration: none;
   color: inherit;
 }
 
-.build-card-info {
+.build-card__info {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -18,32 +21,33 @@
   gap: 6px;
 }
 
-.build-card-header {
+.build-card__head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
 }
 
-.build-card-name {
+.build-card__name {
+  font-family: var(--font-display);
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
-  color: var(--text-primary);
-  font-family: var(--font-display);
   letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
-.build-card-prompt {
+.build-card__prompt {
   font-size: var(--text-sm);
-  color: var(--text-secondary);
   line-height: var(--leading-snug);
+  color: var(--text-secondary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.build-card-meta {
+.build-card__meta {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -52,53 +56,56 @@
   color: var(--text-tertiary);
 }
 
-/* Scores */
-.build-card-scores {
+/* ── Scores ───────────────────────────────────
+   One hairline on the leading edge only. The old
+   rule drew a border on both sides, which read as
+   a box inside a box once the row itself became
+   a panel.                                       */
+
+.build-card__scores {
   display: flex;
-  gap: var(--space-4);
-  padding: 0 var(--space-5);
+  gap: var(--space-5);
+  padding-inline: var(--space-5);
   border-left: 1px solid var(--border-subtle);
-  border-right: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
 
-.score-chip {
+.build-card__score {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-2);
 }
 
-.score-chip-label {
-  font-size: 10px;
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
+/* ── Arrow ────────────────────────────────────
+   Colour only. `.panel--interactive` deliberately
+   does not move on hover, so a sliding chevron
+   inside it would be the one thing on the screen
+   that does.                                     */
 
-.score-chip-value {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--color-accent-secondary);
-  letter-spacing: -0.02em;
-}
-
-/* Arrow */
-.build-card-arrow {
+.build-card__arrow {
   color: var(--text-tertiary);
   flex-shrink: 0;
-  transition: color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  transition: color var(--duration-fast) var(--ease-out);
 }
 
-.build-card:hover .build-card-arrow {
-  color: var(--text-primary);
-  transform: translateX(2px);
-}
+.build-card:hover .build-card__arrow { color: var(--text-primary); }
 
-/* Spin for running status */
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+/* Below this the score column has no room beside a two-line prompt; it drops
+   under the text and spreads across the full width instead of being crushed. */
+@media (max-width: 720px) {
+  .build-card {
+    flex-wrap: wrap;
+    gap: var(--space-4);
+  }
 
-.spin-icon { animation: spin 1.4s linear infinite; }
+  .build-card__info { flex-basis: 100%; }
+
+  .build-card__scores {
+    border-left: 0;
+    padding-inline: 0;
+    gap: var(--space-6);
+  }
+
+  .build-card__arrow { margin-inline-start: auto; }
+}

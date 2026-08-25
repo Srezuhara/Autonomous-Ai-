@@ -1,173 +1,242 @@
-/* BuildProgress Page */
+/* ============================================
+   BUILD PROGRESS
+   Spine + status column. Nothing on this page
+   loops; see the component header for why.
+   ============================================ */
 
-.build-progress {
+.build-progress.page-wrapper {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-5);
+  max-width: 1240px;
 }
 
-/* Header */
-.bp-header { display: flex; flex-direction: column; gap: var(--space-4); }
+.bp-back { width: fit-content; }
 
-.bp-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
+.bp-head { align-items: flex-start; }
 
-.bp-title {
-  font-size: var(--text-3xl);
-  color: var(--text-primary);
-}
-
-.bp-build-id {
-  display: block;
+/* The build id is machine identity, not a heading. Mono, tertiary, and sized
+   like the kicker it replaces — it used to sit under the H1 at body scale,
+   where it competed with the title for the first read. */
+.bp-id {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: 10px;
+  letter-spacing: 0.12em;
   color: var(--text-tertiary);
-  margin-top: var(--space-1);
-  letter-spacing: 0.04em;
+  text-transform: none;
+  overflow-wrap: anywhere;
 }
 
-/* WS Pill */
-.ws-pill {
+/* ── Connection pill ──────────────────────────
+   Static. Colour is the whole signal.           */
+
+.wspill {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 5px 12px;
+  padding: 5px 11px;
   border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  border: 1px solid transparent;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.025);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 
-.ws-pill--connecting {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-  border-color: rgba(245,158,11,0.2);
-  animation: pulse 1.6s ease-in-out infinite;
+.wspill svg { flex-shrink: 0; }
+
+.wspill--running {
+  color: var(--color-accent-tertiary);
+  border-color: var(--border-accent);
+  background: var(--color-accent-subtle);
 }
 
-.ws-pill--live {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-  border-color: rgba(59,130,246,0.2);
-  animation: pulse 2s ease-in-out infinite;
+.wspill--ok {
+  color: var(--viz-done);
+  border-color: rgba(14, 159, 110, 0.32);
+  background: rgba(14, 159, 110, 0.07);
 }
 
-.ws-pill--done {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-  border-color: rgba(34,197,94,0.2);
+.wspill--warn {
+  color: var(--viz-degraded);
+  border-color: rgba(192, 126, 20, 0.32);
+  background: rgba(192, 126, 20, 0.07);
 }
 
-.ws-pill--error {
-  background: var(--color-error-bg);
-  color: var(--color-error);
-  border-color: rgba(239,68,68,0.2);
-}
+/* ── Layout ───────────────────────────────── */
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.6; }
-}
-
-/* Layout */
 .bp-layout {
   display: grid;
-  grid-template-columns: 1fr 256px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: var(--space-5);
   align-items: start;
 }
 
-@media (max-width: 820px) {
-  .bp-layout { grid-template-columns: 1fr; }
+@media (max-width: 900px) {
+  .bp-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
-.bp-main { padding: var(--space-6); }
+.bp-spine { min-width: 0; }
 
-/* Sidebar */
-.bp-sidebar {
+.bp-aside {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  position: sticky;
+  top: var(--space-8);
 }
 
-.bp-info-card {
+@media (max-width: 900px) {
+  .bp-aside { position: static; }
+}
+
+/* ── Summary ──────────────────────────────── */
+
+.bp-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.bp-summary__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 22px;
+}
+
+/* ── Actions ──────────────────────────────── */
+
+.bp-actions {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-5);
 }
 
-.bp-step-count {
+.bp-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ── Notes ────────────────────────────────────
+   One shape for every advisory on this screen —
+   the old page had three variants of the same
+   card built from inline styles.                */
+
+.bp-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.bp-note__icon { flex-shrink: 0; margin-top: 1px; }
+
+.bp-note--warn  { border-color: rgba(192, 126, 20, 0.28); background: rgba(192, 126, 20, 0.05); }
+.bp-note--warn  .bp-note__icon { color: var(--viz-degraded); }
+
+.bp-note--error { border-color: rgba(244, 63, 94, 0.28); background: rgba(244, 63, 94, 0.05); }
+.bp-note--error .bp-note__icon { color: var(--viz-failed); }
+
+.bp-note__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.bp-note__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.35;
+}
+
+.bp-note__text {
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.bp-note__action { margin-top: var(--space-1); }
+
+/* ── Facts ────────────────────────────────────
+   The old "while you wait" bullet list is now a
+   definition list with real figures. Same
+   information, readable without parsing prose.  */
+
+.bp-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.bp-facts__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.bp-facts__item {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.bp-step-num {
-  font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  font-weight: var(--font-bold);
-  color: var(--text-primary);
-  letter-spacing: -0.03em;
-  line-height: 1;
-}
+.bp-facts__item:first-child { border-top: none; padding-top: 0; }
 
-.bp-step-denom {
-  font-size: var(--text-lg);
+.bp-facts__item dt {
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
 
-/* Error card */
-.bp-error {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  border-color: rgba(239,68,68,0.2);
-}
-
-.bp-error-title {
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--text-primary);
+.bp-facts__item dd {
   margin: 0;
-}
-
-.bp-error-sub {
-  font-size: var(--text-xs);
   color: var(--text-secondary);
-  margin: 0;
 }
 
-/* Tips */
-.bp-tips { padding: var(--space-4) var(--space-5); }
-
-.bp-tips-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: 0;
-}
-
-.bp-tips-list li {
+.bp-facts__note {
   font-size: var(--text-xs);
-  color: var(--text-secondary);
   line-height: var(--leading-relaxed);
-  padding-left: var(--space-3);
-  position: relative;
+  color: var(--text-tertiary);
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
 }
 
-.bp-tips-list li::before {
-  content: '·';
-  position: absolute;
-  left: 0;
-  color: var(--color-accent-primary);
-  font-weight: bold;
+/* Failure text is a raw exception string from the pipeline, so it is set in
+   mono and allowed to break: a stack-trace fragment must not push the aside
+   wider than its column. */
+.bp-note__text--mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  word-break: break-word;
+}
+
+/* ── Animated step count ──────────────────────
+   The completed-steps digit springs on each tick
+   (see BuildProgress.tsx). `transform` has no
+   effect on a non-replaced inline box, so the
+   span that carries it has to establish one —
+   `inline-block` is the smallest change that
+   does, and keeps the digit on the same
+   baseline as the "/ 9" beside it.
+
+   The digit is already tabular via `.figure`, so
+   going 9 → 10 does not reflow the row while the
+   spring is mid-flight.                          */
+
+.bp-summary__count {
+  display: inline-block;
+  transform-origin: 50% 60%;
 }

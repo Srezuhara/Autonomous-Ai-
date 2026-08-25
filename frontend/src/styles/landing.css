@@ -98,94 +98,28 @@
 .hero__panel { min-width: 0; }
 .hero__panel-bezel { height: 100%; }
 
+/* The hero panel hosts the product's real StepTracker, so almost nothing is
+   needed here: just padding and a size step down, since the component is built
+   for a full-width app column and sits in a narrower hero panel. All the old
+   `.preview__*` rules (fake title bar, traffic-light dots, mock rows, mock
+   progress footer) went with the mock-up they styled. */
+
 .preview {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  display: flex;
-  flex-direction: column;
+  padding: var(--space-5);
   height: 100%;
+  container-type: inline-size;
 }
 
-.preview__bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.012);
+/* One notch down from app scale so nine rows sit comfortably beside the hero
+   copy without the panel dictating the section's height. */
+.preview .steptrack { --preview-scale: 0.94; }
+.preview .srow { padding-block: 7px; }
+.preview .srow__name { font-size: var(--text-xs); }
+.preview .srow__time { display: none; }
+
+@media (max-width: 767px) {
+  .preview { padding: var(--space-4); }
 }
-
-.preview__dots { display: inline-flex; gap: 6px; }
-.preview__dots i {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: var(--border-strong);
-}
-
-.preview__title { color: var(--text-secondary); flex: 1; }
-
-.preview__badge {
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent-subtle);
-  border: 1px solid var(--border-accent);
-  color: var(--color-accent-tertiary);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.preview__rows { list-style: none; margin: 0; padding: var(--space-3) 0; flex: 1; }
-
-.preview__row {
-  display: grid;
-  grid-template-columns: 14px 1fr auto;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 9px var(--space-4);
-  color: var(--text-secondary);
-}
-
-.preview__state {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  justify-self: center;
-  background: var(--text-tertiary);
-}
-
-.preview__row--done .preview__state    { background: var(--color-success); }
-.preview__row--done .preview__step     { color: var(--text-secondary); }
-.preview__row--running .preview__state { background: var(--color-accent-secondary); box-shadow: 0 0 0 3px var(--color-accent-subtle); }
-.preview__row--running                 { background: var(--color-accent-subtle); }
-.preview__row--running .preview__step  { color: var(--text-primary); }
-.preview__row--queued                  { opacity: 0.45; }
-
-.preview__ms { color: var(--text-tertiary); font-size: 11px; }
-
-.preview__foot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.preview__meter {
-  flex: 1;
-  height: 4px;
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.06);
-  overflow: hidden;
-}
-
-.preview__meter span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--color-accent-primary), var(--color-accent-tertiary));
-}
-
-.preview__foot-label { color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
 
 /* ── Agent rail ──────────────────────────── */
 
@@ -241,17 +175,6 @@
 .head { max-width: 62ch; margin-bottom: clamp(2.5rem, 1.5rem + 3vw, 4.5rem); }
 
 .head__title { margin: var(--space-4) 0 var(--space-5); }
-
-.head--split {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
-  gap: clamp(2rem, 1rem + 4vw, 4rem);
-  align-items: end;
-  max-width: none;
-}
-
-.head--split .head__title { margin-bottom: 0; }
-.head__aside { padding-bottom: 6px; }
 
 /* ── Steps bento ─────────────────────────── */
 
@@ -512,7 +435,6 @@
   .faq         { grid-template-columns: minmax(0, 1fr); }
   .faq__aside  { position: static; }
   .hero__grid  { grid-template-columns: minmax(0, 1fr); gap: var(--space-10); }
-  .head--split { grid-template-columns: minmax(0, 1fr); align-items: start; }
   .bento       { grid-template-columns: minmax(0, 1fr); }
   .bento__major { grid-row: auto; }
   .steps       { grid-template-columns: repeat(2, minmax(0, 1fr)); }

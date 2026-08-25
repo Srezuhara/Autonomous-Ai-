@@ -1,13 +1,37 @@
-/* ProjectDetail Page */
+/* ============================================
+   PROJECT DETAIL — the build report
+   Three tiers: header, readout, evidence.
+   All surfaces come from .panel; this file only
+   defines layout and the report-specific parts.
+   ============================================ */
 
-.project-detail {
+.project-detail.page-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1080px;
+}
+
+.pd-back { width: fit-content; margin-bottom: var(--space-1); }
+
+/* The three loading panels are wrapped so they can be staggered as a group.
+   The wrapper repeats the page's own column, because it now sits between
+   `.project-detail`'s flex layout and the panels that were relying on it. */
+.pd-skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* ── Header ───────────────────────────────── */
+
+.pd-header {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
 }
 
-/* Hero */
-.pd-hero {
+.pd-header__top {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -15,480 +39,476 @@
   flex-wrap: wrap;
 }
 
-.pd-hero-left {
-  flex: 1;
+.pd-header__id {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
 }
 
-.pd-app-name {
-  font-size: var(--text-2xl);
-  color: var(--text-primary);
+.pd-name {
   font-family: var(--font-display);
+  font-size: clamp(1.5rem, 1.25rem + 1.1vw, 2rem);
+  font-weight: var(--font-semibold);
+  letter-spacing: var(--tracking-display);
+  line-height: 1.1;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
-.pd-prompt {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  line-height: var(--leading-relaxed);
-  max-width: 600px;
-}
-
-.pd-tags {
+.pd-meta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
-.pd-actions {
+.pd-toolbar { flex-shrink: 0; }
+
+/* Destructive actions get the smallest footprint on the screen, not a matching
+   filled button beside Download. */
+.pd-delete {
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  color: var(--text-tertiary);
+}
+
+.pd-delete:hover {
+  color: var(--viz-failed);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+/* The prompt, set as a quotation. The accent rule on the left is the only
+   ornament on this panel. */
+.pd-prompt {
+  margin: 0;
+  padding-inline-start: var(--space-4);
+  border-inline-start: 2px solid rgba(124, 107, 250, 0.5);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+
+/* ── Timings ──────────────────────────────────
+   A mono strip, not three bordered cards. A
+   timestamp does not deserve the same visual
+   weight as a quality score.                    */
+
+.pd-timings {
+  display: flex;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+  margin: 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pd-timings__item {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  min-width: 160px;
 }
 
-/* Time Row */
-.pd-time-row {
-  display: flex;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.pd-time-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-sm);
+.pd-timings__item dd {
+  margin: 0;
   color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
-.pd-time-icon { color: var(--text-tertiary); flex-shrink: 0; }
+/* ── Handoff banner ───────────────────────── */
 
-/* Scores */
-/* Phase 21: done_with_context explainer banner */
-.pd-context-banner {
+.pd-banner {
   display: flex;
-  gap: var(--space-3);
   align-items: flex-start;
-  padding: var(--space-4) var(--space-5);
-  border-left: 3px solid var(--color-warning);
-  background: var(--color-warning-bg);
+  gap: var(--space-3);
+  border-color: rgba(192, 126, 20, 0.28);
+  background: rgba(192, 126, 20, 0.05);
 }
 
-.pd-context-banner .pd-context-icon {
-  color: var(--color-warning);
-  flex-shrink: 0;
-  margin-top: 2px;
+.pd-banner__icon { color: var(--viz-degraded); flex-shrink: 0; margin-top: 1px; }
+
+.pd-banner__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-.pd-context-banner strong {
-  display: block;
-  margin-bottom: var(--space-2);
+.pd-banner__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
   color: var(--text-primary);
 }
 
-.pd-context-banner p {
-  margin: 0 0 var(--space-2);
-  font-size: var(--text-sm);
+.pd-banner__text {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
   color: var(--text-secondary);
-  line-height: 1.5;
 }
 
-.pd-context-banner p:last-child { margin-bottom: 0; }
-
-.pd-context-banner code {
+.pd-banner__text code {
   padding: 1px 5px;
   border-radius: 4px;
-  background: var(--bg-subtle, rgba(127, 127, 127, 0.15));
-  font-family: var(--font-mono, monospace);
-  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.92em;
+  color: var(--text-primary);
 }
+
+/* ── Scores ───────────────────────────────────
+   One panel, three gauges, divided by hairlines.
+   Previously three separate cards, which made
+   them read as three unrelated facts.           */
 
 .pd-scores {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+}
+
+.score {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-inline: var(--space-5);
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.score:first-child {
+  border-inline-start: none;
+  padding-inline-start: 0;
+}
+
+.score:last-child { padding-inline-end: 0; }
+
+@media (max-width: 620px) {
+  .pd-scores { grid-template-columns: 1fr; }
+  .score {
+    border-inline-start: none;
+    padding-inline: 0;
+    padding-block: var(--space-4);
+    border-top: 1px solid var(--border-subtle);
+  }
+  .score:first-child { padding-top: 0; border-top: none; }
+  .score:last-child  { padding-bottom: 0; }
+}
+
+.score__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.score__icon {
+  display: inline-flex;
+  color: var(--text-tertiary);
+}
+
+.score__value { color: var(--text-secondary); }
+
+/* ── Tokens ───────────────────────────────── */
+
+.pd-tokens {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-4);
 }
 
-@media (max-width: 680px) {
-  .pd-scores { grid-template-columns: 1fr; }
-}
-
-.score-gauge {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-5);
-}
-
-.score-gauge-header {
+.pd-tokens__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
 }
 
-.score-gauge-value {
-  font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  font-weight: var(--font-bold);
-  letter-spacing: -0.03em;
-  line-height: 1;
-}
+.pd-tokens__icon { color: var(--viz-degraded); flex-shrink: 0; }
 
-.score-gauge-bar {
-  height: 4px;
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-full);
-  overflow: hidden;
-}
-
-.score-gauge-fill {
-  height: 100%;
-  border-radius: var(--radius-full);
-  transition: width 0.8s var(--ease-out);
-}
-
-/* ── Phase 17: Token usage card ─────────────────────────────────────────────── */
-.pd-token-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-5);
-}
-
-.pd-token-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.pd-token-model {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
+.pd-tokens__flag {
+  margin-inline-start: auto;
   font-family: var(--font-mono);
-  font-weight: var(--font-regular);
-  text-transform: none;
-  letter-spacing: 0;
-  /* Separate visually from the label */
-  padding: 1px 6px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-}
-
-.pd-token-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-3);
-}
-
-@media (max-width: 700px) {
-  .pd-token-grid { grid-template-columns: repeat(2, 1fr); }
-}
-
-.pd-token-stat {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-}
-
-.pd-token-stat--total {
-  border-color: var(--border-accent);
-  background: var(--color-accent-subtle);
-}
-
-.pd-token-label {
   font-size: 10px;
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--text-tertiary);
-}
-
-.pd-token-value {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--text-primary);
-  letter-spacing: -0.02em;
-  line-height: 1;
-}
-
-.pd-token-value--total {
-  color: var(--color-accent-secondary);
-}
-
-/* ── Phase 17: Build step logs ───────────────────────────────────────────────── */
-.pd-step-logs {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.pd-step-logs-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.pd-step-logs-toggle:hover { background: var(--color-bg-hover); }
-
-.pd-step-log-count {
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
-  color: var(--text-tertiary);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--border-subtle);
-  padding: 1px 8px;
-  border-radius: var(--radius-full);
-}
-
-.pd-step-logs-body {
-  border-top: 1px solid var(--border-subtle);
-  animation: expandDown 0.2s var(--ease-out);
-}
-
-@keyframes expandDown {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.step-log-entry {
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.step-log-entry:last-child { border-bottom: none; }
-
-.step-log-entry--error { background: rgba(239, 68, 68, 0.03); }
-
-.step-log-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.step-log-header:hover { background: var(--color-bg-hover); }
-
-.step-log-num {
-  font-size: 10px;
-  font-weight: var(--font-bold);
-  font-family: var(--font-mono);
-  color: var(--text-tertiary);
-  min-width: 18px;
-}
-
-.step-log-name {
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-  font-weight: var(--font-medium);
-  flex: 1;
-  text-transform: capitalize;
-}
-
-.step-log-elapsed {
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
-  color: var(--text-tertiary);
-}
-
-.step-log-status {
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.04em;
-}
-
-.step-log-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  font-weight: var(--font-bold);
-  padding: 1px 6px;
-  border-radius: var(--radius-full);
-}
-
-.step-log-badge--timeout {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-  border: 1px solid rgba(245, 158, 11, 0.25);
-}
-
-.step-log-body {
-  padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + 30px);
-}
-
-.step-log-error {
-  font-size: var(--text-xs);
-  color: var(--color-error);
-  background: var(--color-error-bg);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  line-height: 1.6;
-}
-
-.step-log-traceback {
-  margin-top: var(--space-2);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--color-error);
-  opacity: 0.8;
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.step-log-data {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
-  margin-top: var(--space-2);
-}
-
-/* ── Pipeline Logs Panel (legacy toggle kept for compat) ─────────────────────── */
-.pd-logs {
-  padding: 0;
-  overflow: hidden;
-}
-
-.pd-logs-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.pd-logs-toggle:hover { background: var(--color-bg-hover); }
-
-.pd-logs-toggle-left {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--text-secondary);
-}
-
-.pd-logs-failed-hint {
-  font-size: var(--text-xs);
-  color: var(--color-error);
-  font-weight: var(--font-regular);
   font-style: italic;
 }
 
-.pd-logs-toggle-right {
+.pd-tokens__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  margin: 0;
+}
+
+@media (max-width: 620px) {
+  .pd-tokens__grid { grid-template-columns: repeat(2, 1fr); row-gap: var(--space-4); }
+}
+
+.pd-tokens__stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-inline: var(--space-5);
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.pd-tokens__stat:first-child {
+  border-inline-start: none;
+  padding-inline-start: 0;
+}
+
+.pd-tokens__stat dd { margin: 0; color: var(--text-secondary); }
+
+.pd-tokens__stat--accent dd { color: var(--color-accent-tertiary); }
+
+.pd-empty {
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
+  margin: 0;
+  max-width: 64ch;
+}
+
+/* ── Disclosure ───────────────────────────── */
+
+.pd-logs,
+.pd-files { padding: 0; overflow: hidden; }
+
+.pd-disclosure {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  background: none;
+  border: none;
+  text-align: left;
+  transition: background-color var(--duration-fast) var(--ease-out);
 }
 
-.pd-logs-step-count {
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
+.pd-disclosure:hover { background: var(--color-bg-hover); }
+
+.pd-disclosure__count {
+  font-size: 10px;
   color: var(--text-tertiary);
-}
-
-.pd-logs-content {
-  padding: var(--space-4) var(--space-5) var(--space-5);
-  border-top: 1px solid var(--border-subtle);
-  animation: expandDown 0.25s var(--ease-out);
-}
-
-/* File Tree */
-.pd-files {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.pd-files-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--text-secondary);
-}
-
-.pd-file-count {
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--border-subtle);
-  padding: 1px 8px;
+  padding: 2px 7px;
   border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pd-disclosure__chev {
+  margin-inline-start: auto;
+  display: inline-flex;
   color: var(--text-tertiary);
 }
 
-.file-tree {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 380px;
-  overflow-y: auto;
-  padding-right: var(--space-2);
-}
+.pd-logs__body { border-top: 1px solid var(--border-subtle); }
 
-.file-row {
+/* ── Log rows ─────────────────────────────── */
+
+.logrow { border-bottom: 1px solid var(--border-subtle); }
+.logrow:last-child { border-bottom: none; }
+
+.logrow--error { background: rgba(244, 63, 94, 0.035); }
+
+.logrow__head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 6px var(--space-3);
-  border-radius: var(--radius-sm);
-  transition: background var(--duration-fast) var(--ease-out);
-  animation: fadeIn 0.3s var(--ease-out) both;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-5);
+  background: none;
+  border: none;
+  text-align: left;
+  transition: background-color var(--duration-fast) var(--ease-out);
 }
 
-.file-row:hover { background: var(--color-bg-hover); }
+.logrow__head:not(:disabled):hover { background: var(--color-bg-hover); }
+.logrow__head:disabled { cursor: default; }
 
-.file-row-icon { color: var(--color-accent-primary); flex-shrink: 0; }
+.logrow__n {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
 
-.file-row-path {
+.logrow__name {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  text-transform: capitalize;
+  flex: 1;
+  min-width: 0;
+}
+
+.logrow__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--viz-degraded);
+  flex-shrink: 0;
+}
+
+.logrow__elapsed {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.logrow__status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  flex-shrink: 0;
+}
+
+.logrow__status--ok      { color: var(--viz-done); }
+.logrow__status--error   { color: var(--viz-failed); }
+.logrow__status--running { color: var(--viz-running); }
+.logrow__status--idle    { color: var(--text-tertiary); }
+
+.logrow__chev {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.logrow__body {
+  padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + 34px);
+}
+
+.logrow__error {
   font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--viz-failed);
+  background: rgba(244, 63, 94, 0.06);
+  border: 1px solid rgba(244, 63, 94, 0.22);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.logrow__pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
   color: var(--text-secondary);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.logrow__pre--error {
+  margin-top: var(--space-2);
+  color: var(--viz-failed);
+  background: transparent;
+  border-color: rgba(244, 63, 94, 0.18);
+  font-size: 10px;
+  max-height: 180px;
+}
+
+/* ── File tree ────────────────────────────────
+   The per-row fadeIn with an 18ms-per-index
+   delay is gone: on a 60-file build that was a
+   one-second cascade every time the page opened,
+   and it delayed the content the user came for.
+   ────────────────────────────────────────────── */
+
+.pd-files__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pd-files__icon { color: var(--color-accent-secondary); flex-shrink: 0; }
+
+.pd-tree {
+  display: flex;
+  flex-direction: column;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+}
+
+.pd-tree__row {
+  display: block;
+  padding: 5px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.pd-tree__row:hover { background: var(--color-bg-hover); }
+
+.pd-tree__dir  { color: var(--text-tertiary); }
+.pd-tree__file { color: var(--text-secondary); }
+
+/* Loading placeholders. See the note at the call site: these replaced the
+   shimmering `.skeleton`, which looped forever regardless of progress. */
+.pd-skeleton { opacity: 0.5; }
+
+/* Delete failure. Sits under the toolbar that triggered it rather than in a
+   toast: the action is destructive, and its failure should stay on screen next
+   to the button until the user does something about it. */
+.pd-delete-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-color: rgba(244, 63, 94, 0.28);
+  background: rgba(244, 63, 94, 0.05);
+}
+
+.pd-delete-error__icon {
+  color: var(--viz-failed);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.pd-delete-error p {
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ── Disclosure clipping ──────────────────────
+   Both accordions on this page animate height to
+   auto (see ProjectDetail.tsx). The animated box
+   must clip, and must carry no padding or border
+   of its own — a border-box element at height: 0
+   still paints its own padding, so a padded panel
+   would collapse to a sliver instead of to
+   nothing. Hence a bare wrapper around the real
+   body in each case.                             */
+
+.pd-logs__reveal,
+.logrow__reveal { overflow: hidden; }
+
+/* The chevrons rotate rather than swapping glyph, so they need a box that
+   accepts a transform and a centre to turn about. */
+.pd-disclosure__chev,
+.logrow__chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: 50% 50%;
 }

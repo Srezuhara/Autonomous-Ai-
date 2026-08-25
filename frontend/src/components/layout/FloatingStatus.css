@@ -1,107 +1,137 @@
-/* FloatingStatus Component */
+/* ============================================
+   FLOATING STATUS
+   Permanently on screen, so it is built to be
+   ignorable: one line and a static dot when
+   healthy, expanding only when it has something
+   to say. Fixed position, so backdrop-blur here
+   is safe.
+   ============================================ */
 
-.floating-status {
+.fstatus {
   position: fixed;
-  bottom: var(--space-6);
-  right: var(--space-6);
+  bottom: var(--space-5);
+  right: var(--space-5);
   z-index: 50;
+  max-width: 340px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: rgba(10, 10, 14, 0.78);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg), var(--shadow-inset-hairline);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.fstatus:hover { border-color: var(--border-default); }
+
+.fstatus__row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-full);
-  background: rgba(13, 17, 23, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--border-default);
-  box-shadow: var(--shadow-lg);
-  max-width: 360px;
+  gap: var(--space-2);
 }
 
-.floating-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  animation: statusPulse 2.5s ease-in-out infinite;
-}
-
-.dot--healthy {
-  background: var(--color-success);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
-}
-
-.dot--degraded {
-  background: var(--color-warning);
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
-}
-
-@keyframes statusPulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.5; }
-}
-
-.floating-status-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.floating-status-title {
+.fstatus__headline {
   font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
+  font-weight: var(--font-medium);
   color: var(--text-primary);
   white-space: nowrap;
 }
 
-.floating-status-sub {
+.fstatus__meta {
   font-size: 10px;
   color: var(--text-tertiary);
+  margin-inline-start: var(--space-1);
+}
+
+/* ── Detail ───────────────────────────────────
+   Collapsed with a grid-rows trick rather than
+   max-height, so the transition matches the real
+   content height instead of guessing at it. The
+   rows stay in the DOM for assistive tech.      */
+
+.fstatus__detail {
+  display: grid;
+  grid-template-rows: 0fr;
+  /* 150ms, not 260ms. This widget is fixed to the corner of every product
+     screen, so the pointer crosses it incidentally — it is the most frequently
+     triggered transition in the app and was the slowest. `grid-template-rows`
+     stays: it is the right technique for animating to an unknown auto height,
+     and the reflow cost on one small fixed element is affordable. */
+  transition: grid-template-rows var(--duration-fast) var(--ease-out);
+}
+
+.fstatus:hover .fstatus__detail,
+.fstatus--expanded .fstatus__detail {
+  grid-template-rows: 1fr;
+}
+
+/* The clip and the `min-height: 0` must both sit on ONE wrapper child. With the
+   lines as direct children each would occupy its own implicit row and only the
+   first would collapse, so the pill would stay half-open. */
+.fstatus__detail-inner {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.fstatus__line {
   display: flex;
   align-items: center;
+  gap: 5px;
+  padding-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.fstatus__line:first-child { padding-top: var(--space-2); }
+
+.fstatus__line svg { flex-shrink: 0; }
+
+.fstatus__line--warn  { color: var(--viz-degraded); }
+.fstatus__line--error { color: var(--viz-failed); }
+
+/* ── Reset ────────────────────────────────── */
+
+.fstatus__reset {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
-  font-family: var(--font-mono);
-  flex-wrap: wrap;
-}
-
-/* Exhausted-keys badge inside the sub-text */
-.keys-exhausted-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--color-warning);
-  font-size: 10px;
-  font-family: var(--font-mono);
-}
-
-/* Reset button — compact, ghost-style */
-.reset-keys-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 4px 10px;
+  margin-inline-start: auto;
+  padding: 3px 9px;
   border-radius: var(--radius-full);
+  font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: var(--font-semibold);
-  color: var(--color-warning);
-  background: var(--color-warning-bg);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-  cursor: pointer;
+  font-weight: var(--font-medium);
+  letter-spacing: 0.04em;
+  color: var(--viz-degraded);
+  background: rgba(192, 126, 20, 0.1);
+  border: 1px solid rgba(192, 126, 20, 0.3);
   white-space: nowrap;
   flex-shrink: 0;
   transition:
-    background var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
     border-color var(--duration-fast) var(--ease-out);
 }
 
-.reset-keys-btn:hover:not(:disabled) {
-  background: rgba(245, 158, 11, 0.18);
-  border-color: rgba(245, 158, 11, 0.5);
+.fstatus__reset:hover:not(:disabled) {
+  background: rgba(192, 126, 20, 0.2);
+  border-color: rgba(192, 126, 20, 0.55);
 }
 
-.reset-keys-btn:disabled {
+.fstatus__reset:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+  .fstatus {
+    left: var(--space-4);
+    right: var(--space-4);
+    bottom: var(--space-4);
+    max-width: none;
+  }
 }

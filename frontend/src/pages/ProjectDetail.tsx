@@ -1,86 +1,90 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { RebuildModal } from '../components/shared/RebuildModal';
 import {
   ArrowLeft, Download, RefreshCw, Trash2, FileCode2,
-  Star, Shield, FlaskConical, Clock, Calendar,
-  Zap, ChevronDown, ChevronRight, AlertTriangle
+  Star, Shield, FlaskConical, Zap, ChevronRight,
+  AlertTriangle,
 } from 'lucide-react';
 import { useProjectDetail } from '../hooks/useQueries';
 import { api, isDownloadable } from '../api/client';
+import { parseScorePct, scoreColor } from '../lib/scores';
+import { formatTokens, formatCost, costOf } from '../lib/pricing';
 import { StatusBadge } from '../components/shared/StatusBadge';
+import { appItem, appStagger, disclose, EASE, DURATION } from '../lib/motion';
 import './ProjectDetail.css';
 
-// ── Score helpers ─────────────────────────────────────────────────────────────
 /**
- * Converts any score format to a 0-100 percentage.
- *   "7.5"    → 75%   (numeric out of 10)
- *   "7.5/10" → 75%   (explicit /10)
- *   "3/5"    → 60%   (test score fraction)
- *   "0/0 (collection errors)" → 0%
- *   7        → 70%   (bare number)
+ * ProjectDetail — the build report.
+ *
+ * Restructured from a vertical stack of eight equally-weighted cards into
+ * three tiers:
+ *
+ *   1. Header    — what this is, and the three things you can do with it.
+ *   2. Readout   — timings, scores and tokens, all in one instrument panel.
+ *   3. Evidence  — step logs and the file tree, both collapsed by default.
+ *
+ * The old page gave a timestamp its own bordered card, the same visual weight
+ * as the review score, which flattened the whole screen. Timings are now a
+ * mono strip, scores share one panel, and the actions sit in a horizontal
+ * toolbar instead of a stacked column pinned to the right of the title.
  */
-function parseScorePct(value: string | number | undefined): number {
-  if (value == null) return 0;
-  const str = String(value).trim();
-  if (!str || str === '—') return 0;
 
-  const fracMatch = str.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
-  if (fracMatch) {
-    const num = parseFloat(fracMatch[1]);
-    const den = parseFloat(fracMatch[2]);
-    if (den > 0) return Math.min(100, (num / den) * 100);
-    return 0;
-  }
+// ── Score helpers ─────────────────────────────────────────────────────────────
+// parseScorePct / scoreColor now live in lib/scores.ts — BuildCard needs the
+// same interpretation, and two copies had already drifted apart.
 
-  const n = parseFloat(str);
-  if (!isNaN(n)) return Math.min(100, (n / 10) * 100);
-  return 0;
-}
-
-// ── ScoreGauge — pure display component, no modal inside ─────────────────────
 function ScoreGauge({ label, value, icon }: {
   label: string;
   value: string | number | undefined;
   icon: React.ReactNode;
 }) {
-  const pct   = parseScorePct(value);
-  const color = pct >= 70
-    ? 'var(--color-success)'
-    : pct >= 40
-    ? 'var(--color-warning)'
-    : 'var(--color-error)';
+  const pct     = parseScorePct(value);
+  const color   = scoreColor(pct);
   const display = value != null && value !== '' ? String(value) : '—';
+  const unset   = display === '—';
 
   return (
-    <div className="score-gauge card">
-      <div className="score-gauge-header">
-        {icon}
-        <span>{label}</span>
+    <div className="score">
+      <div className="score__head">
+        <span className="score__icon">{icon}</span>
+        <span className="ulabel">{label}</span>
       </div>
-      <div className="score-gauge-value" style={{ color }}>{display}</div>
-      <div className="score-gauge-bar">
-        <div
-          className="score-gauge-fill"
-          style={{ width: `${pct}%`, background: color }}
-          role="progressbar"
-          aria-valuenow={Math.round(pct)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        />
+      <div
+        className="score__value figure figure--lg"
+        style={unset ? undefined : { color }}
+      >
+        {display}
+      </div>
+      <div
+        className="meter"
+        role="progressbar"
+        aria-label={label}
+        aria-valuenow={Math.round(pct)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div className="meter__fill" style={{ width: `${pct}%`, background: color }} />
       </div>
     </div>
   );
 }
 
-// ── Phase 17: Token usage card ─────────────────────────────────────────────────
+// ── Phase 17: Token usage ─────────────────────────────────────────────────────
 /**
  * Three display states:
  *   1. All props undefined   → pre-Phase-17 build (no token columns in DB)
  *   2. All props = 0         → build ran after schema migration but no LLM calls recorded
  *   3. total > 0             → normal tracked build — show full stats
+ *
+ * The hardcoded "llama-3.3-70b" chip that used to sit in this header was
+ * removed rather than updated: the frontend receives no model field from the
+ * API, so it was asserting a model name it could not know — and that
+ * particular one has since been decommissioned. Better to show nothing than
+ * to show a confidently wrong label.
  */
-function TokenCard({ promptTokens, completionTokens, totalTokens }: {
+function TokenPanel({ promptTokens, completionTokens, totalTokens }: {
   promptTokens?:     number;
   completionTokens?: number;
   totalTokens?:      number;
@@ -95,83 +99,46 @@ function TokenCard({ promptTokens, completionTokens, totalTokens }: {
     totalTokens      === undefined
   );
 
-  const fmt = (n: number) =>
-    n >= 1_000_000
-      ? `${(n / 1_000_000).toFixed(2)}M`
-      : n >= 1_000
-      ? `${(n / 1_000).toFixed(1)}K`
-      : n === 0 ? '—' : String(n);
+  // Rates and formatting are shared with Statistics — see lib/pricing.ts.
+  const fmt = (n: number) => formatTokens(n, '—');
+  const costLabel = total === 0 ? '—' : formatCost(costOf(prompt, completion));
 
-  const inputCost  = (prompt     / 1_000_000) * 0.59;
-  const outputCost = (completion / 1_000_000) * 0.79;
-  const totalCost  = inputCost + outputCost;
-
-  const costLabel =
-    total === 0    ? '—'
-    : totalCost < 0.001 ? '<$0.001'
-    : `$${totalCost.toFixed(3)}`;
+  const STATS = [
+    { label: 'Prompt',     value: fmt(prompt),     accent: false },
+    { label: 'Completion', value: fmt(completion), accent: false },
+    { label: 'Total',      value: fmt(total),      accent: true  },
+    { label: 'Est. cost',  value: costLabel,       accent: false },
+  ];
 
   return (
-    <div className="pd-token-card card">
-      <div className="pd-token-header">
-        <Zap size={15} style={{ color: 'var(--color-warning)' }} />
-        <span>Token usage</span>
-        <span className="pd-token-model">llama-3.3-70b</span>
-        {prePhase17 && (
-          <span style={{
-            marginLeft: 'auto',
-            fontSize: 'var(--text-xs)',
-            color: 'var(--text-tertiary)',
-            fontStyle: 'italic',
-          }}>
-            build predates tracking
-          </span>
-        )}
-      </div>
+    <section className="panel panel--pad pd-tokens">
+      <header className="pd-tokens__head">
+        <Zap size={13} className="pd-tokens__icon" />
+        <span className="ulabel">Token usage</span>
+        {prePhase17 && <span className="pd-tokens__flag">not tracked</span>}
+      </header>
 
       {prePhase17 ? (
-        <p style={{
-          fontSize: 'var(--text-xs)',
-          color: 'var(--text-tertiary)',
-          margin: 'var(--space-2) 0 0',
-          lineHeight: 'var(--leading-relaxed)',
-        }}>
+        <p className="pd-empty">
           Token data is recorded for builds run after Phase 17 was deployed.
           Rebuild this project to see usage.
         </p>
       ) : total === 0 ? (
-        <p style={{
-          fontSize: 'var(--text-xs)',
-          color: 'var(--text-tertiary)',
-          margin: 'var(--space-2) 0 0',
-          lineHeight: 'var(--leading-relaxed)',
-        }}>
+        <p className="pd-empty">
           No tokens recorded — this build may have failed before any LLM calls
           were made, or token tracking was not active for this run.
         </p>
       ) : (
-        <div className="pd-token-grid">
-          <div className="pd-token-stat">
-            <span className="pd-token-label">Prompt</span>
-            <span className="pd-token-value">{fmt(prompt)}</span>
-          </div>
-          <div className="pd-token-stat">
-            <span className="pd-token-label">Completion</span>
-            <span className="pd-token-value">{fmt(completion)}</span>
-          </div>
-          <div className="pd-token-stat pd-token-stat--total">
-            <span className="pd-token-label">Total</span>
-            <span className="pd-token-value pd-token-value--total">{fmt(total)}</span>
-          </div>
-          <div className="pd-token-stat">
-            <span className="pd-token-label">Est. cost</span>
-            <span className="pd-token-value" style={{ color: 'var(--color-success)' }}>
-              {costLabel}
-            </span>
-          </div>
-        </div>
+        <dl className="pd-tokens__grid">
+          {STATS.map(({ label, value, accent }) => (
+            <div key={label} className={`pd-tokens__stat${accent ? ' pd-tokens__stat--accent' : ''}`}>
+              <dt className="ulabel">{label}</dt>
+              <dd className="figure figure--md">{value}</dd>
+            </div>
+          ))}
+        </dl>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -189,59 +156,77 @@ function StepLogEntry({ log }: { log: StepLog }) {
   const errorType = log.data?.error_type != null ? String(log.data.error_type) : 'Error';
   const errorText = log.data?.error != null ? String(log.data.error) : '';
   const traceback = log.data?.traceback != null ? String(log.data.traceback) : '';
-  const hasError = log.status === 'failed' && errorText.length > 0;
-  const hasData  = log.data && Object.keys(log.data).length > 0;
-  const elapsed  = log.data?.elapsed_seconds as number | undefined;
-  const timedOut = log.data?.timed_out as boolean | undefined;
+  const hasError  = log.status === 'failed' && errorText.length > 0;
+  const hasData   = !!log.data && Object.keys(log.data).length > 0;
+  const elapsed   = log.data?.elapsed_seconds as number | undefined;
+  const timedOut  = log.data?.timed_out as boolean | undefined;
 
-  const statusColor =
-    log.status === 'done'    ? 'var(--color-success)' :
-    log.status === 'failed'  ? 'var(--color-error)'   :
-    log.status === 'running' ? 'var(--color-info)'    :
-    'var(--text-tertiary)';
+  const tone =
+    log.status === 'done'    ? 'ok'      :
+    log.status === 'failed'  ? 'error'   :
+    log.status === 'running' ? 'running' :
+    'idle';
 
   return (
-    <div className={`step-log-entry${hasError ? ' step-log-entry--error' : ''}`}>
-      <div
-        className="step-log-header"
+    <div className={`logrow${hasError ? ' logrow--error' : ''}`}>
+      <button
+        type="button"
+        className="logrow__head"
         onClick={() => hasData && setOpen(o => !o)}
-        style={{ cursor: hasData ? 'pointer' : 'default' }}
+        disabled={!hasData}
+        aria-expanded={hasData ? open : undefined}
       >
-        <span className="step-log-num">{log.step}</span>
-        <span className="step-log-name">{log.name.replace(/_/g, ' ')}</span>
-        {elapsed != null && (
-          <span className="step-log-elapsed">{elapsed}s</span>
-        )}
+        <span className="logrow__n figure">{String(log.step).padStart(2, '0')}</span>
+        <span className={`sdot sdot--${tone}`} aria-hidden />
+        <span className="logrow__name">{log.name.replace(/_/g, ' ')}</span>
+
         {timedOut && (
-          <span className="step-log-badge step-log-badge--timeout">
-            <AlertTriangle size={10} /> timeout
+          <span className="logrow__flag">
+            <AlertTriangle size={9} /> timeout
           </span>
         )}
-        <span className="step-log-status" style={{ color: statusColor }}>
-          {log.status}
-        </span>
-        {hasData && (
-          open
-            ? <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', marginLeft: 'auto' }} />
-            : <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', marginLeft: 'auto' }} />
+        {elapsed != null && (
+          <span className="logrow__elapsed figure">
+            {elapsed}<span className="figure__unit">s</span>
+          </span>
         )}
-      </div>
+        <span className={`logrow__status logrow__status--${tone}`}>{log.status}</span>
 
+        {hasData && (
+          <motion.span
+            className="logrow__chev"
+            animate={{ rotate: open ? 90 : 0 }}
+            transition={{ duration: DURATION.fast, ease: EASE.out }}
+          >
+            <ChevronRight size={13} />
+          </motion.span>
+        )}
+      </button>
+
+      {/* Nested inside the step-logs accordion. Framer measures the child's
+          height each frame while the parent is also animating to auto, so the
+          two stay in step and a row opened during the parent's own reveal does
+          not clip. */}
+      <AnimatePresence initial={false}>
       {open && hasData && (
-        <div className="step-log-body">
-          {hasError && (
-            <div className="step-log-error">
-              <strong>{errorType}:</strong>{' '}
-              {errorText}
+        <motion.div
+          key="body"
+          className="logrow__reveal"
+          variants={disclose}
+          initial="hidden"
+          animate="visible"
+          exit="exit"
+        >
+        <div className="logrow__body">
+          {hasError ? (
+            <div className="logrow__error">
+              <strong>{errorType}:</strong> {errorText}
               {traceback && (
-                <pre className="step-log-traceback">
-                  {traceback.slice(-800)}
-                </pre>
+                <pre className="logrow__pre logrow__pre--error">{traceback.slice(-800)}</pre>
               )}
             </div>
-          )}
-          {!hasError && (
-            <pre className="step-log-data">
+          ) : (
+            <pre className="logrow__pre">
               {JSON.stringify(
                 Object.fromEntries(
                   Object.entries(log.data!).filter(([k]) => k !== 'traceback')
@@ -252,7 +237,9 @@ function StepLogEntry({ log }: { log: StepLog }) {
             </pre>
           )}
         </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -268,10 +255,24 @@ export default function ProjectDetail() {
   const [rebuildModalOpen, setRebuildModalOpen] = useState(false);
   const [logsOpen,         setLogsOpen]         = useState(false);
 
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  /**
+   * The `await` here used to be unguarded: a failed delete threw an unhandled
+   * rejection, nothing changed on screen, and the user was left looking at a
+   * project they had just asked to remove with no idea whether it worked.
+   */
   const handleDelete = async () => {
     if (!id || !confirm('Delete this project permanently?')) return;
-    await api.deleteProject(id);
-    navigate('/dashboard');
+    setDeleteError(null);
+    try {
+      await api.deleteProject(id);
+      navigate('/dashboard');
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : 'Could not delete this project.'
+      );
+    }
   };
 
   /**
@@ -295,21 +296,33 @@ export default function ProjectDetail() {
   // ── Loading / error guards ────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="project-detail page-wrapper animate-in">
-        <div className="skeleton" style={{ height: 180 }} />
-        <div className="skeleton" style={{ height: 80 }} />
-        <div className="skeleton" style={{ height: 200 }} />
+      <div className="project-detail page-wrapper">
+        {/* Empty panels at the real heights. The old `.skeleton` shimmered on
+            an infinite loop — motion standing in for something that is not
+            moving, and the last looping animation left in the app. */}
+        <motion.div variants={appStagger(0.06)} initial="hidden" animate="visible" className="pd-skeletons">
+          <motion.div variants={appItem} className="panel pd-skeleton" style={{ height: 168 }} />
+          <motion.div variants={appItem} className="panel pd-skeleton" style={{ height: 132 }} />
+          <motion.div variants={appItem} className="panel pd-skeleton" style={{ height: 200 }} />
+        </motion.div>
       </div>
     );
   }
 
   if (isError || !project) {
     return (
-      <div className="project-detail page-wrapper animate-in">
-        <div className="empty-state card">
-          <h3>Project not found</h3>
+      <div className="project-detail page-wrapper">
+        {/* Announced: this replaces a page the user navigated to expecting
+            content, and the swap happens after the request resolves. */}
+        <div className="panel panel--pad-lg empty" role="alert">
+          <FileCode2 size={22} strokeWidth={1.5} className="empty__icon" />
+          <h3 className="empty__title">Build not found</h3>
+          <p className="empty__body">
+            No build exists with this id. It may have been deleted, or the link
+            may be from a different instance.
+          </p>
           <Link to="/dashboard" className="btn btn-secondary">
-            <ArrowLeft size={15} /> Back to Dashboard
+            <ArrowLeft size={15} /> Back to dashboard
           </Link>
         </div>
       </div>
@@ -331,173 +344,222 @@ export default function ProjectDetail() {
       : undefined,
   })) ?? [];
 
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleString([], {
+      day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+    });
+
+  const TIMINGS: Array<{ label: string; value: string }> = [
+    { label: 'Created', value: fmtDate(project.created_at) },
+    ...(project.completed_at
+      ? [{ label: 'Completed', value: fmtDate(project.completed_at) }]
+      : []),
+    ...(project.duration_seconds != null
+      ? [{ label: 'Duration', value: `${Math.round(project.duration_seconds)}s` }]
+      : []),
+  ];
+
+  const downloadable = isDownloadable(project.status);
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="project-detail page-wrapper animate-in">
+    /*
+      The report is a stack of independent panels that all arrive together
+      when the fetch resolves. Cascading them in reading order — header, then
+      banner, then scores, then evidence — turns one wall of boxes into a
+      sequence, and it costs 200ms end to end. It runs on mount only; the
+      report is static once loaded, so nothing here ever replays.
+    */
+    <motion.div
+      className="project-detail page-wrapper"
+      variants={appStagger(0.04)}
+      initial="hidden"
+      animate="visible"
+    >
 
-      {/* Back */}
-      <Link to="/dashboard" className="back-link">
-        <ArrowLeft size={15} /> Dashboard
-      </Link>
+      <motion.div variants={appItem}>
+        <Link to="/dashboard" className="back-link pd-back">
+          <ArrowLeft size={14} /> Dashboard
+        </Link>
+      </motion.div>
 
-      {/* Hero card */}
-      <div className="pd-hero card">
-        <div className="pd-hero-left">
-          <h1 className="pd-app-name">{project.app_name || 'Unnamed App'}</h1>
-          <p className="pd-prompt">{project.prompt}</p>
-          <div className="pd-tags">
-            <StatusBadge status={project.status} />
-            {project.app_type   && <span className="tag">{project.app_type}</span>}
-            {project.complexity && <span className="tag">{project.complexity}</span>}
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <motion.header className="panel panel--pad-lg pd-header" variants={appItem}>
+        <div className="pd-header__top">
+          <div className="pd-header__id">
+            <h1 className="pd-name">{project.app_name || 'Unnamed app'}</h1>
+            <div className="pd-meta">
+              <StatusBadge status={project.status} />
+              {project.app_type   && <span className="tag">{project.app_type}</span>}
+              {project.complexity && <span className="tag">{project.complexity}</span>}
+            </div>
           </div>
-        </div>
 
-        <div className="pd-actions">
-          {isDownloadable(project.status) && (
+          {/* Horizontal toolbar. Delete is last and ghost-weighted — a
+              destructive action should not be the same size as Download. */}
+          <div className="toolbar pd-toolbar">
+            {downloadable && (
+              <button
+                className="btn btn-primary"
+                onClick={() => api.downloadZip(id!)}
+                id="download-zip-btn"
+              >
+                <Download size={15} /> Download ZIP
+              </button>
+            )}
             <button
-              className="btn btn-primary"
-              onClick={() => api.downloadZip(id!)}
-              id="download-zip-btn"
+              className="btn btn-secondary"
+              onClick={() => setRebuildModalOpen(true)}
+              disabled={isRebuilding}
             >
-              <Download size={15} /> Download ZIP
+              {isRebuilding
+                ? <><div className="spinner" /> Rebuilding…</>
+                : <><RefreshCw size={15} /> Rebuild</>
+              }
             </button>
-          )}
-
-          {/* Rebuild button — opens modal, does NOT immediately start a build */}
-          <button
-            className="btn btn-secondary"
-            onClick={() => setRebuildModalOpen(true)}
-            disabled={isRebuilding}
-          >
-            {isRebuilding
-              ? <><div className="spinner" /> Rebuilding…</>
-              : <><RefreshCw size={15} /> Rebuild</>
-            }
-          </button>
-
-          <button className="btn btn-danger" onClick={handleDelete}>
-            <Trash2 size={15} /> Delete
-          </button>
+            <button
+              className="btn btn-ghost pd-delete"
+              onClick={handleDelete}
+              aria-label="Delete project"
+              title="Delete project"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Time row */}
-      <div className="pd-time-row">
-        <div className="pd-time-item card">
-          <Calendar size={14} className="pd-time-icon" />
-          <span>Created: {new Date(project.created_at).toLocaleString()}</span>
-        </div>
-        {project.completed_at && (
-          <div className="pd-time-item card">
-            <Clock size={14} className="pd-time-icon" />
-            <span>Completed: {new Date(project.completed_at).toLocaleString()}</span>
+        {deleteError && (
+          <div className="panel pd-delete-error" role="alert">
+            <AlertTriangle size={15} className="pd-delete-error__icon" />
+            <p>{deleteError}</p>
           </div>
         )}
-        {project.duration_seconds != null && (
-          <div className="pd-time-item card">
-            <Clock size={14} className="pd-time-icon" />
-            <span>Duration: {Math.round(project.duration_seconds)}s</span>
-          </div>
-        )}
-      </div>
+
+        {/* The prompt is the thing that produced everything below it, so it is
+            set as a quotation rather than as body copy in a grey block. */}
+        <blockquote className="pd-prompt">{project.prompt}</blockquote>
+
+        <dl className="pd-timings">
+          {TIMINGS.map(({ label, value }) => (
+            <div key={label} className="pd-timings__item">
+              <dt className="ulabel">{label}</dt>
+              <dd className="figure figure--sm">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </motion.header>
 
       {/* Phase 21: explain a degraded / quota-paused completion */}
       {project.status === 'done_with_context' && (
-        <div className="pd-context-banner card">
-          <AlertTriangle size={16} className="pd-context-icon" />
-          <div>
-            <strong>This build finished with a handoff document.</strong>
-            <p>
+        <motion.section className="panel panel--pad pd-banner" variants={appItem}>
+          <AlertTriangle size={16} className="pd-banner__icon" />
+          <div className="pd-banner__body">
+            <p className="pd-banner__title">This build finished with a handoff document.</p>
+            <p className="pd-banner__text">
               {project.completion_reason ||
                 'The build produced usable code but did not complete every verification step.'}
               {project.progress_percent != null &&
                 ` (${Math.round(project.progress_percent)}% of the pipeline completed.)`}
             </p>
-            <p>
+            <p className="pd-banner__text">
               Download the ZIP and read <code>SESSION_CONTEXT.md</code> — it lists what
               was generated, what is missing, and how to finish the build.
             </p>
           </div>
-        </div>
+        </motion.section>
       )}
 
-      {/* Score gauges — shown for any build that produced packaged code */}
-      {isDownloadable(project.status) && (
-        <div className="pd-scores">
-          <ScoreGauge
-            label="Review Score"
-            value={project.review_score}
-            icon={<Star size={14} />}
-          />
-          <ScoreGauge
-            label="Debug Score"
-            value={project.debug_score}
-            icon={<Shield size={14} />}
-          />
-          <ScoreGauge
-            label="Test Score"
-            value={project.test_score}
-            icon={<FlaskConical size={14} />}
-          />
-        </div>
+      {/* ── Readout ─────────────────────────────────────────────────────── */}
+      {downloadable && (
+        <motion.section className="panel panel--pad pd-scores" variants={appItem}>
+          <ScoreGauge label="Review"  value={project.review_score} icon={<Star size={13} />} />
+          <ScoreGauge label="Debug"   value={project.debug_score}  icon={<Shield size={13} />} />
+          <ScoreGauge label="Tests"   value={project.test_score}   icon={<FlaskConical size={13} />} />
+        </motion.section>
       )}
 
-      {/* Token usage — always shown, never silently hidden */}
-      <TokenCard
+      <motion.div variants={appItem}>
+      <TokenPanel
         promptTokens={project.prompt_tokens}
         completionTokens={project.completion_tokens}
         totalTokens={project.total_tokens}
       />
+      </motion.div>
 
-      {/* Build step logs */}
+      {/* ── Evidence ────────────────────────────────────────────────────── */}
       {stepLogs.length > 0 && (
-        <div className="pd-step-logs card">
+        <motion.section className="panel pd-logs" variants={appItem}>
           <button
-            className="pd-step-logs-toggle"
+            type="button"
+            className="pd-disclosure"
             onClick={() => setLogsOpen(o => !o)}
+            aria-expanded={logsOpen}
           >
-            <span className="section-label">Build Step Logs</span>
-            <span className="pd-step-log-count">{stepLogs.length} steps</span>
-            {logsOpen
-              ? <ChevronDown size={15} style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }} />
-              : <ChevronRight size={15} style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }} />
-            }
+            <span className="ulabel">Step logs</span>
+            <span className="pd-disclosure__count figure">{stepLogs.length}</span>
+            {/* One chevron rotated, not two glyphs swapped. A chevron that
+                turns is the disclosure's state made continuous — the user can
+                see it is the same control pointing somewhere else, which two
+                separate icons cross-fading never quite communicates. */}
+            <motion.span
+              className="pd-disclosure__chev"
+              animate={{ rotate: logsOpen ? 90 : 0 }}
+              transition={{ duration: DURATION.fast, ease: EASE.out }}
+            >
+              <ChevronRight size={15} />
+            </motion.span>
           </button>
-          {logsOpen && (
-            <div className="pd-step-logs-body">
-              {stepLogs.map(log => (
-                <StepLogEntry key={log.step} log={log} />
-              ))}
-            </div>
-          )}
-        </div>
+
+          {/* The one true accordion on this screen. `disclose` animates height
+              to auto, so the panel below is pushed down rather than being
+              jumped down — with 9 step logs that is several hundred pixels of
+              movement, and without it the page appears to teleport. */}
+          <AnimatePresence initial={false}>
+            {logsOpen && (
+              <motion.div
+                key="logs"
+                className="pd-logs__reveal"
+                variants={disclose}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <div className="pd-logs__body">
+                  {stepLogs.map(log => <StepLogEntry key={log.step} log={log} />)}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.section>
       )}
 
-      {/* Generated file tree */}
       {project.files && project.files.length > 0 && (
-        <div className="pd-files card">
-          <div className="pd-files-header">
-            <FileCode2 size={15} />
-            <span>Generated Files</span>
-            <span className="pd-file-count">{project.files.length}</span>
-          </div>
-          <div className="file-tree">
-            {project.files.map((f, i) => (
-              <div
-                key={i}
-                className="file-row"
-                style={{ animationDelay: `${i * 18}ms` }}
-              >
-                <FileCode2 size={13} className="file-row-icon" />
-                <code className="file-row-path">
-                  {typeof f === 'string'
-                    ? f
-                    : (f as { file_path?: string }).file_path ?? String(f)}
+        <motion.section className="panel pd-files" variants={appItem}>
+          <header className="pd-files__head">
+            <FileCode2 size={13} className="pd-files__icon" />
+            <span className="ulabel">Generated files</span>
+            <span className="pd-disclosure__count figure">{project.files.length}</span>
+          </header>
+          <div className="pd-tree">
+            {project.files.map((f, i) => {
+              const path = typeof f === 'string'
+                ? f
+                : (f as { file_path?: string }).file_path ?? String(f);
+              const slash = path.lastIndexOf('/');
+              const dir   = slash >= 0 ? path.slice(0, slash + 1) : '';
+              const name  = slash >= 0 ? path.slice(slash + 1) : path;
+
+              return (
+                // Directory prefix is dimmed and the filename is not, so a
+                // 60-file tree can be scanned by name instead of by full path.
+                <code key={i} className="pd-tree__row">
+                  {dir && <span className="pd-tree__dir">{dir}</span>}
+                  <span className="pd-tree__file">{name}</span>
                 </code>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        </div>
+        </motion.section>
       )}
 
       {/*
@@ -515,6 +577,6 @@ export default function ProjectDetail() {
         appName={project.app_name || project.build_id.substring(0, 8)}
         isRebuilding={isRebuilding}
       />
-    </div>
+    </motion.div>
   );
 }

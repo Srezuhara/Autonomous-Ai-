@@ -15,7 +15,10 @@ class BuildRequest(BaseModel):
     prompt: str = Field(
         ...,
         min_length=10,
-        max_length=500,
+        # Widened from 500 to match the composer, which has always allowed 2000.
+        # A prompt between the two limits was accepted by the UI and rejected by
+        # the API with a 422 the user never saw explained.
+        max_length=2000,
         description="What app to build",
     )
 

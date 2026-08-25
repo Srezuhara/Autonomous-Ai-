@@ -88,10 +88,40 @@ button {
   font-weight: var(--font-medium);
 }
 
-button:focus-visible {
+/* ── Focus ────────────────────────────────────
+   One keyboard-focus treatment for everything
+   focusable. Only `button`, `.chip` and
+   `.panel--interactive` used to declare one, so
+   tabbing through a page dropped the ring the
+   moment it reached a link, a summary or a
+   field — the ring appeared to come and go at
+   random, which is worse than not having one.
+
+   `:focus-visible`, not `:focus`: the ring shows
+   for keyboard and programmatic focus and stays
+   out of the way of the mouse.                  */
+
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
   outline: 2px solid var(--color-accent-primary);
   outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
+
+/* The composer's field is the exception: its surface lights its whole border
+   and casts a glow on focus-within, so a second ring inside that would be two
+   indicators for one state.
+
+   This holds ONLY while the composer sits on a `.panel`. Suppressing the
+   outline without one leaves the field with no focus indication whatsoever,
+   which is exactly what happened to the rebuild dialog. Scoped to `.panel`
+   so the suppression cannot outlive the thing that justifies it. */
+.panel > .composer__input:focus-visible,
+.panel .composer__input:focus-visible { outline: none; }
 
 code, pre {
   font-family: var(--font-mono);
@@ -116,29 +146,29 @@ code, pre {
   margin: 0 auto;
 }
 
-/* ── Glass Morphism Card ─────────────────── */
-.card {
-  background: rgba(13, 17, 23, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-  transition:
-    border-color var(--duration-normal) var(--ease-out),
-    box-shadow var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
+/* Page padding was a flat 32px at every width. On a 420px viewport that is 64px
+   of the screen spent on margins, which is what pushed wide content (tables,
+   the step spine, chart frames) past the edge — where `overflow-x: hidden` on
+   the body then hid the evidence. */
+@media (max-width: 899px) {
+  .page-wrapper { padding: var(--space-6) var(--space-5); }
 }
 
-.card:hover {
-  border-color: var(--border-strong);
+@media (max-width: 520px) {
+  .page-wrapper { padding: var(--space-5) var(--space-4); }
 }
 
-.card--interactive:hover {
-  border-color: var(--border-accent);
-  box-shadow: 0 0 0 1px var(--border-accent), var(--shadow-md);
-  transform: translateY(-1px);
+/* Routed content. Exists so the mobile bar can be a sibling of the routes
+   inside the scroll container while only the routes go inert. */
+.route-slot {
+  display: flow-root;
+  min-width: 0;
 }
+
+/* Held space for a lazily-loaded route. Deliberately blank rather than a
+   spinner: the chunk arrives in tens of milliseconds on a local connection,
+   and a spinner that flashes for one frame is worse than nothing. */
+.route-fallback { min-height: 60vh; }
 
 /* ── Buttons ─────────────────────────────── */
 .btn {
@@ -170,15 +200,20 @@ code, pre {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--color-accent-primary), #9061F9);
-  color: #fff;
+  background: var(--gradient-accent);
+  color: var(--text-on-accent);
   border: 1px solid transparent;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 8px 22px -12px var(--color-accent-glow);
 }
 
+/* Lift the glow, not the colour. The old hover swapped in two more hardcoded
+   hexes, so the button changed hue as well as elevation. */
 .btn-primary:hover {
-  background: linear-gradient(135deg, #8B7AFB, #9B71FA);
-  box-shadow: 0 4px 16px rgba(124, 107, 250, 0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 10px 28px -10px var(--color-accent-glow);
 }
 
 .btn-secondary {
@@ -253,10 +288,14 @@ code, pre {
   border-color: rgba(245, 158, 11, 0.2);
 }
 
-.badge-info {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-  border-color: rgba(59, 130, 246, 0.2);
+/* The brand accent as a status colour. Used for "running" so the badge and the
+   chart's running segment agree; `badge-info` blue is kept only for anything
+   genuinely informational, since blue and violet are not separable under
+   deutan/protan vision. */
+.badge-accent {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-tertiary);
+  border-color: var(--border-accent);
 }
 
 .badge-neutral {
@@ -278,89 +317,34 @@ code, pre {
   border: 1px solid var(--border-subtle);
 }
 
-/* ── Filter Tabs ─────────────────────────── */
-.tab-group {
-  display: inline-flex;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: 3px;
-  gap: 2px;
-}
+/* ── Spinner ──────────────────────────────────
+   The one sanctioned infinite animation, and only
+   ever while work is genuinely in flight: an
+   in-flight submit, an active pipeline step, a
+   refetch. Nothing else in the app loops.        */
 
-.tab {
-  padding: 0.4rem 1rem;
-  border-radius: 8px;
-  font-size: var(--text-sm);
-  font-weight: var(--font-medium);
-  color: var(--text-tertiary);
-  border: 1px solid transparent;
-  background: transparent;
-  transition: all var(--duration-fast) var(--ease-out);
-}
-
-.tab:hover { color: var(--text-secondary); }
-
-.tab.active {
-  background: var(--color-bg-elevated);
-  color: var(--text-primary);
-  border-color: var(--border-default);
-  box-shadow: var(--shadow-sm);
-}
-
-/* ── Skeleton Loader ─────────────────────── */
-.skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--color-bg-surface) 25%,
-    var(--color-bg-elevated) 50%,
-    var(--color-bg-surface) 75%
-  );
-  background-size: 400% 100%;
-  animation: shimmer 1.6s ease-in-out infinite;
-  border-radius: var(--radius-lg);
-}
-
-@keyframes shimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* ── Spinner ─────────────────────────────── */
 .spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255,255,255,0.2);
-  border-top-color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--text-on-accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
 }
 
+/* Same idea applied to an existing icon rather than a bare ring. */
+.spin-icon { animation: spin 0.9s linear infinite; }
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-/* ── Animations ──────────────────────────── */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes fadeInScale {
-  from { opacity: 0; transform: scale(0.97); }
-  to   { opacity: 1; transform: scale(1); }
-}
-
-.animate-in {
-  animation: fadeIn var(--duration-slow) var(--ease-out) both;
-}
-
-/* ── Divider ─────────────────────────────── */
-.divider {
-  height: 1px;
-  background: var(--border-subtle);
-  width: 100%;
+/* A spinner communicates "still working". With reduced motion it says so by
+   being present rather than by turning. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .spin-icon { animation: none; }
 }
 
 /* ── Scrollbar ───────────────────────────── */
@@ -372,39 +356,18 @@ code, pre {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
-/* ── Empty State ─────────────────────────── */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-4);
-  padding: var(--space-16) var(--space-8);
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.empty-state h3 {
-  font-size: var(--text-xl);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-weight: var(--font-semibold);
-}
-
-/* ── Section Header ──────────────────────── */
-.section-label {
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
 /* ── Back Link ───────────────────────────── */
+/* Measured at 93x21 before the vertical padding was added, which is under the
+   24 CSS px minimum WCAG 2.2 AA asks of a pointer target. The negative inline
+   margin keeps the text optically flush with the content below it, so the
+   larger hit area costs nothing visually. */
 .back-link {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  padding: 5px 8px;
+  margin-inline-start: -8px;
+  border-radius: var(--radius-sm);
   font-size: var(--text-sm);
   color: var(--text-secondary);
   font-weight: var(--font-medium);
@@ -412,14 +375,6 @@ code, pre {
 }
 
 .back-link:hover { color: var(--text-primary); }
-
-/* ── Text Gradient ───────────────────────── */
-.text-gradient {
-  background: linear-gradient(135deg, var(--color-accent-secondary), var(--color-accent-tertiary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
 
 /* ── Metric Value ────────────────────────── */
 .metric-value {

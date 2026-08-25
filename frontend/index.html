@@ -4,7 +4,29 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+
+    <title>AppBuilder — autonomous app generation</title>
+    <meta
+      name="description"
+      content="Describe an app in plain English. A nine-agent pipeline architects, writes, debugs, reviews and tests it, then hands back a ZIP."
+    />
+    <!-- Matches --color-bg-base, so the browser chrome does not flash white
+         against the dark shell on mobile. -->
+    <meta name="theme-color" content="#050507" />
+
+    <!--
+      The font @import lives at the top of tokens.css, which means the browser
+      cannot even discover fonts.gstatic.com until it has downloaded and parsed
+      the stylesheet — the request is render-blocking behind a chain it has no
+      way to predict. These two hints let the connection warm up in parallel
+      with the CSS fetch.
+
+      `crossorigin` on the gstatic hint is required: font files are fetched in
+      CORS mode, and a preconnect without it warms a connection the font
+      request then cannot reuse.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   </head>
   <body>
     <div id="root"></div>

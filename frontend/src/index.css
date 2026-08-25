@@ -2,6 +2,5 @@
 @import './styles/tokens.css';
 @import './styles/globals.css';
 @import './styles/primitives.css';
+@import './styles/app-shell.css';
 
-/* Tailwind (keep for Landing page compatibility) */
-@import "tailwindcss";

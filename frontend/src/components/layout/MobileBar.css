@@ -1,0 +1,89 @@
+/* ============================================
+   MOBILE BAR
+   Only exists below the drawer breakpoint. Above
+   it the sidebar is the navigation and this is
+   display:none, contributing nothing.
+   ============================================ */
+
+.mobile-bar { display: none; }
+
+@media (max-width: 899px) {
+  .mobile-bar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: 52px;
+    padding-inline: var(--space-3) var(--space-4);
+    background: rgba(8, 8, 12, 0.82);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .mobile-bar__toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* 40px: below this the tap target stops being comfortable one-handed. */
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .mobile-bar__toggle:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .mobile-bar__toggle:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+
+  /* The rotating glyph holder. It has to be its own box: rotating the <svg>
+     directly would fight lucide's own sizing, and the button is also the
+     press target, so a transform on the button would compose with the tap
+     scale and the icon would end up rotating the whole 40px hit area. */
+  .mobile-bar__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-bar__title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: var(--font-medium);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-eyebrow);
+    color: var(--text-secondary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-bar__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    color: var(--color-accent-tertiary);
+    flex-shrink: 0;
+  }
+}

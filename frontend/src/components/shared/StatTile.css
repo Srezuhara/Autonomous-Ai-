@@ -1,0 +1,39 @@
+/* ============================================
+   STAT TILE — shared KPI surface
+   Layout only. Every visual decision comes from
+   .panel / .ulabel / .figure in app-shell.css.
+   ============================================ */
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.stat-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.stat-tile__icon {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* Long values (an app type, not a number) must truncate rather than wrap —
+   a two-line tile in a four-up row drags the whole row taller. */
+.stat-tile__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-tile__hint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: var(--leading-normal);
+}

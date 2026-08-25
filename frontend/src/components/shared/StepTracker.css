@@ -1,146 +1,248 @@
-/* StepTracker Component */
+/* ============================================
+   STEP TRACKER — the pipeline spine
+   Marker geometry is defined once here and every
+   other offset is derived from it, so the rail
+   stays registered with the markers.
+   ============================================ */
 
-.step-tracker {
+.steptrack {
+  --mark-size: 20px;
+  /* Distance from the top of a row to the centre of its marker. The rail's
+     start and end offsets are computed from this, so changing the row padding
+     cannot desynchronise them. */
+  --mark-center: calc(var(--space-3) + (var(--mark-size) / 2));
+
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
-/* Header */
-.step-tracker-header {
+.steptrack__head {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  align-items: center;
-}
-
-.step-tracker-label {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  font-weight: var(--font-medium);
-}
-
-.step-tracker-pct {
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--color-accent-secondary);
-  font-family: var(--font-mono);
-}
-
-/* Progress Bar */
-.step-tracker-bar {
-  height: 4px;
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-full);
-  overflow: hidden;
-}
-
-.step-tracker-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--color-accent-primary), var(--color-accent-secondary));
-  border-radius: var(--radius-full);
-  transition: width 0.6s var(--ease-out);
-  box-shadow: 0 0 8px var(--color-accent-glow);
-}
-
-/* Step List */
-.step-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.step-row {
-  display: flex;
   gap: var(--space-3);
-  padding: 6px 0;
-  transition: opacity var(--duration-normal) var(--ease-out);
 }
 
-.step-row--pending { opacity: 0.35; }
-.step-row--running { opacity: 1; }
-.step-row--done    { opacity: 0.85; }
-.step-row--failed  { opacity: 1; }
+.steptrack__count { color: var(--text-secondary); }
 
-/* Connector Column */
-.step-connector {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 18px;
-  flex-shrink: 0;
+.steptrack__meter { margin-bottom: var(--space-1); }
+
+/* The pipeline meter is the one bar in the app driven by transform instead of
+   width, because it animates from zero on every mount (see StepTracker.tsx).
+   `scaleX` needs the element already at full width with its origin pinned
+   left, otherwise it grows from the centre outward in both directions. The
+   shared `.meter__fill` width transition is overridden off so it cannot fight
+   the motion value for control of the same element. */
+.steptrack__fill {
+  width: 100%;
+  transform-origin: left center;
+  transition: none;
+  will-change: transform;
 }
 
-.step-line {
+.steptrack__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Row ──────────────────────────────────── */
+
+.srow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px var(--mark-size) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+/* The rail segment. Full row height at the marker column's centre, so
+   consecutive rows join into one line with no seams. */
+.srow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* number column (22px) + gap (12px) + half the marker */
+  left: calc(22px + var(--space-3) + (var(--mark-size) / 2) - 0.5px);
   width: 1px;
-  flex: 1;
-  min-height: 16px;
   background: var(--border-subtle);
-  margin: 3px 0;
-  transition: background var(--duration-normal) var(--ease-out);
 }
 
-.step-line--filled { background: var(--color-accent-primary); }
+/* Terminate the line at the first and last markers rather than letting it
+   dangle into the padding. */
+.srow:first-child::before { top: var(--mark-center); }
+.srow:last-child::before  { bottom: calc(100% - var(--mark-center)); }
 
-/* Icons */
-.step-icon { flex-shrink: 0; }
-.step-icon--done    { color: var(--color-success); }
-.step-icon--failed  { color: var(--color-error); }
-.step-icon--running { color: var(--color-accent-primary); }
-.step-icon--pending { color: var(--border-default); }
+/* A completed step's segment is lit — the rail doubles as the progress
+   indicator without needing a second element to fill. */
+.srow--done::before,
+.srow--done_with_context::before { background: rgba(124, 107, 250, 0.45); }
 
-/* Body */
-.step-body {
-  flex: 1;
+/* The terminal failure row's segment stops the rail in red — the line should
+   not read as continuing past the point the pipeline died. */
+.srow--terminal::before { background: rgba(244, 63, 94, 0.45); }
+
+/* One level of emphasis, three of recession. */
+.srow--pending .srow__name { color: var(--text-tertiary); }
+.srow--pending .srow__n    { color: var(--text-tertiary); opacity: 0.6; }
+.srow--done    .srow__name { color: var(--text-secondary); }
+.srow--running .srow__name { color: var(--text-primary); font-weight: var(--font-medium); }
+.srow--failed  .srow__name { color: var(--text-primary); }
+.srow--done_with_context .srow__name { color: var(--text-secondary); }
+
+/* The active row gets a faint field behind it. This is the only "you are here"
+   cue on the screen, and it costs nothing to paint. */
+.srow--running::after {
+  content: '';
+  position: absolute;
+  inset: 2px calc(var(--space-4) * -1);
+  border-radius: var(--radius-md);
+  background: rgba(124, 107, 250, 0.05);
+  pointer-events: none;
+}
+
+/* Optically centred on the marker beside it: the grid cell already starts
+   below the row padding, so this only needs half the marker minus half the
+   digit's cap height. */
+.srow__n {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding-top: calc((var(--mark-size) / 2) - 5px);
+  text-align: right;
+}
+
+/* ── Marker ───────────────────────────────── */
+
+.smark {
+  position: relative;
+  z-index: 1;
+  width: var(--mark-size);
+  height: var(--mark-size);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  /* Opaque, so it masks the rail passing behind it. */
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+
+.smark--pending { color: var(--text-tertiary); opacity: 0.5; }
+
+.smark--done {
+  color: var(--viz-done);
+  border-color: rgba(14, 159, 110, 0.45);
+  background: rgba(14, 159, 110, 0.1);
+}
+
+.smark--running {
+  color: var(--viz-running);
+  border-color: var(--border-accent);
+  background: rgba(124, 107, 250, 0.12);
+  box-shadow: 0 0 0 3px rgba(124, 107, 250, 0.09);
+}
+
+.smark--failed {
+  color: var(--viz-failed);
+  border-color: rgba(244, 63, 94, 0.45);
+  background: rgba(244, 63, 94, 0.1);
+}
+
+/* `done_with_context` — the step ran and produced something, but degraded.
+   It is not a failure and it is not a clean pass, so it gets neither colour. */
+.smark--warn {
+  color: var(--viz-degraded);
+  border-color: rgba(192, 126, 20, 0.45);
+  background: rgba(192, 126, 20, 0.1);
+}
+
+/* ── Body ─────────────────────────────────── */
+
+.srow__body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding-bottom: var(--space-2);
+  min-width: 0;
+  padding-top: 2px;
 }
 
-.step-meta {
+.srow__top {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
-.step-num {
-  font-size: 10px;
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.step-name {
+.srow__name {
   font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--text-primary);
+  line-height: 1.35;
+  letter-spacing: -0.01em;
 }
 
-.step-status {
-  font-size: 10px;
-  font-weight: var(--font-semibold);
-  padding: 2px 7px;
-  border-radius: var(--radius-full);
-  letter-spacing: 0.04em;
-}
-
-.step-status--done    { background: var(--color-success-bg); color: var(--color-success); }
-.step-status--running { background: var(--color-info-bg); color: var(--color-info); }
-.step-status--failed  { background: var(--color-error-bg); color: var(--color-error); }
-
-.step-message {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
+.srow__tag {
   font-family: var(--font-mono);
-  word-break: break-word;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-accent-tertiary);
+}
+
+.srow__tag--failed { color: var(--viz-failed); }
+.srow__tag--warn   { color: var(--viz-degraded); }
+
+.srow__time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-inline-start: auto;
+  opacity: 0.75;
+}
+
+/* Server messages are machine output, so they are set as machine output.
+   Clamped to two lines: a long traceback in the spine would push the rest of
+   the pipeline off screen, and the full text lives in the project's step log. */
+.srow__msg {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
   margin: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.step-time {
-  font-size: 10px;
-  color: var(--text-tertiary);
+@media (max-width: 560px) {
+  .srow { grid-template-columns: var(--mark-size) minmax(0, 1fr); }
+  .srow__n { display: none; }
+  .srow::before { left: calc((var(--mark-size) / 2) - 0.5px); }
+  .srow__time { margin-inline-start: 0; }
+}
+
+/* ── Terminal row ─────────────────────────────
+   The runner's slot -1 failure event. It is not
+   one of the numbered agents, so it carries "!!"
+   in the number column rather than a slot that
+   does not exist.                               */
+
+.srow--terminal .srow__n {
+  color: var(--viz-failed);
+  opacity: 0.8;
+}
+
+.srow__msg--error {
+  color: var(--viz-failed);
   font-family: var(--font-mono);
-  opacity: 0.6;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  word-break: break-word;
 }

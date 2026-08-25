@@ -1,37 +1,56 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PlusCircle, RefreshCw, Activity, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  RefreshCw, LayoutGrid, Activity, CheckCircle2, Timer, Boxes, PlugZap,
+} from 'lucide-react';
 import { useBuilds, useStats } from '../hooks/useQueries';
 import { BuildCard } from '../components/shared/BuildCard';
+import { StatTile } from '../components/shared/StatTile';
+import { appItem, appStagger, popIn, CHIP_ID, layoutSpring } from '../lib/motion';
 import './Dashboard.css';
 
-// Phase 21: 'Partial' surfaces done_with_context builds — completed but
-// degraded or quota-paused. They are downloadable, so they get their own tab
-// rather than being lumped in with failures.
-const STATUS_FILTERS = [
-  { value: 'all',               label: 'All'     },
-  { value: 'running',           label: 'Running' },
-  { value: 'done',              label: 'Done'    },
-  { value: 'done_with_context', label: 'Partial' },
-  { value: 'failed',            label: 'Failed'  },
-] as const;
+/**
+ * Dashboard — the build index.
+ *
+ * Rebuilt on app-shell.css. The old screen carried its own header markup, its
+ * own `MetricCard`, and the legacy `.tab-group` (whose `.tab` rule animates
+ * `transition: all`). All three are gone: the header is `.page-head`, the KPI
+ * row is the shared `StatTile`, and filters are `.chip[aria-pressed]`.
+ *
+ * The "New Build" button was dropped from the header — the sidebar pins that
+ * action on every screen, so a second copy here was just competing with it.
+ *
+ * ── Motion ────────────────────────────────────────────────────────────────
+ * This screen's motion exists to answer one question: *what changed when I
+ * clicked that filter?* Three pieces do it together:
+ *
+ *   1. The pressed chip's tint is a single shared element that slides between
+ *      chips, so the eye follows the selection instead of re-finding it.
+ *   2. Surviving rows keep their identity and slide (`layout` on BuildCard);
+ *      rows that no longer match fade out.
+ *   3. The list is keyed on the filter so a genuinely different result set
+ *      re-runs the stagger rather than silently swapping underneath.
+ *
+ * The KPI row animates on mount only. It re-renders on every stats poll and a
+ * row that re-cascaded each time would be a metronome in the corner of the eye.
+ */
 
-function MetricCard({ icon, value, label, color }: {
-  icon: React.ReactNode;
-  value: string | number;
-  label: string;
-  color: string;
-}) {
-  return (
-    <div className="metric-card card">
-      <div className="metric-card-icon" style={{ color }}>
-        {icon}
-      </div>
-      <div className="metric-value">{value}</div>
-      <div className="metric-label">{label}</div>
-    </div>
-  );
-}
+// Phase 21: 'Partial' surfaces done_with_context builds — completed but
+// degraded or quota-paused. They are downloadable, so they get their own
+// filter rather than being lumped in with failures.
+//
+// `queued` and `cancelled` were missing entirely: a build in either state was
+// reachable from "All" but from no filter of its own.
+const STATUS_FILTERS = [
+  { value: 'all',               label: 'All'       },
+  { value: 'running',           label: 'Running'   },
+  { value: 'queued',            label: 'Queued'    },
+  { value: 'done',              label: 'Done'      },
+  { value: 'done_with_context', label: 'Partial'   },
+  { value: 'failed',            label: 'Failed'    },
+  { value: 'cancelled',         label: 'Cancelled' },
+] as const;
 
 export default function Dashboard() {
   const [filter, setFilter] = useState<string>('all');
@@ -40,139 +59,235 @@ export default function Dashboard() {
   );
   const { data: stats } = useStats();
 
-  // ── Fix: avg_duration_seconds is now a top-level field ────────────────────
-  // Old: stats.duration_seconds?.average  → often undefined → Math.round(undefined) → NaN
-  // New: stats.avg_duration_seconds       → direct number or null
+  // ── avg_duration_seconds is the top-level field ───────────────────────────
+  // The nested `duration_seconds.average` is kept as a fallback for older
+  // backends; reading only the nested one used to yield Math.round(undefined).
   const avgDuration: number | null = stats
-    ? (stats.avg_duration_seconds ??
-       (stats as { duration_seconds?: { average?: number } }).duration_seconds?.average ??
-       null)
+    ? (stats.avg_duration_seconds ?? stats.duration_seconds?.average ?? null)
     : null;
 
-  const avgDurationLabel = avgDuration != null && !isNaN(avgDuration)
-    ? `${Math.round(avgDuration)}s`
-    : '—';
+  const hasAvgDuration = avgDuration != null && !isNaN(avgDuration);
+  const topType = stats?.top_app_types?.[0]?.type ?? '—';
 
-  // Top app type: handle both array and record formats
-  const topType = stats?.top_app_types
-    ? (Array.isArray(stats.top_app_types)
-        ? (stats.top_app_types[0] as { type?: string } | undefined)?.type ?? '—'
-        : Object.keys(stats.top_app_types as Record<string, number>)[0] ?? '—')
-    : '—';
+  // The envelope's `total` is the count of matching builds; `projects.length`
+  // is only ever the current page of 50, so it under-reported past that.
+  const total = data?.total ?? 0;
 
   return (
-    <div className="dashboard page-wrapper animate-in">
-      {/* Page Header */}
-      <div className="dashboard-header">
-        <div>
-          <h1 className="dashboard-title">Dashboard</h1>
-          <p className="dashboard-subtitle">Monitor and manage your AI-generated applications</p>
+    <div className="dashboard page-wrapper">
+
+      <header className="page-head">
+        <div className="page-head__text">
+          <span className="page-head__kicker">
+            <LayoutGrid size={11} strokeWidth={2} />
+            Build index
+          </span>
+          <h1 className="page-head__title">
+            Everything you have <em>shipped</em>
+          </h1>
+          <p className="page-head__sub">
+            Every run the pipeline has taken, with its review scores and the
+            reason it ended. Open one for the full report.
+          </p>
         </div>
-        <div className="dashboard-actions">
+        <div className="page-head__aside">
           <button
             className="btn btn-ghost btn-icon"
             onClick={() => refetch()}
             disabled={isFetching}
-            aria-label="Refresh"
+            aria-label="Refresh builds"
           >
             <RefreshCw size={16} className={isFetching ? 'spin-icon' : ''} />
           </button>
-          <Link to="/build" className="btn btn-primary">
-            <PlusCircle size={16} />
-            New Build
-          </Link>
         </div>
-      </div>
+      </header>
 
-      {/* Metrics Row */}
       {stats && (
-        <div className="dashboard-metrics">
-          <MetricCard
-            icon={<Activity size={20} />}
+        <motion.div
+          className="dash-metrics"
+          variants={appStagger()}
+          initial="hidden"
+          animate="visible"
+        >
+          <StatTile
+            label="Total builds"
             value={stats.total_builds}
-            label="Total Builds"
-            color="var(--color-info)"
+            icon={<Activity size={14} strokeWidth={2} />}
           />
-          <MetricCard
-            icon={<CheckCircle size={20} />}
-            value={`${(stats.success_rate_percent ?? 0).toFixed(1)}%`}
-            label="Success Rate"
-            color="var(--color-success)"
+          <StatTile
+            label="Success rate"
+            value={(stats.success_rate_percent ?? 0).toFixed(1)}
+            unit="%"
+            icon={<CheckCircle2 size={14} strokeWidth={2} />}
           />
-          <MetricCard
-            icon={<Clock size={20} />}
-            value={avgDurationLabel}
-            label="Avg Duration"
-            color="var(--color-warning)"
+          <StatTile
+            label="Avg duration"
+            value={hasAvgDuration ? Math.round(avgDuration) : '—'}
+            unit={hasAvgDuration ? 's' : undefined}
+            icon={<Timer size={14} strokeWidth={2} />}
           />
-          <MetricCard
-            icon={<XCircle size={20} />}
+          <StatTile
+            label="Top app type"
             value={topType}
-            label="Top App Type"
-            color="var(--color-accent-secondary)"
+            icon={<Boxes size={14} strokeWidth={2} />}
           />
-        </div>
+        </motion.div>
       )}
 
-      {/* Filters + List */}
-      <div className="dashboard-body">
-        <div className="dashboard-controls">
-          <div className="tab-group" role="tablist">
-            {STATUS_FILTERS.map(f => (
-              <button
-                key={f.value}
-                role="tab"
-                aria-selected={filter === f.value}
-                className={`tab${filter === f.value ? ' active' : ''}`}
-                onClick={() => setFilter(f.value)}
-              >
-                {f.label}
-              </button>
-            ))}
+      <section className="dash-body">
+        <div className="dash-controls">
+          <div className="dash-filters" role="group" aria-label="Filter builds by status">
+            {STATUS_FILTERS.map(f => {
+              const active = filter === f.value;
+              return (
+                <button
+                  key={f.value}
+                  type="button"
+                  className="chip chip--shared"
+                  aria-pressed={active}
+                  onClick={() => setFilter(f.value)}
+                >
+                  {/* One element shared across seven buttons. Framer keeps a
+                      single DOM node and animates it between the two positions
+                      whenever the `layoutId` moves, which is why the tint
+                      travels instead of cross-fading. It is `aria-hidden` and
+                      sits behind the label — the pressed state is still carried
+                      by `aria-pressed`, which is what assistive tech reads. */}
+                  {active && (
+                    <motion.span
+                      layoutId={CHIP_ID}
+                      className="chip__active"
+                      transition={layoutSpring}
+                      aria-hidden
+                    />
+                  )}
+                  <span className="chip__label">{f.label}</span>
+                </button>
+              );
+            })}
           </div>
-          {data && (
-            <span className="dashboard-count">
-              {data.projects.length} project{data.projects.length !== 1 ? 's' : ''}
-            </span>
+          {/* Keyed on the number so a changed count animates in place. Without
+              the key React reuses the node and the digits swap silently — the
+              one piece of feedback confirming the filter actually did something
+              when the list below is already empty. */}
+          {data && !isError && (
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.span
+                key={total}
+                className="dash-count figure figure--sm"
+                variants={popIn}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                {total} build{total !== 1 ? 's' : ''}
+              </motion.span>
+            </AnimatePresence>
           )}
         </div>
 
-        <div className="build-list">
+        <div className="dash-list">
+          {/*
+            One AnimatePresence over all four mutually exclusive list states —
+            loading, error, empty, results. Separate ones would let the old
+            state's exit and the new state's enter overlap and stack two full
+            panels on top of each other; `mode="wait"` across a single presence
+            makes the swap sequential and keeps the column one panel tall.
+          */}
+          <AnimatePresence mode="wait" initial={false}>
           {isLoading && (
-            <div className="skeleton-stack">
+            <motion.div
+              key="loading"
+              className="dash-skeletons"
+              aria-busy
+              aria-label="Loading builds"
+              variants={appStagger(0.05)}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+            >
               {Array.from({ length: 4 }, (_, i) => (
-                <div key={i} className="skeleton" style={{ height: 88, animationDelay: `${i * 70}ms` }} />
+                <motion.div key={i} className="panel dash-skeleton" variants={appItem} />
               ))}
-            </div>
+            </motion.div>
           )}
 
+          {/* `role="alert"` because this appears asynchronously, after a fetch
+              fails. Without it a screen-reader user is left on a list that
+              simply never populates, with nothing announced. */}
           {isError && (
-            <div className="empty-state card">
-              <XCircle size={36} style={{ color: 'var(--color-error)' }} />
-              <h3>Backend Unreachable</h3>
-              <p style={{ fontSize: 'var(--text-sm)' }}>
-                Make sure the FastAPI server is running on port 8000.
+            <motion.div
+              key="error"
+              className="panel panel--pad-lg empty"
+              role="alert"
+              variants={appItem}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+            >
+              <PlugZap size={22} strokeWidth={1.5} className="empty__icon" />
+              <h3 className="empty__title">Backend unreachable</h3>
+              <p className="empty__body">
+                Nothing is answering on the API. Start the server with{' '}
+                <code className="dash-code">python start_server.py</code>{' '}
+                and try again.
               </p>
-              <button className="btn btn-primary" onClick={() => refetch()}>Retry</button>
-            </div>
+              <button className="btn btn-secondary" onClick={() => refetch()}>
+                Retry
+              </button>
+            </motion.div>
           )}
 
           {!isLoading && !isError && data?.projects.length === 0 && (
-            <div className="empty-state card">
-              <PlusCircle size={36} style={{ opacity: 0.3 }} />
-              <h3>No builds yet</h3>
-              <p style={{ fontSize: 'var(--text-sm)' }}>
-                Start your first build to see results here.
+            <motion.div
+              key="empty"
+              className="panel panel--pad-lg empty"
+              variants={appItem}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+            >
+              <Boxes size={22} strokeWidth={1.5} className="empty__icon" />
+              <h3 className="empty__title">
+                {filter === 'all' ? 'No builds yet' : 'Nothing in this state'}
+              </h3>
+              <p className="empty__body">
+                {filter === 'all'
+                  ? 'Describe an app in plain English and the pipeline takes it from there.'
+                  : 'No build currently matches this filter. Try another, or view all builds.'}
               </p>
-              <Link to="/build" className="btn btn-primary">Start Building</Link>
-            </div>
+              {filter === 'all'
+                ? <Link to="/build" className="btn btn-primary">Start a build</Link>
+                : (
+                  <button className="btn btn-secondary" onClick={() => setFilter('all')}>
+                    View all builds
+                  </button>
+                )}
+            </motion.div>
           )}
 
-          {data?.projects.map(project => (
-            <BuildCard key={project.build_id} project={project} />
-          ))}
+          {/* Keyed on the filter, not on the data: a poll returning the same
+              rows must not restart the cascade, but switching filters is a
+              genuinely different list and should read as one. Rows themselves
+              carry `layout`, so any row present in both lists slides between
+              its old and new position rather than being replaced. */}
+          {!isLoading && !isError && !!data?.projects.length && (
+            <motion.div
+              key={`list-${filter}`}
+              className="dash-results"
+              variants={appStagger(0.028)}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+            >
+              {data.projects.map(project => (
+                <BuildCard key={project.build_id} project={project} />
+              ))}
+            </motion.div>
+          )}
+          </AnimatePresence>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

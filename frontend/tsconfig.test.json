@@ -1,0 +1,44 @@
+{
+  /**
+   * Tests are typechecked, but not by the app project.
+   *
+   * They need Node's built-ins (`node:fs` in the CSS-class check), Vitest's
+   * globals and jest-dom's matchers — none of which belong in the app's type
+   * environment, where they would let production code reference `process` or
+   * `expect` by accident. Split out, `tsc -b` still covers everything.
+   */
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    /* `vite/client` too: the tests import the app's components, which
+       side-effect-import their own .css and read `import.meta.env`. */
+    "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "skipLibCheck": true,
+    "strict": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] },
+
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/test/**/*",
+    "e2e/**/*",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
+}
