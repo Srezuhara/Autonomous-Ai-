@@ -1,22 +1,68 @@
 # Session Progress — start here
 
-**Last session: 2026-08-25 (landing restructure).** `FRONTEND_LANDING_PLAN.md` is
-now **fully executed** — all three phases. See §2.7 below for what shipped.
-The change is in the working tree and **not yet committed**; the commit before it
-is `48d3ae7` "Restructured frontend".
+**Last session: 2026-08-26 (Phase 23 — Groq/API fixes, live validation).**
+The work is **committed** on `main`, as eleven commits named `groq api fixes…`,
+newest `f67bf9a`.
 
-> The motion pass and everything in `FRONTEND_COMPLETION_PLAN.md` (phases 1-5)
-> remains executed, verified, committed and pushed as `48d3ae7`.
+> **Backend/pipeline work now has its own state doc: `PHASE23_HANDOFF.md`.**
+> Read that first if you are touching `llm_client.py`, the agents, the pipeline
+> or the platform API. This file remains the frontend and general entry point.
+
+**Where things stand in one paragraph.** Phase 23's six build-destroying fixes
+are committed and one of them (the entry-point fix) is confirmed end to end on a
+live build. The token ledger now seeds itself from build history, so it no longer
+under-reports after a restart. Two defects that only a real browser could expose
+were found and fixed: the ZIP download did nothing when clicked, and the live E2E
+suite could never run at all. The last change — sending request-time failures to
+the repair passes — is **fully tested offline but has never run on a live
+build**; that is the first thing to verify when Groq quota returns.
+
+**Earlier frontend work is unchanged and committed:** the landing restructure
+(`FRONTEND_LANDING_PLAN.md`, fully executed — see §2.7/§2.8) and everything in
+`FRONTEND_COMPLETION_PLAN.md`. Do not re-run either plan.
 
 > **The `.gitignore` blocker described in the old §3.0 is FIXED.** The unanchored
 > `lib/` rule was anchored to `/lib/`, the UTF-16 corruption on the last line was
 > repaired, and `frontend/src/lib/` is now tracked and on the remote. Nothing to do.
+
+---
+
+## 0. Next session — pick up here
+
+**1. Re-run matrix row 1 and check the repair path (needs quota).**
+The runtime-repair work is untested live. Row 1's prompt is in
+`run_live_matrix.py`; the thing to watch for in the server log is a repair pass
+that now *does* something:
+
+```bash
+venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+venv/Scripts/python.exe run_live_matrix.py --rows 1
+grep -E "Repairing a request-time failure|Runtime repair|Every endpoint now responds" server.log
+```
+
+Success is `🔥 Runtime smoke test: N/N routes` — every route, not 2 of 5.
+
+**2. Then matrix rows 2-4** (`--rows 2,3,4`). Rows 2 and 4 have never run and
+hold all the remaining unknown. Budget ~83K tokens per build against 200K per
+model per day; the driver refuses to start a row it cannot finish.
+
+**3. Then Phase B** (`PHASE23_PLAN.md`), starting with B1 — SQLAlchemy +
+Alembic — because auth needs migrations to exist first. Fresh-session sized.
+
+Phase C stays blocked until the matrix is complete: its premise is that build
+quality is limited by missing precedent, and every failure diagnosed so far has
+been a mechanical defect instead.
+
+---
 
 Read this file first. Then:
 
 | File | Role |
 |---|---|
 | `SESSION_PROGRESS.md` (this) | Current state, what to do next, how to verify |
+| `PHASE23_HANDOFF.md` | The **backend/pipeline state** doc: what is fixed, what is proven live, what is still open, and what will bite you |
+| `PHASE23_PLAN.md` | The backend **plan**. Phase A is done bar the matrix; Phases B and C are untouched |
+| `run_live_matrix.py` | The four-build live matrix driver. `--dry-run` prints the plan and the quota without spending a token |
 | `FRONTEND_REDESIGN_HANDOFF.md` | The **state** doc: locked design decisions (§3), chart palette (§4), measured results (§8), gaps (§9), skill conflicts (§10), traps (§11) |
 | `FRONTEND_COMPLETION_PLAN.md` | The **plan**, fully executed. Kept as the record of what was decided and why. Do not re-run it. |
 | `setup.md` | Setup and commands, rewritten and verified command-by-command |

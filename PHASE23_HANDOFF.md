@@ -11,7 +11,7 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ## 0. What changed in the second session
 
-Everything is **committed** on `main`, as seven commits named `groq api fixes…`.
+Everything is **committed** on `main`, as eleven commits named `groq api fixes…` (nine of substance, two documentation), newest `f67bf9a`.
 
 | Commit | What it does |
 |---|---|
@@ -38,6 +38,19 @@ Everything is **committed** on `main`, as seven commits named `groq api fixes…
    process"* before starting a build.
 
 Both are fixed, with tests.
+
+---
+
+## 0.1 Where to resume
+
+| # | What | Needs quota |
+|---|---|---|
+| 1 | Re-run matrix row 1 — the runtime-repair path has never run live (§4.1) | yes |
+| 2 | Matrix rows 2-4: `run_live_matrix.py --rows 2,3,4` (§3.2) | yes |
+| 3 | A1 assertion 2 — a clean build reaching `done` with no `SESSION_CONTEXT.md` (§3.3) | falls out of 1-2 |
+| 4 | Phase B, starting with B1 (SQLAlchemy + Alembic) | no |
+
+Phase C stays blocked until the matrix is complete — see §3.6.
 
 ---
 
