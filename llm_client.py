@@ -45,6 +45,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -63,6 +64,36 @@ GROQ_CONTEXT_MAX_CHARS = int(os.getenv("GROQ_CONTEXT_MAX_CHARS", "2500"))
 GROQ_FREE_TIER_CONSERVE = os.getenv("GROQ_FREE_TIER_CONSERVE", "true").lower() in {
     "1", "true", "yes", "on"
 }
+# Phase 23 (A3): test-only daily-quota simulation.
+#
+# Burning a real key to exercise the Phase 21 quota-handoff path costs a whole
+# day of free-tier quota and is not repeatable. When this is > 0, `_call_groq`
+# raises `_make_quota_error(model, "simulated")` after that many successful
+# calls -- the same helper every real raise site uses, so the simulated error is
+# byte-identical in type and payload to a genuine one. Default 0 = off.
+GROQ_SIMULATE_DAILY_QUOTA_AFTER_CALLS = int(
+    os.getenv("GROQ_SIMULATE_DAILY_QUOTA_AFTER_CALLS", "0")
+)
+_simulated_quota_lock = threading.Lock()
+_simulated_call_count = 0
+
+# Phase 23 (A5): recover from truncated completions.
+#
+# The gpt-oss models return `finish_reason="length"` when they run out of output
+# budget mid-token, and the comment block above `_REASONING_MODEL_MARKERS`
+# already spells out why that is the worst possible outcome: the result is a
+# syntax error, and the Debugger burns all of its repair attempts on it because
+# every repair truncates the same way. Nothing ever read `finish_reason`, so a
+# half-written file was returned to the caller as if it were a complete answer.
+#
+# A truncated call has already been paid for, so retrying with a bigger budget
+# costs one extra call to salvage work that was otherwise guaranteed to be
+# thrown away — and it removes the 3 failed repair calls that followed.
+GROQ_TRUNCATION_MAX_RETRIES = int(os.getenv("GROQ_TRUNCATION_MAX_RETRIES", "2"))
+GROQ_TRUNCATION_BUDGET_MULTIPLIER = float(
+    os.getenv("GROQ_TRUNCATION_BUDGET_MULTIPLIER", "2.0")
+)
+
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip().lower()
 if LLM_PROVIDER not in {"groq", "ollama", "both"}:
     LLM_PROVIDER = "both"
@@ -181,17 +212,40 @@ if _legacy:
     _FAST_MODEL  = _legacy
     logger.info(f"ℹ️  GROQ_MODEL override active — both models set to: {_legacy}")
 
-_DEFAULT_HEAVY_AGENTS = "architect"
+# Phase 23: the code-producing agents run on the heavy model.
+#
+# This used to be "architect" alone, on the reasoning that heavy-model quota was
+# the scarce one and should be spent only where it mattered most. That was true
+# of the decommissioned llama pair (a small 70b allowance beside a large 8b one).
+# It is **false** for the gpt-oss models that replaced them: each carries its own
+# 200,000 tokens-per-day budget, so "keep everything on the fast model" did not
+# conserve anything — it drained one 200K bucket daily while the other sat
+# almost untouched. Measured live: 40 of a build's 41 calls went to the fast
+# model, and the day died after two builds.
+#
+# Splitting the load is also the better choice on quality and on speed:
+#   - gpt-oss-120b is the stronger model, and it is the one writing the code.
+#   - It accepts `reasoning_effort=low`; gpt-oss-20b does not, and therefore
+#     spends an uncontrolled private chain of thought on every call. See the
+#     measurements above `_REASONING_MODEL_MARKERS`: 120b produced 3541 chars in
+#     849 tokens where 20b needed a 1600-token floor for the same prompt.
+#   - TPM (8000) is per-model too, so two buckets means roughly half the waiting.
+_DEFAULT_HEAVY_AGENTS = (
+    "architect,backend_developer,frontend_generator,frontend_debugger,documenter"
+)
 
 
 def _load_heavy_agent_names() -> set[str]:
     """
-    Free-tier 70b quota is small enough that using it for every generated file
-    can burn all keys before one project finishes. Keep the default practical:
-    architecture gets 70b, code-generation agents use the larger 8b quota.
+    Which agents run on `GROQ_MODEL_HEAVY` rather than `GROQ_MODEL_FAST`.
 
-    Override with GROQ_HEAVY_AGENTS when you have paid quota, e.g.
-    GROQ_HEAVY_AGENTS=architect,backend_developer,frontend_generator,frontend_debugger
+    The default spreads the load across both models' independent daily budgets
+    (see the note above). The small, structured, high-frequency agents —
+    intent_analyzer, planner, reviewer, tester, debugger — stay on the fast
+    model, which keeps the split roughly even in tokens.
+
+    Override with GROQ_HEAVY_AGENTS to rebalance, e.g. to put everything back on
+    one model:  GROQ_HEAVY_AGENTS=architect
     """
     raw = os.getenv("GROQ_HEAVY_AGENTS", _DEFAULT_HEAVY_AGENTS)
     names: set[str] = set()
@@ -230,17 +284,36 @@ AGENT_TOKEN_BUDGETS: dict[str, int] = {
 }
 
 if GROQ_FREE_TIER_CONSERVE:
+    # Phase 23: these are CAPS, not spend — `_apply_reasoning_budget` says so,
+    # and a cap only costs tokens if the model actually reaches it. Setting them
+    # too low is therefore not a saving; it is how a file gets truncated, and
+    # since Fix 3 every truncation costs a whole extra call to recover from.
+    #
+    # Two things changed the right values here:
+    #
+    #  1. On the FAST model these numbers were largely inert anyway. gpt-oss-20b
+    #     cannot be told to reason less, so `_apply_reasoning_budget` raises
+    #     anything below `_REASONING_MIN_TOKENS` (1600) back up to it. A cap of
+    #     850 for the debugger was never actually 850. They are written at the
+    #     floor now so the table says what really happens.
+    #
+    #  2. The code-producing agents moved to the HEAVY model, where no floor
+    #     applies and these caps bite for the first time. 950 is well under what
+    #     a routes.py needs — that is precisely the budget that truncated live —
+    #     so they are raised to a figure that lands in one call.
     AGENT_TOKEN_BUDGETS.update({
-        "reviewer":            450,
-        "tester":              850,
-        "debugger":            850,
-        "documenter":         1000,
-        "backenddeveloper":    950,
-        "backend_developer":   950,
-        "frontendgenerator":   950,
-        "frontend_generator":  950,
-        "frontenddebugger":   1000,
-        "frontend_debugger":  1000,
+        # Fast model: at or above the reasoning floor, so these are honest.
+        "reviewer":            600,
+        "tester":             1600,
+        "debugger":           1600,
+        # Heavy model: real caps, sized so a full file finishes in one call.
+        "documenter":         1200,
+        "backenddeveloper":   2000,
+        "backend_developer":  2000,
+        "frontendgenerator":  2000,
+        "frontend_generator": 2000,
+        "frontenddebugger":   2000,
+        "frontend_debugger":  2000,
     })
 
 _DEFAULT_MAX_TOKENS = 1024
@@ -387,7 +460,13 @@ def set_current_build_id(build_id: str):
             }
 
 
-def _add_tokens(prompt_tokens: int, completion_tokens: int):
+def _add_tokens(prompt_tokens: int, completion_tokens: int, model: str = ""):
+    # The daily ledger is recorded first and unconditionally: it tracks the
+    # organisation's quota, which is spent whether or not a build_id happens to
+    # be set. Tying it to the per-build store is how CLI runs lost their token
+    # count entirely (Phase 23, A1 finding 1).
+    _ledger_record(model, int(prompt_tokens) + int(completion_tokens))
+
     bid = getattr(_current_build_id, "value", None)
     if not bid:
         return
@@ -407,6 +486,126 @@ def get_and_reset_token_usage(build_id: str) -> dict:
             build_id,
             {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         )
+
+
+# ── Per-model daily token ledger (Phase 23) ───────────────────────────────────
+#
+# Groq enforces a tokens-per-day limit *per model* — the 429 names it:
+#
+#   rate limit reached for model `openai/gpt-oss-20b` … on tokens per day (tpd):
+#   limit 200000, used 199306, requested 3187
+#
+# but it reports that number **nowhere else**. No response header carries a
+# daily figure, `/health` cannot show one, and `get_quota_snapshot()` had no
+# idea. The first indication that 190K of 200K was gone was the failure itself,
+# which is why a four-build matrix run died after one build.
+#
+# So we keep the count ourselves. The window is a rolling 24 hours rather than a
+# calendar day, because that is what Groq appears to enforce: the wall arrived
+# with `please try again in 17m56.976s`, not "at midnight UTC".
+GROQ_DAILY_TOKEN_LIMIT = int(os.getenv("GROQ_DAILY_TOKEN_LIMIT", "200000"))
+_LEDGER_WINDOW_SECONDS = 24 * 3600
+_LEDGER_PATH = Path(os.getenv("OUTPUT_DIR", "generated_projects")) / "token_ledger.json"
+
+# (timestamp, model, total_tokens) — pruned to the rolling window on every touch.
+_ledger: list[list] = []
+_ledger_lock = threading.Lock()
+
+
+def _ledger_prune(now: Optional[float] = None) -> None:
+    """Drop entries that have aged out of the window. Caller holds the lock."""
+    global _ledger
+    cutoff = (now if now is not None else time.time()) - _LEDGER_WINDOW_SECONDS
+    _ledger = [e for e in _ledger if e[0] >= cutoff]
+
+
+def _ledger_load() -> None:
+    """Restore the ledger across restarts — this workflow restarts a lot."""
+    global _ledger
+    try:
+        import json
+        if _LEDGER_PATH.is_file():
+            raw = json.loads(_LEDGER_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                _ledger = [e for e in raw if isinstance(e, list) and len(e) == 3]
+                _ledger_prune()
+    except Exception as e:
+        # A corrupt ledger must never stop the app from making calls; the worst
+        # case is that we under-count and hit the wall as blindly as before.
+        logger.warning(f"Token ledger could not be read ({e}); starting empty.")
+        _ledger = []
+
+
+def _ledger_save() -> None:
+    """Caller holds the lock."""
+    try:
+        import json
+        _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LEDGER_PATH.write_text(json.dumps(_ledger), encoding="utf-8")
+    except Exception as e:
+        logger.debug(f"Token ledger could not be written: {e}")
+
+
+def _ledger_record(model: str, total_tokens: int) -> None:
+    if not model or total_tokens <= 0:
+        return
+    with _ledger_lock:
+        now = time.time()
+        _ledger.append([now, model, int(total_tokens)])
+        _ledger_prune(now)
+        _ledger_save()
+
+
+def get_daily_usage() -> dict:
+    """
+    Tokens spent per model inside the rolling 24h window, with what is left.
+
+    This is the number there was previously no way to obtain. It is an estimate
+    of Groq's own counter, not a reading of it: it counts only what this process
+    has spent, so anything else using the same organisation's keys is invisible
+    to it.
+    """
+    with _ledger_lock:
+        _ledger_prune()
+        entries = list(_ledger)
+
+    per_model: dict[str, dict] = {}
+    for ts, model, tokens in entries:
+        rec = per_model.setdefault(
+            model, {"tokens_used": 0, "calls": 0, "oldest_entry_epoch": ts}
+        )
+        rec["tokens_used"] += tokens
+        rec["calls"] += 1
+        rec["oldest_entry_epoch"] = min(rec["oldest_entry_epoch"], ts)
+
+    for model, rec in per_model.items():
+        remaining = max(0, GROQ_DAILY_TOKEN_LIMIT - rec["tokens_used"])
+        rec["limit"] = GROQ_DAILY_TOKEN_LIMIT
+        rec["tokens_remaining"] = remaining
+        rec["percent_used"] = round(
+            100.0 * rec["tokens_used"] / GROQ_DAILY_TOKEN_LIMIT, 1
+        ) if GROQ_DAILY_TOKEN_LIMIT else 0.0
+        # When the oldest entry ages out, that much budget comes back.
+        rec["window_resets_in_seconds"] = max(
+            0, int(rec.pop("oldest_entry_epoch") + _LEDGER_WINDOW_SECONDS - time.time())
+        )
+
+    return {
+        "window_hours": _LEDGER_WINDOW_SECONDS // 3600,
+        "limit_per_model": GROQ_DAILY_TOKEN_LIMIT,
+        "models": per_model,
+    }
+
+
+def reset_daily_usage() -> None:
+    """Clear the ledger (tests, and the admin reset path)."""
+    global _ledger
+    with _ledger_lock:
+        _ledger = []
+        _ledger_save()
+
+
+_ledger_load()
 
 
 # ── Key helpers (v3.6.0: model-scoped) ────────────────────────────────────────
@@ -649,6 +848,58 @@ _DEFAULT_RESET_HINT = (
 )
 
 
+def _simulated_quota_limit() -> int:
+    """
+    Call count after which the simulated daily quota trips, or 0 when off.
+
+    The env var is re-read on every call rather than frozen at import time so a
+    test can flip the switch in-process without reloading the module.
+    """
+    try:
+        return int(
+            os.getenv(
+                "GROQ_SIMULATE_DAILY_QUOTA_AFTER_CALLS",
+                str(GROQ_SIMULATE_DAILY_QUOTA_AFTER_CALLS),
+            )
+        )
+    except ValueError:
+        return 0
+
+
+def reset_simulated_quota() -> None:
+    """Clear the simulated-call counter (tests, and between builds)."""
+    global _simulated_call_count
+    with _simulated_quota_lock:
+        _simulated_call_count = 0
+
+
+def _check_simulated_quota(model: str) -> None:
+    """Raise a genuine GroqDailyQuotaError once the simulated budget is spent."""
+    limit = _simulated_quota_limit()
+    if limit <= 0:
+        return
+    with _simulated_quota_lock:
+        spent = _simulated_call_count
+    if spent < limit:
+        return
+    logger.warning(
+        f"GROQ_SIMULATE_DAILY_QUOTA_AFTER_CALLS={limit} reached "
+        f"({spent} successful calls); raising a simulated daily-quota error "
+        f"for [{model}]."
+    )
+    _mark_model_daily_limited(model, "simulated")
+    raise _make_quota_error(model, "simulated")
+
+
+def _record_simulated_call() -> None:
+    """Count one successful Groq call towards the simulated budget."""
+    global _simulated_call_count
+    if _simulated_quota_limit() <= 0:
+        return
+    with _simulated_quota_lock:
+        _simulated_call_count += 1
+
+
 def _make_quota_error(model: str, reason: str = "") -> GroqDailyQuotaError:
     """
     Build a fully-populated GroqDailyQuotaError for `model`.
@@ -730,6 +981,11 @@ def get_quota_snapshot() -> dict:
         "all_exhausted":     is_quota_exhausted(),
         "any_daily_limited": rates["any_daily_limited"],
         "models":            rates["models"],
+        # Phase 23: how much of the per-model daily budget this process has
+        # spent. Groq reports the daily limit only in the 429 that enforces it,
+        # so a handoff document that says "quota exhausted" could not previously
+        # say how much had been used or when any of it comes back.
+        "daily_usage":       get_daily_usage(),
         "reset_hint":        _DEFAULT_RESET_HINT,
     }
 
@@ -994,6 +1250,7 @@ def _call_groq_legacy_unused(prompt: str, system: str, max_tokens: int, model: s
                     _add_tokens(
                         usage.get("prompt_tokens", 0),
                         usage.get("completion_tokens", 0),
+                        model,
                     )
                 return data["choices"][0]["message"]["content"]
 
@@ -1061,20 +1318,46 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
     model_lock = _get_model_lock(model)
     retry_key: Optional[str] = None
 
+    # Phase 23: the budget the *caller* asked for, kept separate from the
+    # per-attempt figure. `_fit_output_budget_to_model_limit` used to assign
+    # straight back into `max_tokens`, so every retry re-shrank an already
+    # shrunken number and the budget ratcheted downwards across a single call.
+    requested_max_tokens = max_tokens
+    truncation_retries = 0
+    best_content = ""
+
     with model_lock:
         while True:
             key = retry_key or _get_next_groq_key(model)
             retry_key = None
             if key is None:
+                # Phase 23: the old message conflated two very different causes,
+                # and the exception type followed the message rather than the
+                # cause. When the reason is the daily quota, this must be a
+                # GroqDailyQuotaError — otherwise a build submitted *after* the
+                # quota is gone dies as a bare RuntimeError, the Phase 21
+                # interception never sees it, and the user gets status `failed`
+                # with a NULL reason, no SESSION_CONTEXT.md and a 400 on the
+                # download. A build that hits the same wall mid-flight gets the
+                # full graceful handoff. Same condition, same cause, only the
+                # timing differs — so it gets the same error.
+                with _model_state_lock:
+                    state = _model_rate_states.get(model)
+                    daily_limited = bool(state and state.daily_limited)
+                    reason = (state.last_rate_limit_reason if state else "") or "daily quota"
+                if daily_limited:
+                    raise _make_quota_error(model, reason)
                 raise RuntimeError(
                     f"No usable Groq keys remain for model [{model}]. "
-                    "Daily quota or key authentication failures are blocking this model."
+                    "Every key failed authentication (401/403) for this model."
                 )
             if key in tried_keys:
                 raise RuntimeError(
                     f"All {len(tried_keys)} usable Groq keys tried for [{model}] without success."
                 )
             tried_keys.add(key)
+
+            _check_simulated_quota(model)
 
             messages = []
             if system:
@@ -1083,7 +1366,7 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
 
             try:
                 max_tokens = _fit_output_budget_to_model_limit(
-                    model, prompt, system, max_tokens
+                    model, prompt, system, requested_max_tokens
                 )
                 estimated_tokens = _estimate_tokens(prompt, system, max_tokens)
                 _wait_for_model_capacity(model, estimated_tokens)
@@ -1130,14 +1413,53 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                 resp.raise_for_status()
 
                 _clear_per_minute_wait(key)
+                _record_simulated_call()
                 data = resp.json()
                 usage = data.get("usage", {})
                 if usage:
                     _add_tokens(
                         usage.get("prompt_tokens", 0),
                         usage.get("completion_tokens", 0),
+                        model,
                     )
-                return data["choices"][0]["message"]["content"]
+
+                choice  = data["choices"][0]
+                content = choice["message"]["content"] or ""
+                if len(content) > len(best_content):
+                    best_content = content
+
+                # Phase 23: the model ran out of room mid-answer. Returning this
+                # hands the caller a syntax error dressed up as a file.
+                if choice.get("finish_reason") == "length":
+                    if truncation_retries < GROQ_TRUNCATION_MAX_RETRIES:
+                        truncation_retries += 1
+                        bumped = max(
+                            requested_max_tokens + 1,
+                            int(requested_max_tokens * GROQ_TRUNCATION_BUDGET_MULTIPLIER),
+                        )
+                        logger.warning(
+                            f"✂️  Groq [{model}] hit its output budget "
+                            f"(finish_reason=length, {len(content)} chars). "
+                            f"Retrying with max_tokens {requested_max_tokens} → {bumped} "
+                            f"(attempt {truncation_retries}/{GROQ_TRUNCATION_MAX_RETRIES}) "
+                            "rather than returning truncated code."
+                        )
+                        requested_max_tokens = bumped
+                        retry_key = key
+                        tried_keys.discard(key)
+                        continue
+
+                    # Out of retries. The longest answer seen is the least-bad
+                    # option, and saying so plainly beats a silent syntax error.
+                    logger.error(
+                        f"✂️  Groq [{model}] still truncating after "
+                        f"{GROQ_TRUNCATION_MAX_RETRIES} budget increases "
+                        f"(max_tokens={requested_max_tokens}). Returning the longest "
+                        "response received; expect a syntax error downstream."
+                    )
+                    return best_content
+
+                return content
 
             except GroqRateLimitError:
                 raise
@@ -1349,6 +1671,32 @@ def generate_text(
                     f"Heavy model [{_HEAVY_MODEL}] quota-exhausted; fast-model "
                     f"retry failed with: {fast_exc}"
                 ) from None
+        # Phase 23: the mirror of the branch above, and now the one that fires.
+        #
+        # Each model has its OWN 200K tokens-per-day allowance. Under the split
+        # routing the fast model carries the high-frequency agents and is the
+        # first to run out, while the heavy model's separate budget may be
+        # largely unspent — and without this the build would die anyway, with
+        # half the day's tokens still on the table. Small structured work moving
+        # to the bigger model costs nothing in quality.
+        if model == _FAST_MODEL and _HEAVY_MODEL != _FAST_MODEL and not is_quota_exhausted(_HEAVY_MODEL):
+            logger.warning(
+                f"Fast model [{_FAST_MODEL}] is quota-exhausted for "
+                f"[{agent_name or 'generic'}]; retrying on heavy model "
+                f"[{_HEAVY_MODEL}], which has its own daily budget."
+            )
+            try:
+                return _call_groq(prompt, system, max_tokens, _HEAVY_MODEL)
+            except GroqDailyQuotaError as heavy_quota_exc:
+                logger.error(f"Heavy model also quota-exhausted: {heavy_quota_exc}")
+                raise
+            except Exception as heavy_exc:
+                logger.warning(f"Heavy-model retry after fast quota failure: {heavy_exc}")
+                raise RuntimeError(
+                    f"Fast model [{_FAST_MODEL}] quota-exhausted; heavy-model "
+                    f"retry failed with: {heavy_exc}"
+                ) from None
+
         logger.error(f"Groq daily quota exhausted for [{model}]: {quota_exc}")
         raise
 

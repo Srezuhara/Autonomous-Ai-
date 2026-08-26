@@ -220,6 +220,25 @@ def print_summary(result, elapsed: float):
 
     summary.add_row("Time:", f"{elapsed:.1f}s")
 
+    # Phase 23: the CLI tracked token usage all along (the pipeline calls
+    # `set_current_build_id`) and then threw it away at exit, because only the
+    # API runner ever read it back. Groq free-tier quota is the binding
+    # constraint on how many builds a day can hold, so the number a CLI run
+    # cost is exactly the number needed to pace the next one — it should not
+    # require a database round-trip to find out.
+    try:
+        import llm_client
+        usage = llm_client.get_and_reset_token_usage(getattr(result, "build_id", "") or "")
+        if usage.get("total_tokens"):
+            summary.add_row(
+                "Tokens:",
+                f"{usage['total_tokens']:,} "
+                f"[dim]({usage['prompt_tokens']:,} in / "
+                f"{usage['completion_tokens']:,} out)[/dim]",
+            )
+    except Exception:
+        pass
+
     console.print(Panel(
         summary,
         title=f"[bold {status_color}]{status_text}[/bold {status_color}]",

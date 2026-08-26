@@ -101,7 +101,7 @@ app.include_router(ws_router)
 
 @app.get("/", tags=["info"])
 async def root():
-    from llm_client import get_key_status, get_rate_limit_status
+    from llm_client import get_key_status, get_rate_limit_status, get_daily_usage
     pool = job_runner.get_pool_status()
     ks   = get_key_status()
     rl   = get_rate_limit_status()
@@ -120,6 +120,7 @@ async def root():
             "exhausted_8b":        ks["exhausted_8b"],
             "fully_exhausted":     ks["fully_exhausted"],
             "rate_limits":         rl,
+            "daily_usage":         get_daily_usage(),
         },
         "endpoints": {
             "docs":       "/docs",
@@ -136,7 +137,7 @@ async def root():
 
 @app.get("/health", tags=["info"])
 async def health():
-    from llm_client import get_key_status, get_rate_limit_status
+    from llm_client import get_key_status, get_rate_limit_status, get_daily_usage
     pool = job_runner.get_pool_status()
     ks   = get_key_status()
     rl   = get_rate_limit_status()
@@ -169,6 +170,10 @@ async def health():
             "exhausted_8b":        ks["exhausted_8b"],
             "fully_exhausted":     ks["fully_exhausted"],
             "rate_limits":         rl,
+            # Phase 23: Groq reports the per-model tokens-per-day limit only in
+            # the 429 that enforces it. This is the locally-kept count, so the
+            # budget can be seen before it runs out rather than after.
+            "daily_usage":         get_daily_usage(),
             "keys": ks["keys"],   # [{suffix: "...abc123", status: "available"}, ...]
         },
         "features": {

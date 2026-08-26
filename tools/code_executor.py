@@ -171,19 +171,48 @@ def run_python(file_path: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecutionResu
     else:
         logger.info(f"🐍 Running Python: {full_path} (cwd: {run_dir.name})")
 
-    # Use compile + import check instead of running as script.
-    # This validates syntax AND all imports without executing server code.
-    check_code = (
-        f"import sys, os; "
-        f"sys.path.insert(0, r'{run_dir}'); "
-        f"sys.path.insert(0, r'{run_dir.parent}'); "
-        f"import py_compile; "
-        f"py_compile.compile(r'{full_path}', doraise=True); "
-        f"import importlib.util; "
-        f"spec = importlib.util.spec_from_file_location('{module_name}', r'{full_path}'); "
-        f"mod = importlib.util.module_from_spec(spec); "
-        f"spec.loader.exec_module(mod)"
-    )
+    # ── Phase 23: import the file the way Python actually would ───────────────
+    # `spec_from_file_location(<stem>, …)` gives the module no package context,
+    # so a perfectly valid `from .models import X` raises "attempted relative
+    # import with no known parent package". The file is correct; the check was
+    # wrong. The Debugger believed the check, and spent LLM calls rewriting
+    # working package code until it produced something the broken check would
+    # accept — burning quota to make the output worse.
+    #
+    # So: if the file sits inside a package (an unbroken chain of __init__.py
+    # above it), import it by its real dotted name with the package root on
+    # sys.path. Relative imports then resolve exactly as they do at runtime.
+    package_parts: list[str] = []
+    search_root = full_path.parent
+    while (search_root / "__init__.py").exists():
+        package_parts.insert(0, search_root.name)
+        search_root = search_root.parent
+
+    if package_parts:
+        dotted = ".".join(package_parts + [module_name])
+        check_code = (
+            f"import sys, os; "
+            f"sys.path.insert(0, r'{run_dir}'); "
+            f"sys.path.insert(0, r'{run_dir.parent}'); "
+            f"sys.path.insert(0, r'{search_root}'); "
+            f"import py_compile; "
+            f"py_compile.compile(r'{full_path}', doraise=True); "
+            f"import importlib; "
+            f"importlib.import_module('{dotted}')"
+        )
+    else:
+        # Not in a package — the original path, unchanged.
+        check_code = (
+            f"import sys, os; "
+            f"sys.path.insert(0, r'{run_dir}'); "
+            f"sys.path.insert(0, r'{run_dir.parent}'); "
+            f"import py_compile; "
+            f"py_compile.compile(r'{full_path}', doraise=True); "
+            f"import importlib.util; "
+            f"spec = importlib.util.spec_from_file_location('{module_name}', r'{full_path}'); "
+            f"mod = importlib.util.module_from_spec(spec); "
+            f"spec.loader.exec_module(mod)"
+        )
 
     return run_command(
         f'"{sys.executable}" -c "{check_code}"',

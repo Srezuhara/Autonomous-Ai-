@@ -90,12 +90,21 @@ MAX_BACKEND_PY_FILES = {
     "complex": 6,
 }
 
+# Lower number = kept first when the cap bites. This ranks by how *essential* a
+# file is to a working app, which is not the same as the order the layers are
+# written in — and the table used to encode the latter. With models/schemas/
+# services/routes at 0-3 and a cap of 4, the survivors were exactly those four
+# and both `main.py` (4) and `app.py` (5) were deleted, leaving an application
+# with no entry point. `_normalise_backend_architecture`'s own docstring names
+# the target as "models -> services -> routes -> main"; these are the numbers
+# that actually produce it, with schemas.py demoted because a FastAPI app can
+# declare its models inline but cannot run without routes or a main.
 BACKEND_FILE_PRIORITY = {
-    "models.py": 0,
-    "schemas.py": 1,
-    "services.py": 2,
-    "routes.py": 3,
-    "main.py": 4,
+    "main.py": 0,
+    "routes.py": 1,
+    "models.py": 2,
+    "services.py": 3,
+    "schemas.py": 4,
     "app.py": 5,
     "__init__.py": 99,
 }
@@ -218,9 +227,31 @@ Return the architecture JSON object.
             architecture["files"] = files
             return architecture
 
-        keep = {
+        # Phase 23: the entry point is not negotiable.
+        #
+        # This cap used to take `sorted(...)[:cap]` straight off the priority
+        # table, where main.py sits at 4 — last of the real files — while the cap
+        # for a simple or medium app is exactly 4. So the moment the architect
+        # planned a schemas.py, the four survivors were models/schemas/services/
+        # routes and **main.py was deleted**. Observed live: a bookmark API
+        # shipped with no `app = FastAPI()` anywhere, nothing to start, and the
+        # runtime smoke test skipping because it could find no entry point.
+        #
+        # Trimming for deployability that removes the ability to deploy is not a
+        # trade-off, so the entry point is reserved first and the cap applies to
+        # everything else.
+        entry_paths = {
             f.get("path", "")
-            for f in sorted(backend_py, key=_backend_priority)[:cap]
+            for f in backend_py
+            if Path(f.get("path", "")).name.lower() in ("main.py", "app.py")
+        }
+        remaining_slots = max(0, cap - len(entry_paths))
+        keep = entry_paths | {
+            f.get("path", "")
+            for f in sorted(
+                (f for f in backend_py if f.get("path", "") not in entry_paths),
+                key=_backend_priority,
+            )[:remaining_slots]
         }
         removed = sorted(
             f.get("path", "") for f in backend_py if f.get("path", "") not in keep

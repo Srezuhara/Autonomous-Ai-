@@ -791,8 +791,15 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             return ""
         project_dir = Path(config.OUTPUT_DIR) / parts[0]
         lines       = ["Actual Python files in this project:"]
+        # Bounded: this is resent on every repair attempt, and an unbounded walk
+        # grows the prompt with the project. 40 modules is far more than any
+        # generated app has needed and keeps the cost flat.
+        MAX_ENTRIES = 40
         try:
             for py_file in sorted(project_dir.rglob("*.py")):
+                if len(lines) > MAX_ENTRIES:
+                    lines.append(f"  …and more (listing capped at {MAX_ENTRIES})")
+                    break
                 rel = str(py_file.relative_to(Path(config.OUTPUT_DIR))).replace("\\", "/")
                 if "__pycache__" in rel:
                     continue
@@ -954,8 +961,43 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         result.final_error = error_text
         return result
 
+    # Top-level definitions, found by pattern rather than by `ast`. The file
+    # being repaired is usually a *syntax error* — that is why it is here — so
+    # anything that needs to parse it first cannot run when it matters most.
+    _TOP_LEVEL_SYMBOL_RE = re.compile(
+        r"^(?:async\s+def\s+(?P<afn>\w+)"
+        r"|def\s+(?P<fn>\w+)"
+        r"|class\s+(?P<cls>\w+)"
+        r"|(?P<var>[A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=))",
+        re.MULTILINE,
+    )
+
+    @classmethod
+    def _top_level_symbols(cls, source: str) -> set[str]:
+        """Names a sibling module could import from this file."""
+        names: set[str] = set()
+        for m in cls._TOP_LEVEL_SYMBOL_RE.finditer(source):
+            name = m.group("afn") or m.group("fn") or m.group("cls") or m.group("var")
+            # Private/underscore-prefixed helpers and the sys.path preamble the
+            # architect injects are noise here, not API.
+            if name and not name.startswith("_"):
+                names.add(name)
+        return names
+
     def _accept_generated_fix(self, file_path: str, fixed: str) -> bool:
-        """Reject LLM fixes that paste multiple files into one module."""
+        """
+        Reject LLM "fixes" that damage the file instead of repairing it.
+
+        Two failure modes, and for a long time only the first was checked:
+
+        1. Pasting several files into one module (an oversized rewrite).
+        2. **Deleting the file's contents.** An empty module imports perfectly,
+           so "the import check passes" is a target the LLM can hit by removing
+           code — and it does. Live, a truncated routes.py was "repaired" into
+           413 chars of imports with no `router` left; it compiled, the repair
+           was recorded as a success, and the application no longer existed.
+           Nothing looked for shrinkage, so nothing noticed.
+        """
         try:
             current = read_file(file_path)
         except Exception:
@@ -971,7 +1013,53 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 "multiple files or an oversized rewrite."
             )
             return False
+
+        if current.strip():
+            # A repair that drops a top-level name is removing something another
+            # module may import. `router` disappearing is exactly how a working
+            # app became unimportable while every check still passed.
+            lost = self._top_level_symbols(current) - self._top_level_symbols(fixed)
+            if lost:
+                logger.warning(
+                    f"  Rejecting LLM fix for {file_path}: it removes top-level "
+                    f"{', '.join(sorted(lost))} — a repair must not delete the "
+                    "definitions other modules import."
+                )
+                return False
+
+            # Belt and braces for the case where the deletion takes the symbols
+            # with it in a file too broken to pattern-match reliably.
+            if len(current) > 400 and len(fixed) < len(current) * 0.5:
+                logger.warning(
+                    f"  Rejecting LLM fix for {file_path}: shrinks the file from "
+                    f"{len(current)} to {len(fixed)} chars. Deleting code is not "
+                    "a repair, even though an empty module imports cleanly."
+                )
+                return False
+
         return True
+
+    # A traceback's useful end is its last few frames plus the exception line;
+    # the head is mostly interpreter machinery and absolute Windows paths, which
+    # are pure prompt cost. Uncapped stderr was being sent verbatim on every one
+    # of the Debugger's calls — 44% of a build's total.
+    _MAX_ERROR_CHARS = 1200
+
+    @staticmethod
+    def _is_import_error(error_text: str) -> bool:
+        return any(
+            marker in error_text
+            for marker in ("ImportError", "ModuleNotFoundError", "No module named",
+                           "cannot import name", "attempted relative import")
+        )
+
+    @classmethod
+    def _trim_error(cls, error_text: str) -> str:
+        """Keep the tail — that is where the exception actually is."""
+        text = (error_text or "").strip()
+        if len(text) <= cls._MAX_ERROR_CHARS:
+            return text
+        return "…(earlier frames trimmed)…\n" + text[-cls._MAX_ERROR_CHARS:]
 
     def _generate_fix(self, file_path: str, error_text: str) -> str | None:
         try:
@@ -980,15 +1068,28 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             logger.error(f"Could not read {file_path}: {e}")
             return None
 
-        project_map = self._scan_project_structure(file_path)
-        prompt      = f"""Fix this Python file. It has an import error.
+        # The project map exists to tell the model which modules and symbols are
+        # importable. That is only useful for an import error — on a SyntaxError
+        # it is several hundred wasted tokens per attempt, and the file itself
+        # carries everything needed to fix it.
+        #
+        # Note what is deliberately NOT trimmed: the file. Every call here is a
+        # fresh, stateless request, so sending less of the source on a retry
+        # would hand the model less to work with than the attempt that already
+        # failed — and Fix 4's guard would then reject the weaker result, costing
+        # more calls than it saved.
+        import_error = self._is_import_error(error_text)
+        project_map  = self._scan_project_structure(file_path) if import_error else ""
+        problem      = "an import error" if import_error else "an error"
+
+        prompt      = f"""Fix this Python file. It has {problem}.
 
 FILE: {file_path}
 CURRENT CODE:
 {current_code}
 
 ERROR:
-{error_text}
+{self._trim_error(error_text)}
 
 {project_map}
 

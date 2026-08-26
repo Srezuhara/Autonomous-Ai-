@@ -11,6 +11,20 @@ import { defineConfig, devices } from '@playwright/test';
  * The suite reports clearly when it is not running rather than failing with a
  * wall of connection errors.
  */
+/**
+ * Phase 23 A4: the `live` project is only *declared* when it is explicitly
+ * asked for.
+ *
+ * `testIgnore` on the default project is not enough on its own — it keeps
+ * live.spec.ts out of `chromium`, but a bare `playwright test` still runs
+ * every declared project, so `live` would execute anyway and start real
+ * builds against real Groq quota. Omitting the project entirely is the only
+ * way to make "run everything" mean "run everything that is free".
+ */
+const LIVE_REQUESTED = process.argv.some(
+  (arg, i) => arg === '--project=live' || (arg === '--project' && process.argv[i + 1] === 'live')
+);
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -34,7 +48,30 @@ export default defineConfig({
   },
 
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    /**
+     * The default project. `live.spec.ts` is excluded on purpose: it starts
+     * real builds and spends real Groq quota, which `npm run test:e2e` must
+     * never do as a side effect of checking the UI.
+     */
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: /live\.spec\.ts/,
+    },
+    /**
+     * Phase 23 A4 — opt-in only, via `npm run test:e2e:live`. Needs the
+     * backend already running on :8000; the specs skip themselves when it is
+     * not, so "backend down" reads as not-run rather than as broken.
+     */
+    ...(LIVE_REQUESTED ? [{
+      name: 'live',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /live\.spec\.ts/,
+      // Real builds share one worker pool and one Groq quota; running them in
+      // parallel would have them fighting over both.
+      fullyParallel: false,
+      timeout: 600_000,
+    }] : []),
   ],
 
   webServer: {
