@@ -37,11 +37,23 @@ const API_PREFIXES = ['/projects', '/jobs', '/stats', '/health', '/docs', '/open
  */
 const SPA_ROUTE_PREFIXES = new Set(['/projects', '/stats'])
 
+/**
+ * …with the same exception the backend makes: a path under a SPA prefix that is
+ * an API endpoint a browser is *meant* to navigate to. `GET
+ * /projects/{id}/download` is one — the Download ZIP button calls
+ * `window.open`, an HTML navigation, so this bypass handed it the dev server's
+ * index.html and the click downloaded nothing at all.
+ */
+const NAVIGABLE_API_SUFFIXES = ['/download']
+
 function bypassHtmlNavigations(prefix: string) {
   if (!SPA_ROUTE_PREFIXES.has(prefix)) return undefined
   return (req: { url?: string; headers: Record<string, string | string[] | undefined> }) => {
     const accept = String(req.headers.accept ?? '')
-    return accept.includes('text/html') ? req.url : undefined
+    if (!accept.includes('text/html')) return undefined
+    const path = String(req.url ?? '').split('?')[0]
+    if (NAVIGABLE_API_SUFFIXES.some(suffix => path.endsWith(suffix))) return undefined
+    return req.url
   }
 }
 

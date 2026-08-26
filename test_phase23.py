@@ -1057,6 +1057,7 @@ if not FRONTEND_DIST.is_dir():
 else:
     from fastapi.testclient import TestClient  # noqa: E402
     from api_platform.main import app as _api_app  # noqa: E402
+    import api_platform.main as _api_main  # noqa: E402
 
     _client = TestClient(_api_app)
     _HTML = {"accept": "text/html,application/xhtml+xml"}
@@ -1113,6 +1114,42 @@ else:
 
     # The containment check still has to hold: the fallback resolves paths
     # against dist, and a 404 is the right answer for an escape attempt.
+    # The Download ZIP button calls `window.open`, which is an HTML navigation
+    # to a path under `/projects/` — so the rule above handed it the app shell
+    # and the browser saved 1.5KB of HTML instead of the archive. Nothing
+    # errored: the click just did nothing. Found by the live E2E suite, which
+    # is the only place a real browser is involved.
+    _finished = [
+        b for b in _client.get("/projects/?limit=50").json().get("projects", [])
+        if b.get("status") in ("done", "done_with_context")
+    ]
+    _dl = (f"/projects/{_finished[0]['build_id']}/download"
+           if _finished else "/projects/none/download")
+    check("a download path is not treated as a page, whatever the Accept header",
+          not _api_main._is_spa_navigation_path(_dl), _dl)
+    check("…while its sibling project page still is",
+          _api_main._is_spa_navigation_path("/projects/some-build-id"))
+    check("the exemption is anchored to the end of the path",
+          _api_main._is_spa_navigation_path("/projects/download/detail"),
+          "a build literally called 'download' still has a detail page")
+    check("the root is still a page for a browser",
+          _api_main._is_spa_navigation_path("/"))
+    check("an unrelated API path is not a page",
+          not _api_main._is_spa_navigation_path("/health"))
+
+    _dl_nav = _client.get(_dl, headers=_HTML)
+    check("a browser navigating to a download gets bytes, not the app shell",
+          "text/html" not in _dl_nav.headers.get("content-type", ""),
+          f"status={_dl_nav.status_code} ct={_dl_nav.headers.get('content-type')}")
+    if _dl_nav.status_code == 200:
+        check("…and those bytes are a real ZIP",
+              _dl_nav.content[:4] == b"PK",
+              f"first bytes={_dl_nav.content[:8]!r}")
+    else:
+        check("…and those bytes are a real ZIP (skipped — no downloadable build)",
+              True, f"status={_dl_nav.status_code}")
+
+
     _escape = _client.get("/../llm_client.py", headers=_JSON)
     check("a traversal attempt is not served a file outside dist",
           _escape.status_code == 404

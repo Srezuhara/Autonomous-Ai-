@@ -225,9 +225,30 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 # a browser navigation asks for text/html, `fetch` does not.
 _SPA_ROUTE_PREFIXES = ("/dashboard", "/build", "/projects", "/stats")
 
+# …except where a path under one of those prefixes is an API endpoint that a
+# browser is *supposed* to navigate to. `GET /projects/{id}/download` is one:
+# the Download ZIP button calls `window.open`, which is an HTML navigation, so
+# the rule above handed it the app shell and the browser saved — or rather did
+# not save — 1.5KB of HTML instead of the archive. Nothing errored; the click
+# simply did nothing.
+_SPA_NAVIGATION_EXEMPT_SUFFIXES = ("/download",)
+
 
 def _wants_html(request) -> bool:
     return "text/html" in request.headers.get("accept", "")
+
+
+def _is_spa_navigation_path(path: str) -> bool:
+    """Is this a path the SPA owns, rather than one the API answers?"""
+    if path.endswith(_SPA_NAVIGATION_EXEMPT_SUFFIXES):
+        return False
+    if path == "/":
+        # Both the API's info endpoint and the product's landing page.
+        return True
+    return any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in _SPA_ROUTE_PREFIXES
+    )
 
 
 if FRONTEND_DIST.is_dir():
@@ -250,13 +271,11 @@ if FRONTEND_DIST.is_dir():
         still reaches its endpoint untouched.
         """
         path = request.url.path
-        # `/` is both the API's info endpoint and the product's landing page.
-        # Same rule as the collisions below: a navigation gets the page, a
-        # programmatic caller keeps the JSON it has always received.
-        is_spa_path = path == "/" or any(
-            path == p or path.startswith(p + "/") for p in _SPA_ROUTE_PREFIXES
-        )
-        if request.method == "GET" and _wants_html(request) and is_spa_path:
+        if (
+            request.method == "GET"
+            and _wants_html(request)
+            and _is_spa_navigation_path(path)
+        ):
             index = FRONTEND_DIST / "index.html"
             if index.is_file():
                 return FileResponse(index)

@@ -21,9 +21,21 @@ import { defineConfig, devices } from '@playwright/test';
  * builds against real Groq quota. Omitting the project entirely is the only
  * way to make "run everything" mean "run everything that is free".
  */
-const LIVE_REQUESTED = process.argv.some(
-  (arg, i) => arg === '--project=live' || (arg === '--project' && process.argv[i + 1] === 'live')
-);
+const LIVE_REQUESTED =
+  process.env.PW_LIVE === '1' ||
+  process.argv.some(
+    (arg, i) => arg === '--project=live' || (arg === '--project' && process.argv[i + 1] === 'live')
+  );
+
+/**
+ * Workers re-load this config in their own process and do *not* get the
+ * runner's argv, so an argv-only check declared `live` in the runner and not
+ * in the worker: every run died with "Project 'live' not found in the worker
+ * process" before starting a single build. Workers do inherit env, and the
+ * config is evaluated in the runner before any worker is forked, so recording
+ * the decision here is what carries it across.
+ */
+if (LIVE_REQUESTED) process.env.PW_LIVE = '1';
 
 export default defineConfig({
   testDir: './e2e',
