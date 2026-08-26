@@ -9,7 +9,7 @@ from datetime import datetime
 import config
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -250,24 +250,33 @@ if FRONTEND_DIST.is_dir():
         still reaches its endpoint untouched.
         """
         path = request.url.path
-        if (
-            request.method == "GET"
-            and _wants_html(request)
-            and any(path == p or path.startswith(p + "/") for p in _SPA_ROUTE_PREFIXES)
-        ):
+        # `/` is both the API's info endpoint and the product's landing page.
+        # Same rule as the collisions below: a navigation gets the page, a
+        # programmatic caller keeps the JSON it has always received.
+        is_spa_path = path == "/" or any(
+            path == p or path.startswith(p + "/") for p in _SPA_ROUTE_PREFIXES
+        )
+        if request.method == "GET" and _wants_html(request) and is_spa_path:
             index = FRONTEND_DIST / "index.html"
             if index.is_file():
                 return FileResponse(index)
         return await call_next(request)
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa_fallback(full_path: str):
+    async def spa_fallback(request: Request, full_path: str):
         """
         History fallback for every other client-side route.
 
         A request for a file that genuinely exists in dist (favicon, manifest)
-        is served as itself; anything else gets the shell and React Router
-        takes it from there.
+        is served as itself; a browser *navigation* gets the shell and React
+        Router takes it from there.
+
+        Anything else gets a 404. Without that, this route answered every
+        unmatched GET with the shell and HTTP 200 — so a mistyped API path read
+        as success to a non-browser client, and a script downloading a build
+        from the wrong URL saved an HTML page as its .zip and only found out
+        when the archive would not open. A programmatic caller asking for a path
+        that does not exist deserves to be told so.
         """
         candidate = (FRONTEND_DIST / full_path).resolve()
         # Containment check: a crafted path must not escape the dist directory.
@@ -277,6 +286,11 @@ if FRONTEND_DIST.is_dir():
         index = FRONTEND_DIST / "index.html"
         if not index.is_file():
             raise HTTPException(status_code=404, detail="Frontend build not found")
+        # The root is the app's entry point and stays reachable to anything.
+        if full_path.strip("/") and not _wants_html(request):
+            raise HTTPException(
+                status_code=404, detail=f"Not found: /{full_path}"
+            )
         return FileResponse(index)
 
     logger.info(f"🖥️  Serving SPA from {FRONTEND_DIST}")

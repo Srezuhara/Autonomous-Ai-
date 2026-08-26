@@ -1040,6 +1040,86 @@ llm_client._current_build_id.value = None
 llm_client.reset_daily_usage()
 
 
+# ── 18. The SPA history fallback must not answer for the API ──────────────────
+# The catch-all served the shell with HTTP 200 for *any* unmatched GET, so a
+# wrong API path looked like a success to anything that is not a browser. It
+# cost a live session: a download script pointed at `/downloads/{id}` — a URL
+# that does not exist, the real one is `/projects/{id}/download` — got 200 and
+# saved an HTML page as a .zip. Browsers still need the fallback for deep links,
+# so the two are told apart by `Accept`, the same rule the navigation middleware
+# already uses.
+print("\n[18] the SPA fallback answers browsers, not scripts")
+
+from api_platform.main import FRONTEND_DIST  # noqa: E402
+
+if not FRONTEND_DIST.is_dir():
+    print("  (skipped — no frontend/dist; run `npm run build` in frontend/)")
+else:
+    from fastapi.testclient import TestClient  # noqa: E402
+    from api_platform.main import app as _api_app  # noqa: E402
+
+    _client = TestClient(_api_app)
+    _HTML = {"accept": "text/html,application/xhtml+xml"}
+    _JSON = {"accept": "application/json"}
+
+    _typo = _client.get("/downloads/some-build-id", headers=_JSON)
+    check("a mistyped API path 404s instead of returning the shell",
+          _typo.status_code == 404, f"status={_typo.status_code}")
+    check("…and the body is an error, not a page",
+          "text/html" not in _typo.headers.get("content-type", ""),
+          f"content-type={_typo.headers.get('content-type')}")
+
+    _no_accept = _client.get("/downloads/some-build-id", headers={"accept": "*/*"})
+    check("a client that asks for anything is still not a browser",
+          _no_accept.status_code == 404, f"status={_no_accept.status_code}")
+
+    _deep = _client.get("/some/client/route", headers=_HTML)
+    check("a browser deep link still gets the shell, so React Router works",
+          _deep.status_code == 200
+          and "text/html" in _deep.headers.get("content-type", ""),
+          f"status={_deep.status_code}")
+
+    _asset = _client.get("/favicon.svg", headers=_JSON)
+    check("a file that really exists in dist is served whoever asks",
+          _asset.status_code == 200
+          and "text/html" not in _asset.headers.get("content-type", ""),
+          f"status={_asset.status_code} ct={_asset.headers.get('content-type')}")
+
+    _health = _client.get("/health", headers=_JSON)
+    check("real API routes are untouched by the change",
+          _health.status_code == 200 and "status" in _health.json())
+
+    # `/` is the one path that is both an API endpoint and a page.
+    _root_api = _client.get("/", headers=_JSON)
+    check("curl / keeps returning the platform info JSON",
+          _root_api.status_code == 200
+          and _root_api.json().get("service") == "AI App Builder Platform")
+    _root_html = _client.get("/", headers=_HTML)
+    check("a browser at / gets the landing page, not the info JSON",
+          _root_html.status_code == 200
+          and "text/html" in _root_html.headers.get("content-type", ""),
+          f"ct={_root_html.headers.get('content-type')}")
+
+    # The collision this whole mechanism exists for, in both directions.
+    _api_miss = _client.get("/projects/does-not-exist", headers=_JSON)
+    check("an unknown build id reaches the API and 404s as JSON",
+          _api_miss.status_code == 404
+          and "text/html" not in _api_miss.headers.get("content-type", ""),
+          f"status={_api_miss.status_code}")
+    _page_hit = _client.get("/projects/does-not-exist", headers=_HTML)
+    check("…while the same URL in the address bar renders the SPA",
+          _page_hit.status_code == 200
+          and "text/html" in _page_hit.headers.get("content-type", ""))
+
+    # The containment check still has to hold: the fallback resolves paths
+    # against dist, and a 404 is the right answer for an escape attempt.
+    _escape = _client.get("/../llm_client.py", headers=_JSON)
+    check("a traversal attempt is not served a file outside dist",
+          _escape.status_code == 404
+          or "def _ledger_record" not in _escape.text,
+          f"status={_escape.status_code}")
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
