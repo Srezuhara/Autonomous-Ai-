@@ -23,6 +23,7 @@ Everything is **committed** on `main`, as seven commits named `groq api fixes…
 | `…: add the A2 live-matrix driver to the repo` | `run_live_matrix.py`, so the matrix survives the session |
 | `…: record the files a build produced` | the `files` table was empty for all 58 builds |
 | `…: the ZIP download was broken in a browser` | and the live E2E suite could never run at all |
+| `…: send request-time failures to the repair passes` | a 5xx the smoke test found was filed as unfixable and never repaired |
 
 **Two defects found live that nothing offline could have caught:**
 
@@ -49,7 +50,7 @@ which is deliberately untracked.
 
 | Suite | Result |
 |---|---|
-| `test_phase23.py` | ✅ 142 / 142 (78 → 142; sections 17-20 are new) |
+| `test_phase23.py` | ✅ 182 / 182 (78 → 182; sections 17-21 are new) |
 | `test_phase21.py` | ✅ 77 / 77 |
 | `test_phase22.py` | ✅ 85 / 85 |
 | `test_phase17.py` | ✅ 58 / 58 — now pinned to a fixture, so the count no longer moves |
@@ -157,36 +158,47 @@ mechanical defect rather than variance. **Complete the matrix before Phase C.**
 
 ## 4. Known issues
 
-### 4.1 — Generated routes wrap a generator dependency (the row 1 500s) ← next
+### 4.1 — Request-time failures now reach the repair passes ✅ *fixed, unverified live*
 
-Reproduced offline, no quota needed:
+Row 1's 500s were an ordinary bug: `routes.py` re-declared the `get_db`
+dependency and yielded the result of *calling* crud's generator function, so
+every handler received a generator where it expected a connection.
 
 ```
-File "…/backend/routes.py", line 53, in list_tasks_endpoint
-    return get_tasks(db)
-File "…/backend/crud.py", line 68, in get_tasks
-    cur = conn.execute(
 AttributeError: 'generator' object has no attribute 'execute'
+  (at backend/routes.py:53 in list_tasks_endpoint -> backend/crud.py:68 in get_tasks)
 ```
 
-`crud.get_db()` is a generator function. `routes.py` wrote its own `get_db()`
-that calls it as if it returned a connection, then yields the *generator*, so
-every DB-touching route gets a generator where it expects a connection. The two
-routes that "passed" only returned 422 — request validation rejected them before
-they reached the database.
+What made it worth fixing was not the bug but everything that missed it: the
+import check passed, the generated unit tests passed (they call `crud` directly,
+never through the dependency), the reviewer scored it 6.0, and the one stage
+that caught it — the runtime smoke test — filed its finding as advisory, "issues
+the repair passes cannot fix". So remediation reported *"no files were repaired
+this pass"* about a build with three dead endpoints.
 
-What this says about the pipeline, and why it matters more than the bug:
+Now:
 
-- the import check passes (the module imports fine);
-- the generated unit tests pass (9/12 — they call `crud` directly, never through
-  the dependency);
-- the reviewer scored it 6.0;
-- **only the runtime smoke test caught it**, and remediation then made no
-  progress on it ("no files were repaired this pass").
+- the probe records every project frame in call order (excluding itself, or it
+  is the outermost frame and gets blamed for everything);
+- a 5xx whose traceback names a generated file becomes a **repairable** issue,
+  targeted at the outermost project frame — the handler, not the helper it blew
+  up in;
+- the debugger repairs files that import cleanly but fail on a request, and
+  rolls the repair back if it breaks the import check;
+- the app is re-run after each repair pass, which costs no tokens and is the
+  only thing that can confirm a request-time fix;
+- `prompts/backend_developer.txt` forbids the exact shape that was generated.
 
-So the smoke test is earning its keep and the repair path is not. Deciding
-whether the Debugger should be given the smoke-test failures as input is
-probably the highest-value pipeline change available.
+The repair-shrinkage guard needed one distinction to allow the correct fix:
+a name a file **defines** versus one it **re-exports**. Deleting a duplicated
+local `get_db` and importing the real one is right, and the guard read it as
+deleting `get_db`.
+
+**What is not yet proven:** that the repair actually succeeds on a real build.
+All of this is covered offline with the LLM stubbed, and verified against the
+real broken project as far as blame selection — but no live build has run
+through the new path. That is the first thing to check when quota returns, and
+row 1 is the build to re-run.
 
 ### 4.2 — Still open
 
