@@ -1295,6 +1295,369 @@ finally:
     shutil.rmtree(_files_root, ignore_errors=True)
 
 
+# ── 21. A request-time failure must reach the repair passes ───────────────────
+# Build 3d57d0b8 shipped with three of five routes returning 500 on every call,
+# and remediation reported "no files were repaired this pass". Not because the
+# repair failed — because the smoke test's findings were filed as advisory,
+# "issues the repair passes cannot fix", and never became something to repair.
+# The failure itself was ordinary: routes.py re-declared the `get_db`
+# dependency and yielded the result of *calling* crud's generator function, so
+# every handler received a generator where it expected a connection.
+print("\n[21] a request-time failure reaches the repair passes")
+
+from tools.runtime_smoke import RouteProbe, SmokeResult  # noqa: E402
+
+_REAL_ERROR = (
+    "AttributeError: 'generator' object has no attribute 'execute' "
+    "(at backend/routes.py:53 in list_tasks_endpoint -> backend/crud.py:68 in get_tasks)"
+)
+_probe = RouteProbe(path="/tasks/", method="GET", status=500, error=_REAL_ERROR)
+
+check("the traceback keeps every project frame, in call order",
+      [f["file"] for f in _probe.frames]
+      == ["backend/routes.py", "backend/crud.py"],
+      f"frames={_probe.frames}")
+check("…with the line and function of each",
+      _probe.frames[0]["line"] == 53
+      and _probe.frames[0]["function"] == "list_tasks_endpoint")
+check("blame lands on the caller, not on the file that raised",
+      _probe.blame_file == "backend/routes.py",
+      "repairing crud.py would teach the helper to accept a generator")
+check("a 5xx with no traceback blames nobody rather than guessing",
+      RouteProbe("/x", "GET", 500, "Internal Server Error").blame_file == "")
+check("a probe that answered 4xx is not a failure at all",
+      RouteProbe("/x", "POST", 422, "").ok)
+
+# The pipeline turns those probes into a repair target.
+from agents.pipeline import Pipeline  # noqa: E402
+
+
+class _FakeSmokePipeline(Pipeline):
+    """Pipeline with the subprocess app-boot replaced by a fixed result."""
+    def __init__(self, smoke):
+        self._smoke = smoke
+        self._emitted = []
+
+    def _emit_progress(self, *a, **kw):
+        self._emitted.append((a, kw))
+
+
+class _Result:
+    def __init__(self):
+        self.architecture = {"root_folder": "task_manager_x"}
+        self.smoke_summary = ""
+
+
+def _run_smoke(pipeline, smoke):
+    import tools.runtime_smoke as rs
+    original = rs.smoke_test_app
+    rs.smoke_test_app = lambda root, **kw: smoke
+    try:
+        return pipeline._smoke_test_runtime(_Result())
+    finally:
+        rs.smoke_test_app = original
+
+
+_smoke = SmokeResult(
+    ran=True, app_loaded=True, entry="backend/main.py",
+    probes=[
+        RouteProbe("/tasks/", "POST", 422, ""),
+        RouteProbe("/tasks/", "GET", 500, _REAL_ERROR),
+        RouteProbe("/tasks/{task_id}", "DELETE", 500, _REAL_ERROR),
+    ],
+)
+_pipeline = _FakeSmokePipeline(_smoke)
+_advisory = _run_smoke(_pipeline, _smoke)
+
+check("the failing endpoints are still reported to the reader",
+      any("2 of 3 endpoint(s) return a server error" in a for a in _advisory),
+      f"advisory={_advisory}")
+check("the repair target is recorded, keyed the way the pipeline spells paths",
+      list(_pipeline._smoke_runtime_errors) == ["task_manager_x/backend/routes.py"],
+      f"keys={list(_pipeline._smoke_runtime_errors)}")
+check("both failing routes are described in the one repair brief",
+      _pipeline._smoke_runtime_errors["task_manager_x/backend/routes.py"].count(
+          "'generator' object") == 2)
+check("the brief names the method and path, not just the exception",
+      "GET /tasks/ → 500"
+      in _pipeline._smoke_runtime_errors["task_manager_x/backend/routes.py"])
+
+_clean = SmokeResult(ran=True, app_loaded=True, entry="backend/main.py",
+                     probes=[RouteProbe("/tasks/", "GET", 200, "")])
+_pipeline_clean = _FakeSmokePipeline(_clean)
+check("an app whose routes all answer produces no advisory and no repair target",
+      _run_smoke(_pipeline_clean, _clean) == []
+      and _pipeline_clean._smoke_runtime_errors == {})
+
+_skipped = SmokeResult(ran=False, app_loaded=False, entry="", probes=[])
+_pipeline_skipped = _FakeSmokePipeline(_skipped)
+check("a non-FastAPI build skips cleanly and blames nothing",
+      _run_smoke(_pipeline_skipped, _skipped) == []
+      and _pipeline_skipped._smoke_runtime_errors == {})
+
+# End to end through the real probe, on a project shaped like the one that
+# failed. This is the only test that boots a generated app, and it exists
+# because the first version of the frame chain blamed `_smoke_probe.py` for
+# every failure — the probe is written into the project directory, so it is a
+# project frame too, and it is always the outermost one. Every repair would
+# have been aimed at a file the pipeline deletes on the way out.
+_PROBE_DIR = Path(config.OUTPUT_DIR) / "_phase23_probe_app"
+shutil.rmtree(_PROBE_DIR, ignore_errors=True)
+(_PROBE_DIR / "backend").mkdir(parents=True, exist_ok=True)
+(_PROBE_DIR / "backend" / "__init__.py").write_text("", encoding="utf-8")
+(_PROBE_DIR / "backend" / "store.py").write_text(
+    "def get_conn():\n"
+    "    yield {'rows': []}\n"
+    "\n"
+    "def list_rows(conn):\n"
+    "    return conn['rows']\n",
+    encoding="utf-8",
+)
+(_PROBE_DIR / "backend" / "routes.py").write_text(
+    "from fastapi import APIRouter, Depends\n"
+    "from store import get_conn as store_get_conn, list_rows\n"
+    "\n"
+    "router = APIRouter()\n"
+    "\n"
+    "\n"
+    "def get_conn():\n"
+    "    conn = store_get_conn()\n"
+    "    yield conn\n"
+    "\n"
+    "\n"
+    '@router.get("/rows/")\n'
+    "def list_rows_endpoint(conn=Depends(get_conn)):\n"
+    "    return list_rows(conn)\n"
+    "\n"
+    "\n"
+    '@router.get("/healthy/")\n'
+    "def healthy_endpoint():\n"
+    '    return {"ok": True}\n',
+    encoding="utf-8",
+)
+(_PROBE_DIR / "backend" / "main.py").write_text(
+    "import os, sys\n"
+    "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+    "from fastapi import FastAPI\n"
+    "from routes import router\n"
+    "\n"
+    "app = FastAPI()\n"
+    "app.include_router(router)\n",
+    encoding="utf-8",
+)
+
+from tools.runtime_smoke import smoke_test_app  # noqa: E402
+
+_probe_result = smoke_test_app(_PROBE_DIR.name)
+
+check("the probe boots a generated app and calls its routes",
+      _probe_result.ran and _probe_result.app_loaded, _probe_result.error)
+check("a route that works is reported as working",
+      any(p.path == "/healthy/" and p.ok for p in _probe_result.probes),
+      f"{[(p.path, p.status) for p in _probe_result.probes]}")
+_broken_probe = [p for p in _probe_result.probes if p.path == "/rows/"]
+check("the wrapped-generator route is caught as a 5xx",
+      bool(_broken_probe) and _broken_probe[0].status == 500,
+      f"{[(p.path, p.status) for p in _probe_result.probes]}")
+check("blame is the route file, not the probe the pipeline injected",
+      bool(_broken_probe) and _broken_probe[0].blame_file == "backend/routes.py",
+      f"blame={_broken_probe[0].blame_file if _broken_probe else '—'}")
+check("…and the helper it blew up in is still recorded as context",
+      bool(_broken_probe)
+      and [f["file"] for f in _broken_probe[0].frames]
+      == ["backend/routes.py", "backend/store.py"],
+      f"frames={_broken_probe[0].frames if _broken_probe else []}")
+check("the probe cleans up after itself",
+      not (_PROBE_DIR / "backend" / "_smoke_probe.py").exists())
+
+shutil.rmtree(_PROBE_DIR, ignore_errors=True)
+
+# ── The debugger's side: a file that imports cleanly but fails on a request ────
+from agents.debugger import Debugger, FileDebugResult  # noqa: E402
+
+
+def _blank_result():
+    return FileDebugResult(file_path=_rt_rel, success=True, attempts=1)
+
+_BROKEN_ROUTES = '''from fastapi import APIRouter, Depends
+from crud import get_db as crud_get_db, get_tasks
+
+router = APIRouter()
+
+
+def get_db():
+    conn = crud_get_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@router.get("/tasks/")
+def list_tasks_endpoint(db=Depends(get_db)):
+    return get_tasks(db)
+'''
+
+_FIXED_ROUTES = '''from fastapi import APIRouter, Depends
+from crud import get_db, get_tasks
+
+router = APIRouter()
+
+
+@router.get("/tasks/")
+def list_tasks_endpoint(db=Depends(get_db)):
+    return get_tasks(db)
+'''
+
+_RT_DIR = Path(config.OUTPUT_DIR) / "_phase23_runtime"
+shutil.rmtree(_RT_DIR, ignore_errors=True)
+_RT_DIR.mkdir(parents=True, exist_ok=True)
+_rt_rel = f"{_RT_DIR.name}/routes.py"
+(_RT_DIR / "routes.py").write_text(_BROKEN_ROUTES, encoding="utf-8")
+
+
+class _StubDebugger(Debugger):
+    """The Debugger with its one LLM call replaced by a scripted answer."""
+    def __init__(self, answer):
+        super().__init__()
+        self.answer = answer
+        self.prompts = []
+
+    def think(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.answer
+
+
+class _Execution:
+    def __init__(self, success):
+        self.success = success
+        self.stderr = "" if success else "SyntaxError: invalid syntax"
+        self.stdout = ""
+
+
+def _with_import_check(passing, fn):
+    """Run `fn` with the debugger's import check forced to a fixed verdict."""
+    import agents.debugger as dbg
+    original = dbg.run_python
+    dbg.run_python = lambda *a, **kw: _Execution(passing)
+    try:
+        return fn()
+    finally:
+        dbg.run_python = original
+
+
+_dbg = _StubDebugger(_FIXED_ROUTES)
+_res = _with_import_check(True, lambda: _dbg._debug_file(_rt_rel, runtime_error=_REAL_ERROR))
+
+check("a file that imports fine is still repaired when it fails on a request",
+      any("Runtime repair" in f for f in _res.fixes_applied),
+      f"fixes={_res.fixes_applied}")
+check("the repair is written to disk",
+      "crud_get_db" not in (_RT_DIR / "routes.py").read_text(encoding="utf-8"))
+check("the repair prompt says the failure is at request time",
+      any("REQUEST time" in p for p in _dbg.prompts))
+check("…and tells the model the bug is in this file, not where it surfaced",
+      any("do not make the other" in p and "tolerate it" in p for p in _dbg.prompts))
+check("…and states the dependency rule that was actually broken",
+      any("generator function" in p and "Depends" in p for p in _dbg.prompts))
+check("…and carries the traceback in call order",
+      any(_REAL_ERROR[:40] in p for p in _dbg.prompts))
+
+# No runtime error supplied → no LLM call, no rewrite. This is the common case
+# on every passing file in every build, so it must cost nothing.
+(_RT_DIR / "routes.py").write_text(_BROKEN_ROUTES, encoding="utf-8")
+_quiet = _StubDebugger(_FIXED_ROUTES)
+_with_import_check(True, lambda: _quiet._debug_file(_rt_rel))
+check("a passing file with no runtime failure costs no LLM call",
+      _quiet.prompts == [] and
+      (_RT_DIR / "routes.py").read_text(encoding="utf-8") == _BROKEN_ROUTES)
+
+# A repair that breaks the module is worse than the bug it fixed.
+(_RT_DIR / "routes.py").write_text(_BROKEN_ROUTES, encoding="utf-8")
+_breaker = _StubDebugger("from fastapi import APIRouter\nrouter = APIRouter(\n")
+_with_import_check(False, lambda: _breaker._repair_runtime_error(
+    _rt_rel, _REAL_ERROR, _blank_result()))
+check("a runtime repair that breaks the import check is rolled back",
+      (_RT_DIR / "routes.py").read_text(encoding="utf-8") == _BROKEN_ROUTES)
+
+# The existing shrinkage guard still applies to this new path.
+(_RT_DIR / "routes.py").write_text(_BROKEN_ROUTES, encoding="utf-8")
+_gutter = _StubDebugger("from fastapi import APIRouter\n")
+_with_import_check(True, lambda: _gutter._repair_runtime_error(
+    _rt_rel, _REAL_ERROR, _blank_result()))
+check("a runtime repair that deletes `router` is rejected before it is written",
+      (_RT_DIR / "routes.py").read_text(encoding="utf-8") == _BROKEN_ROUTES)
+
+# run() must route each file's own failure to it, and nothing to the others.
+(_RT_DIR / "routes.py").write_text(_BROKEN_ROUTES, encoding="utf-8")
+(_RT_DIR / "crud.py").write_text("def get_db():\n    yield 1\n", encoding="utf-8")
+_router_dbg = _StubDebugger(_FIXED_ROUTES)
+_with_import_check(True, lambda: _router_dbg.run(
+    [_rt_rel, f"{_RT_DIR.name}/crud.py"],
+    runtime_errors={_rt_rel: _REAL_ERROR},
+))
+check("only the blamed file is repaired; its siblings are left alone",
+      len(_router_dbg.prompts) == 1 and _rt_rel in _router_dbg.prompts[0],
+      f"{len(_router_dbg.prompts)} prompt(s)")
+
+shutil.rmtree(_RT_DIR, ignore_errors=True)
+
+# The repair-shrinkage guard had to learn the difference between a name a file
+# *defines* and a name it merely re-exports, because the correct fix for a
+# duplicated dependency deletes the local `get_db` and imports the real one.
+# That is a loosening of a safety check, so the thing it was built to catch is
+# re-asserted here rather than assumed.
+_guard = Debugger.__new__(Debugger)
+
+check("an import binds a top-level name, exactly as a def does",
+      "get_db" in Debugger._top_level_symbols("from crud import get_db\n"))
+check("…but `defined_only` sees only what the file itself defines",
+      Debugger._top_level_symbols(
+          "from crud import get_db\ndef helper():\n    pass\n", defined_only=True)
+      == {"helper"})
+check("an aliased import binds the alias, not the original name",
+      Debugger._top_level_symbols("from crud import get_db as db_dep\n")
+      == {"db_dep"})
+check("a star import binds nothing this guard can name",
+      Debugger._top_level_symbols("from crud import *\n") == set())
+check("a plain module import binds the module name",
+      Debugger._top_level_symbols("import sqlite3\n") == {"sqlite3"})
+check("source that will not parse still yields symbols via the regex",
+      "router" in Debugger._top_level_symbols(
+          "from fastapi import APIRouter\nrouter = APIRouter(\ndef broken(:\n"))
+
+_RT_DIR.mkdir(parents=True, exist_ok=True)
+_guard_file = f"{_RT_DIR.name}/guard.py"
+(_RT_DIR / "guard.py").write_text(_BROKEN_ROUTES, encoding="utf-8")
+
+check("the fix that swaps a local dependency for the imported one is accepted",
+      _guard._accept_generated_fix(_guard_file, _FIXED_ROUTES))
+check("a fix that drops `router` is still rejected — the Phase 23 regression",
+      not _guard._accept_generated_fix(
+          _guard_file, "from fastapi import APIRouter, Depends\n"))
+check("a fix that empties the file is still rejected",
+      not _guard._accept_generated_fix(_guard_file, "\n"))
+check("a fix that drops a route handler is still rejected",
+      not _guard._accept_generated_fix(_guard_file, '''from fastapi import APIRouter, Depends
+from crud import get_db, get_tasks
+
+router = APIRouter()
+'''))
+check("an oversized rewrite is still rejected",
+      not _guard._accept_generated_fix(
+          _guard_file, _FIXED_ROUTES + "\n# padding\n" * 400))
+
+shutil.rmtree(_RT_DIR, ignore_errors=True)
+
+# The prompt that should stop this being generated in the first place.
+_bd_prompt = Path("prompts/backend_developer.txt").read_text(encoding="utf-8")
+check("the code-writing prompt forbids the exact shape that was generated",
+      "'generator' object has no attribute 'execute'" in _bd_prompt
+      and "crud_get_db()" in _bd_prompt)
+check("…and says not to re-declare the dependency in routes.py",
+      "do not write a" in _bd_prompt and "second `get_db` in routes.py" in _bd_prompt)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

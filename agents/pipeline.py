@@ -689,9 +689,15 @@ class Pipeline:
         request, because the offending import sat inside a handler body and
         nothing ever sent a request.
 
-        Findings are advisory: they mark the build degraded and are written into
-        SESSION_CONTEXT.md. Never raises.
+        Findings used to be advisory only — "issues the repair passes cannot
+        fix". That was true of the summary string and false of the failure
+        behind it: a handler raising on every request is exactly what an LLM
+        repair pass can fix, given the traceback. `self._smoke_runtime_errors`
+        is set here so remediation can aim one.
+
+        Never raises.
         """
+        self._smoke_runtime_errors = {}
         root = result.architecture.get("root_folder", "")
         if not root:
             return []
@@ -731,6 +737,24 @@ class Pipeline:
         failures = smoke.failures
         if not failures:
             return []
+
+        # Aim a repair: the outermost project frame is the handler that was
+        # called, which is where the mistake lives even when the exception
+        # surfaces deeper in. Files are keyed the way the rest of the pipeline
+        # spells them — relative to OUTPUT_DIR, root folder included.
+        for probe in failures:
+            blame = probe.blame_file
+            if not blame:
+                continue
+            path = f"{root}/{blame}" if not blame.startswith(root) else blame
+            existing = self._smoke_runtime_errors.get(path, "")
+            entry = (
+                f"{probe.method} {probe.path} → {probe.status or 'no response'}: "
+                f"{probe.error[:400]}"
+            )
+            self._smoke_runtime_errors[path] = (
+                f"{existing}\n{entry}" if existing else entry
+            )
 
         detail = ", ".join(
             f"{p.method} {p.path} → {p.status or 'no response'}" for p in failures[:5]
@@ -809,7 +833,23 @@ class Pipeline:
 
         # Phase 22: actually run the app. Static analysis cannot tell a handler
         # that works from one that raises the moment a request arrives.
-        advisory = advisory + self._smoke_test_runtime(result)
+        smoke_advisory = self._smoke_test_runtime(result)
+        advisory = advisory + smoke_advisory
+
+        # Phase 23: a 5xx whose traceback names a generated file is repairable,
+        # and used to be filed under "cannot be fixed" purely because the smoke
+        # test ran after the diagnosis that decides what gets repaired. A build
+        # shipped with three of five routes returning 500 while remediation
+        # reported "no files were repaired this pass".
+        runtime_errors = dict(getattr(self, "_smoke_runtime_errors", {}) or {})
+        for path in runtime_errors:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if runtime_errors:
+            issues = list(issues) + [
+                f"{len(runtime_errors)} file(s) raise at request time: "
+                f"{', '.join(sorted(runtime_errors)[:4])}"
+            ]
 
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
@@ -922,7 +962,7 @@ class Pipeline:
 
             try:
                 if failed_paths:
-                    fresh = self.debugger.run(failed_paths)
+                    fresh = self.debugger.run(failed_paths, runtime_errors=runtime_errors)
                     # Merge the fresh results over the stale ones so the DB
                     # scores reflect the repaired state, not the pre-repair one.
                     by_path = {
@@ -966,6 +1006,24 @@ class Pipeline:
                 break
 
             issues, failed_paths = self._diagnose(result)
+
+            # Re-run the app. It costs no tokens and it is the only thing that
+            # can say whether a request-time repair actually worked — the
+            # import check passed before the repair too.
+            if runtime_errors:
+                smoke_advisory = self._smoke_test_runtime(result)
+                runtime_errors = dict(getattr(self, "_smoke_runtime_errors", {}) or {})
+                if runtime_errors:
+                    for path in runtime_errors:
+                        if path not in failed_paths:
+                            failed_paths.append(path)
+                    issues = list(issues) + [
+                        f"{len(runtime_errors)} file(s) still raise at request time: "
+                        f"{', '.join(sorted(runtime_errors)[:4])}"
+                    ]
+                else:
+                    logger.info("  ✅ Every endpoint now responds without a server error")
+
             if not issues:
                 logger.info(f"  ✅ Remediation resolved all issues on pass {attempt}")
                 break
@@ -976,7 +1034,14 @@ class Pipeline:
 
         # Re-run the static audit: repairs may have introduced or resolved
         # phantom imports, and the report must describe the FINAL state on disk.
-        advisory = self._audit_generated_output(result)
+        # `smoke_advisory` is whatever the last run of the app said, so a repair
+        # that worked is not reported as an outstanding failure.
+        advisory = self._audit_generated_output(result) + list(smoke_advisory)
+
+        # The request-time failures are already stated by `smoke_advisory`, in
+        # the form that names the endpoints. Keeping the synthetic issue
+        # string too would print the same fact twice in SESSION_CONTEXT.md.
+        issues = [i for i in issues if "raise at request time" not in i]
 
         report.unresolved = list(issues) + list(advisory)
         report.degraded   = bool(report.unresolved)

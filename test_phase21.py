@@ -530,8 +530,10 @@ def _spy_tester(paths, architecture, debug_results=None):
     return [FakeTest(p, 3, 3) for p in paths]
 
 
-# Debugger repairs only ONE of the three files
-def _spy_debugger(paths):
+# Debugger repairs only ONE of the three files.
+# `runtime_errors` is Phase 23: remediation now hands the debugger the failures
+# the *running* app produced, which the import check cannot see.
+def _spy_debugger(paths, runtime_errors=None):
     return [FakeDebug(p, p.endswith("a.py")) for p in paths]
 
 

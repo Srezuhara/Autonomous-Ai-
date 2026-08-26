@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -53,6 +54,41 @@ class RouteProbe:
         # A route that answers at all is working: 4xx is a valid answer to an
         # unauthenticated / unparameterised probe. 5xx is the app breaking.
         return self.status is not None and self.status < 500
+
+    @property
+    def frames(self) -> list:
+        """
+        The project files in this probe's traceback, in call order.
+
+        Parsed from the `(at a.py:1 in f -> b.py:2 in g)` suffix the probe
+        writes. Empty when the failure produced no traceback at all — a 500
+        the app returned deliberately, for instance.
+        """
+        match = re.search(r"\(at ([^)]+)\)\s*$", self.error or "")
+        if not match:
+            return []
+        out = []
+        for part in match.group(1).split("->"):
+            frame = re.match(r"\s*(\S+\.py):(\d+) in (\S+)\s*$", part)
+            if frame:
+                out.append({
+                    "file": frame.group(1),
+                    "line": int(frame.group(2)),
+                    "function": frame.group(3),
+                })
+        return out
+
+    @property
+    def blame_file(self) -> str:
+        """
+        The file a repair should be aimed at: the outermost project frame.
+
+        That is the handler the router called. When a handler hands a helper
+        the wrong thing, the exception surfaces in the helper — repairing there
+        would harden the helper against bad input instead of fixing the caller.
+        """
+        frames = self.frames
+        return frames[0]["file"] if frames else ""
 
 
 @dataclass
@@ -134,16 +170,34 @@ try:
     project_root = os.path.dirname(here)
 
     def describe(exc):
-        """Type, message, and the last frame inside the generated project."""
+        """
+        Type, message, and every frame inside the generated project.
+
+        The chain matters, not just its end. A handler that passes the wrong
+        object to a helper blows up *in the helper*, so recording only the last
+        frame sent the repair to the file that raised rather than the file that
+        was wrong — and a "fix" there means teaching the helper to accept bad
+        input. The caller is the first project frame; both are reported, in
+        call order, so the repair can be aimed and given its context.
+        """
         import traceback
         label = "{}: {}".format(type(exc).__name__, str(exc)[:200])
         try:
             frames = traceback.extract_tb(exc.__traceback__)
-            for fr in reversed(frames):
+            chain = []
+            for fr in frames:
                 fn = os.path.abspath(fr.filename)
-                if fn.startswith(project_root) and "site-packages" not in fn:
-                    rel = os.path.relpath(fn, project_root).replace("\\", "/")
-                    return "{} (at {}:{} in {})".format(label, rel, fr.lineno, fr.name)
+                if not fn.startswith(project_root) or "site-packages" in fn:
+                    continue
+                # This probe is written into the project directory, so it is a
+                # "project frame" too — and it is always the outermost one.
+                # Leaving it in makes it the blamed file for every failure.
+                if os.path.basename(fn) == "_smoke_probe.py":
+                    continue
+                rel = os.path.relpath(fn, project_root).replace("\\", "/")
+                chain.append("{}:{} in {}".format(rel, fr.lineno, fr.name))
+            if chain:
+                return "{} (at {})".format(label, " -> ".join(chain[-4:]))
         except Exception:
             pass
         return label

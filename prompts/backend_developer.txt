@@ -51,6 +51,19 @@ decorate it with @contextmanager, and never wrap it in a helper that returns it.
       @router.get("/tasks")
       def list_tasks(db = Depends(_get_db)): ...
 
+  ❌ ALSO WRONG — re-declaring the dependency in routes.py and yielding the
+     result of calling the real one. Calling a generator function returns a
+     GENERATOR, so every handler raises
+     "'generator' object has no attribute 'execute'":
+      from crud import get_db as crud_get_db
+
+      def get_db():
+          conn = crud_get_db()   # this is a generator, not a connection
+          try:
+              yield conn
+          finally:
+              conn.close()
+
   ✅ RIGHT — FastAPI manages the generator itself:
       def get_db():
           conn = sqlite3.connect(DB_PATH)
@@ -63,7 +76,10 @@ decorate it with @contextmanager, and never wrap it in a helper that returns it.
       def list_tasks(db = Depends(get_db)): ...
 
 Define the dependency once, in the module that owns the database, and import it
-where it is used. Do not import it inside a function body.
+where it is used. Do not import it inside a function body, and do not write a
+second `get_db` in routes.py — import the one that already exists and pass it
+straight to Depends(...). If you find yourself calling a function that contains
+`yield`, stop: that is FastAPI's job, not yours.
 
 WIRING RULE: a route that needs data must reach the data layer. Declare the
 dependency with Depends(...) and call a real method on it. Do not instantiate a

@@ -171,7 +171,20 @@ class Debugger(BaseAgent):
         system_prompt = PROMPT_FILE.read_text(encoding="utf-8")
         super().__init__("Debugger", system_prompt)
 
-    def run(self, file_paths: list[str]) -> list[FileDebugResult]:
+    def run(
+        self,
+        file_paths: list[str],
+        runtime_errors: dict | None = None,
+    ) -> list[FileDebugResult]:
+        """
+        `runtime_errors` maps a file to a failure the *running* app produced —
+        a 5xx from the smoke test, with its traceback. The import check cannot
+        see those: the module imports fine, and the handler only breaks once a
+        request arrives. Without them a file like this is "passing" and the
+        repair passes skip it, which is exactly what happened to a build whose
+        three DB routes returned 500 on every call.
+        """
+        runtime_errors = runtime_errors or {}
         py_files = [
             f for f in file_paths
             if f.endswith(".py") and Path(f).name not in SKIP_DEBUG_FILES
@@ -204,7 +217,7 @@ class Debugger(BaseAgent):
 
         results = {}
         for fp in py_files:
-            r = self._debug_file(fp)
+            r = self._debug_file(fp, runtime_error=runtime_errors.get(fp, ""))
             results[fp] = r
             logger.info(str(r))
 
@@ -823,7 +836,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
     # ── Main debug loop ───────────────────────────────────────────────────────
 
-    def _debug_file(self, file_path: str) -> FileDebugResult:
+    def _debug_file(self, file_path: str, runtime_error: str = "") -> FileDebugResult:
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
@@ -836,6 +849,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             if execution.success:
                 result.success = True
                 logger.info(f"  ✅ [{file_path}] Passed on attempt {attempt}")
+                if runtime_error and attempt == 1:
+                    self._repair_runtime_error(file_path, runtime_error, result)
                 return result
 
             error_text = execution.stderr
@@ -972,16 +987,76 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         re.MULTILINE,
     )
 
+    _TOP_LEVEL_IMPORT_RE = re.compile(
+        r"^(?:from\s+[\w.]+\s+import|import)\s+(?P<names>[^\n#]+)",
+        re.MULTILINE,
+    )
+
     @classmethod
-    def _top_level_symbols(cls, source: str) -> set[str]:
-        """Names a sibling module could import from this file."""
+    def _top_level_symbols(cls, source: str, defined_only: bool = False) -> set[str]:
+        """
+        Names a sibling module could import from this file.
+
+        An import binds a module-level name just as a `def` does: after
+        `from crud import get_db`, `from routes import get_db` still resolves.
+        Counting only definitions made the guard reject the *correct* repair for
+        a duplicated dependency — the fix is to delete the local copy and import
+        the real one, which looked to the guard like deleting `get_db`.
+
+        Parsed properly where the source parses; the regex remains for the case
+        it does not, which is common here because these are broken files.
+        """
+        try:
+            import ast
+            tree = ast.parse(source)
+        except (SyntaxError, ValueError):
+            return cls._top_level_symbols_by_regex(source, defined_only)
+
         names: set[str] = set()
-        for m in cls._TOP_LEVEL_SYMBOL_RE.finditer(source):
-            name = m.group("afn") or m.group("fn") or m.group("cls") or m.group("var")
+
+        def add(name: str) -> None:
             # Private/underscore-prefixed helpers and the sys.path preamble the
             # architect injects are noise here, not API.
             if name and not name.startswith("_"):
                 names.add(name)
+
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        add(target.id)
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name):
+                    add(node.target.id)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)) and not defined_only:
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    add(alias.asname or alias.name.split(".")[0])
+        return names
+
+    @classmethod
+    def _top_level_symbols_by_regex(
+        cls, source: str, defined_only: bool = False
+    ) -> set[str]:
+        """The pre-AST fallback, for source that will not parse."""
+        names: set[str] = set()
+        for m in cls._TOP_LEVEL_SYMBOL_RE.finditer(source):
+            name = m.group("afn") or m.group("fn") or m.group("cls") or m.group("var")
+            if name and not name.startswith("_"):
+                names.add(name)
+        if defined_only:
+            return names
+        for m in cls._TOP_LEVEL_IMPORT_RE.finditer(source):
+            for part in m.group("names").split(","):
+                part = part.strip().strip("()").strip()
+                if not part:
+                    continue
+                bound = part.split(" as ")[-1].strip().split(".")[0]
+                if bound and bound != "*" and not bound.startswith("_"):
+                    names.add(bound)
         return names
 
     def _accept_generated_fix(self, file_path: str, fixed: str) -> bool:
@@ -1018,7 +1093,15 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             # A repair that drops a top-level name is removing something another
             # module may import. `router` disappearing is exactly how a working
             # app became unimportable while every check still passed.
-            lost = self._top_level_symbols(current) - self._top_level_symbols(fixed)
+            # What the file *defines* must still be reachable from it — but an
+            # import satisfies that as well as a `def` does. The correct repair
+            # for a duplicated dependency is to delete the local copy and import
+            # the real one, and comparing definitions to definitions rejected
+            # exactly that, leaving the endpoint broken.
+            lost = (
+                self._top_level_symbols(current, defined_only=True)
+                - self._top_level_symbols(fixed)
+            )
             if lost:
                 logger.warning(
                     f"  Rejecting LLM fix for {file_path}: it removes top-level "
@@ -1061,7 +1144,50 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             return text
         return "…(earlier frames trimmed)…\n" + text[-cls._MAX_ERROR_CHARS:]
 
-    def _generate_fix(self, file_path: str, error_text: str) -> str | None:
+    def _repair_runtime_error(
+        self, file_path: str, runtime_error: str, result: FileDebugResult
+    ) -> bool:
+        """
+        One repair pass for a file that imports cleanly but fails on a request.
+
+        The file is only replaced if the repair survives the same import check
+        the rest of the debugger relies on; otherwise the original is restored.
+        A request-time bug is bad, but a module that no longer imports is worse,
+        and this pass has no test of its own to catch that — the pipeline
+        re-runs the smoke test afterwards to say whether it actually worked.
+        """
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for runtime repair: {e}")
+            return False
+
+        logger.info(f"  🔥 [{file_path}] Repairing a request-time failure")
+        fixed = self._generate_fix(file_path, runtime_error, runtime=True)
+        if not fixed or not self._accept_generated_fix(file_path, fixed):
+            logger.warning(f"  ⚠️  [{file_path}] Runtime repair rejected or empty")
+            return False
+
+        create_file(file_path, fixed)
+        self._preflight_fix(file_path)
+        self._inject_syspath(file_path)
+
+        verify = run_python(file_path)
+        if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+            logger.warning(
+                f"  ↩️  [{file_path}] Runtime repair broke the import check — "
+                f"restoring the original"
+            )
+            create_file(file_path, original)
+            return False
+
+        result.fixes_applied.append(f"Runtime repair on {file_path}")
+        logger.info(f"  ✅ [{file_path}] Runtime repair applied")
+        return True
+
+    def _generate_fix(
+        self, file_path: str, error_text: str, runtime: bool = False
+    ) -> str | None:
         try:
             current_code = read_file(file_path)
         except Exception as e:
@@ -1079,8 +1205,19 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         # failed — and Fix 4's guard would then reject the weaker result, costing
         # more calls than it saved.
         import_error = self._is_import_error(error_text)
-        project_map  = self._scan_project_structure(file_path) if import_error else ""
+        # A request-time failure is nearly always about how this module uses
+        # another one, so the map earns its tokens here just as it does for an
+        # import error — the file alone does not show what it is calling into.
+        project_map  = (
+            self._scan_project_structure(file_path)
+            if (import_error or runtime) else ""
+        )
         problem      = "an import error" if import_error else "an error"
+
+        if runtime:
+            return self._generate_runtime_fix(
+                file_path, current_code, error_text, project_map
+            )
 
         prompt      = f"""Fix this Python file. It has {problem}.
 
@@ -1102,6 +1239,53 @@ RULES:
 
 Return ONLY the complete fixed Python code."""
         logger.info(f"  🧠 LLM fixing: {file_path}")
+        return self.think(prompt)
+
+    def _generate_runtime_fix(
+        self, file_path: str, current_code: str, error_text: str, project_map: str
+    ) -> str | None:
+        """
+        The prompt for a failure that only happens once a request arrives.
+
+        It differs from the import-error prompt in what it must not do. The
+        traceback names where the exception surfaced, which is often a helper
+        that was handed the wrong thing; "fix" there means teaching the helper
+        to tolerate bad input, and the endpoint stays broken. The file being
+        repaired is the caller, and the rule says so.
+
+        The FastAPI dependency rule is spelled out because it is the failure
+        that was actually observed: a router defined its own `get_db()` that
+        called a generator dependency as though it returned a value, then
+        yielded the generator, so every database route raised
+        `'generator' object has no attribute 'execute'` on every request.
+        """
+        prompt = f"""Fix this Python file. The application imports and starts
+correctly, but this endpoint fails at REQUEST time with a server error.
+
+FILE: {file_path}
+CURRENT CODE:
+{current_code}
+
+RUNTIME FAILURE (traceback frames are in call order, caller first):
+{self._trim_error(error_text)}
+
+{project_map}
+
+RULES:
+- The bug is in THIS file. The traceback may end in another module because this
+  file passed it the wrong value — fix the call here, do not make the other
+  module tolerate it.
+- A FastAPI dependency that uses `yield` is a generator function. Never call it
+  directly: pass the function itself to Depends(...) and let FastAPI resolve it.
+  `db = get_db()` gives you a generator, not a connection or session.
+- Do not wrap an existing generator dependency in a second one that yields the
+  result of calling it.
+- Keep every route, every top-level name and every signature this file already
+  has. Something else imports them.
+- Do not add new dependencies or new files.
+
+Return ONLY the complete fixed Python code."""
+        logger.info(f"  🧠 LLM repairing runtime failure: {file_path}")
         return self.think(prompt)
 
     def summary(self, results: list[FileDebugResult]) -> str:
