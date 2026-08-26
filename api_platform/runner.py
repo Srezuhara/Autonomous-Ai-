@@ -423,7 +423,9 @@ class JobRunner:
                 logger.exception(f"❌ Build {build_id[:8]} pipeline failed: {exc}")
 
         # ── Collect token usage regardless of cancel/fail/success ─────────────
-        token_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        token_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0,
+                             "total_tokens": 0, "by_model": {}}
+        tokens_by_model = "{}"
         try:
             import llm_client
             token_usage = llm_client.get_and_reset_token_usage(build_id)
@@ -433,6 +435,7 @@ class JobRunner:
                 f"completion={token_usage['completion_tokens']:,}  "
                 f"total={token_usage['total_tokens']:,}"
             )
+            tokens_by_model = json.dumps(token_usage.get("by_model") or {})
         except Exception as tok_exc:
             logger.warning(f"[{build_id[:8]}] Could not collect token usage: {tok_exc}")
 
@@ -448,6 +451,7 @@ class JobRunner:
                 prompt_tokens     = token_usage["prompt_tokens"],
                 completion_tokens = token_usage["completion_tokens"],
                 total_tokens      = token_usage["total_tokens"],
+                tokens_by_model   = tokens_by_model,
             )
             logger.info(
                 f"🚫 Build {build_id[:8]} cancelled "
@@ -536,6 +540,7 @@ class JobRunner:
                     prompt_tokens     = token_usage["prompt_tokens"],
                     completion_tokens = token_usage["completion_tokens"],
                     total_tokens      = token_usage["total_tokens"],
+                    tokens_by_model   = tokens_by_model,
                     completion_reason = f"{type(pipeline_error).__name__}: {pipeline_error}"[:500],
                 )
                 self._progress_callback(
@@ -587,6 +592,7 @@ class JobRunner:
                     prompt_tokens     = token_usage["prompt_tokens"],
                     completion_tokens = token_usage["completion_tokens"],
                     total_tokens      = token_usage["total_tokens"],
+                    tokens_by_model   = tokens_by_model,
                     completion_reason = completion_reason[:500] or None,
                     progress_percent  = progress_percent,
                 )

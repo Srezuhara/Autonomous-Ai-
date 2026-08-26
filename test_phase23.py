@@ -12,10 +12,18 @@ rather than about behaviour.
 
 Run: python test_phase23.py
 """
+import json
 import os
+import sqlite3
 import sys
 import threading
 import time
+from datetime import datetime
+
+# Importing llm_client boots the token ledger, which now seeds itself from the
+# platform database. That is right in production and wrong here: this suite must
+# leave the real quota record exactly as it found it (see [15]).
+os.environ["GROQ_LEDGER_SEED"] = "0"
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -818,6 +826,220 @@ check("the redundant app.py is still dropped when main.py defines the entry",
       "app.py" not in kept_dup and "main.py" in kept_dup, f"kept={sorted(kept_dup)}")
 
 
+# ── 17. Seeding the ledger from finished builds ───────────────────────────────
+# The ledger only counted calls it watched happen, so a restart made every token
+# spent before it invisible: it read gpt-oss-20b at 3.6% while Groq's own counter
+# said 99.9%. A gauge that under-reports is worse than no gauge, because it is
+# believed. Seeding rebuilds the missing spend from the `projects` rows.
+print("\n[17] the ledger is seeded from builds it never watched")
+
+_now = time.time()
+
+
+def _row(build_id, tokens, ago_hours, by_model=None):
+    when = datetime.utcfromtimestamp(_now - ago_hours * 3600).isoformat()
+    return {
+        "build_id": build_id,
+        "total_tokens": tokens,
+        "created_at": when,
+        "completed_at": when,
+        "tokens_by_model": json.dumps(by_model) if by_model else None,
+    }
+
+
+llm_client.reset_daily_usage()
+seeded = llm_client.seed_ledger_from_history(
+    [_row("b-recent", 30_000, 2,
+          {"openai/gpt-oss-120b": 25_000, "openai/gpt-oss-20b": 5_000})],
+    now=_now,
+)
+usage = llm_client.get_daily_usage()["models"]
+check("a build the ledger never saw is counted after seeding",
+      seeded["builds_seeded"] == 1 and seeded["tokens_seeded"] == 30_000,
+      f"seeded={seeded}")
+check("the recorded per-model split is used verbatim, not estimated",
+      usage["openai/gpt-oss-120b"]["tokens_used"] == 25_000
+      and usage["openai/gpt-oss-20b"]["tokens_used"] == 5_000,
+      f"usage={usage}")
+check("seeded spend is reported as seeded, so the estimate is visible",
+      usage["openai/gpt-oss-120b"]["seeded_tokens"] == 25_000)
+
+# Seeding runs on every boot, and the server restarts constantly. Running it
+# twice must not spend the budget twice.
+again = llm_client.seed_ledger_from_history([_row("b-recent", 30_000, 2)], now=_now)
+after = llm_client.get_daily_usage()["models"]
+check("seeding the same build again adds nothing",
+      again["builds_seeded"] == 0
+      and after["openai/gpt-oss-120b"]["tokens_used"] == 25_000,
+      f"again={again}")
+
+# …and it must survive the restart it exists for.
+llm_client._ledger, llm_client._ledger_covered = [], {}
+llm_client._ledger_load()
+llm_client.seed_ledger_from_history([_row("b-recent", 30_000, 2)], now=_now)
+check("the covered-builds record survives a restart, so seeding stays idempotent",
+      llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
+      == 25_000,
+      f"usage={llm_client.get_daily_usage()['models']}")
+
+# A build this process watched live is already in the ledger call by call.
+llm_client.reset_daily_usage()
+llm_client._current_build_id.value = "b-live"
+llm_client._add_tokens(6_000, 2_000, "openai/gpt-oss-120b")
+live_seed = llm_client.seed_ledger_from_history([_row("b-live", 8_000, 0.1)], now=_now)
+check("a build watched live is not seeded on top of itself",
+      live_seed["builds_seeded"] == 0
+      and llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
+      == 8_000,
+      f"live_seed={live_seed}")
+llm_client._current_build_id.value = None
+
+# The window is the whole point: yesterday's spend is not today's budget.
+llm_client.reset_daily_usage()
+old_seed = llm_client.seed_ledger_from_history([_row("b-old", 99_000, 30)], now=_now)
+check("a build older than the 24h window is not seeded",
+      old_seed["builds_seeded"] == 0
+      and llm_client.get_daily_usage()["models"] == {},
+      f"old_seed={old_seed}")
+
+# Rows written before `tokens_by_model` existed carry no split. Half each is an
+# estimate, and it is labelled as one rather than silently presented as measured.
+llm_client.reset_daily_usage()
+llm_client.seed_ledger_from_history([_row("b-legacy", 90_001, 3)], now=_now)
+legacy = llm_client.get_daily_usage()["models"]
+check("a row with no split is divided across both configured models",
+      legacy["openai/gpt-oss-120b"]["tokens_used"]
+      + legacy["openai/gpt-oss-20b"]["tokens_used"] == 90_001,
+      f"legacy={legacy}")
+check("…and the odd token is not lost to integer division",
+      abs(legacy["openai/gpt-oss-120b"]["tokens_used"]
+          - legacy["openai/gpt-oss-20b"]["tokens_used"]) == 1)
+check("…and every token of it is marked as an estimate",
+      legacy["openai/gpt-oss-120b"]["seeded_tokens"]
+      == legacy["openai/gpt-oss-120b"]["tokens_used"])
+
+# Junk rows must not stop a boot: seeding runs at import time.
+llm_client.reset_daily_usage()
+junk = llm_client.seed_ledger_from_history(
+    [
+        {"build_id": "b-zero", "total_tokens": 0, "completed_at": None},
+        {"build_id": "", "total_tokens": 5_000, "completed_at": None},
+        {"build_id": "b-nodate", "total_tokens": 5_000,
+         "created_at": "not-a-date", "completed_at": ""},
+        {"build_id": "b-future", "total_tokens": 5_000,
+         "completed_at": datetime.utcfromtimestamp(_now + 9_999).isoformat()},
+    ],
+    now=_now,
+)
+check("rows with no tokens, no id, no usable date or a future date are skipped",
+      junk["builds_seeded"] == 0 and llm_client.get_daily_usage()["models"] == {},
+      f"junk={junk}")
+
+# A format-1 ledger (a bare list, no build attribution) is still on disk in every
+# checkout that ran the previous version. Its entries are real spend already
+# counted, so a build that finished while it was recording must not be seeded on
+# top of them.
+llm_client.reset_daily_usage()
+llm_client._LEDGER_PATH.write_text(
+    json.dumps([[_now - 3600, "openai/gpt-oss-120b", 40_000]]), encoding="utf-8"
+)
+llm_client._ledger, llm_client._ledger_covered = [], {}
+llm_client._ledger_load()
+check("a format-1 ledger file still loads",
+      llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
+      == 40_000)
+check("…and its unlabelled entries count as observed, not estimated",
+      llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["seeded_tokens"]
+      == 0)
+blind = llm_client.seed_ledger_from_history([_row("b-inspan", 40_000, 1)], now=_now)
+check("a build inside a format-1 ledger's recorded span is not double-counted",
+      blind["builds_seeded"] == 0
+      and llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
+      == 40_000,
+      f"blind={blind}")
+
+# The reader itself is best-effort: no database, or one without the column, must
+# degrade to "nothing to seed" rather than take the process down.
+_saved_output_dir = os.environ.get("OUTPUT_DIR")
+_seed_dir = Path(config.OUTPUT_DIR) / "_phase23_seed_db"
+_seed_dir.mkdir(parents=True, exist_ok=True)
+os.environ["OUTPUT_DIR"] = str(_seed_dir)
+try:
+    check("a missing platform.db yields no rows instead of an exception",
+          llm_client._ledger_history_rows() == [])
+
+    _db = _seed_dir / "platform.db"
+    _conn = sqlite3.connect(str(_db))
+    _conn.execute("CREATE TABLE projects (build_id TEXT, total_tokens INTEGER)")
+    _conn.commit()
+    _conn.close()
+    check("a projects table without the new column still reads",
+          llm_client._ledger_history_rows() == [])
+
+    # The real schema, written by the real migration.
+    _db.unlink()
+    import api_platform.database as _db_mod
+    _saved_db_path = _db_mod.DB_PATH
+    _db_mod.DB_PATH = _db
+    try:
+        _db_mod.initialize_db()
+        _db_mod.create_project("b-schema", "a prompt")
+        _db_mod.update_project(
+            "b-schema",
+            status="done",
+            completed_at=datetime.utcnow().isoformat(),
+            total_tokens=12_345,
+            tokens_by_model=json.dumps({"openai/gpt-oss-120b": 12_345}),
+        )
+        stored = _db_mod.get_project("b-schema")
+        check("the migration adds tokens_by_model to an existing database",
+              "tokens_by_model" in stored, f"keys={sorted(stored)}")
+        check("a build's per-model split round-trips through the database",
+              json.loads(stored["tokens_by_model"])
+              == {"openai/gpt-oss-120b": 12_345})
+        check("list_projects() returns the split too, so /health can show it",
+              "tokens_by_model" in _db_mod.list_projects(limit=1)[0])
+
+        rows = llm_client._ledger_history_rows()
+        check("the ledger reads that build straight out of the database",
+              any(r["build_id"] == "b-schema" and r["total_tokens"] == 12_345
+                  for r in rows),
+              f"rows={rows}")
+
+        llm_client.reset_daily_usage()
+        llm_client.seed_ledger_from_history(now=_now)
+        from_db = llm_client.get_daily_usage()["models"]
+        check("…and seeds it with the split the build actually recorded",
+              from_db.get("openai/gpt-oss-120b", {}).get("tokens_used") == 12_345
+              and "openai/gpt-oss-20b" not in from_db,
+              f"from_db={from_db}")
+    finally:
+        _db_mod.DB_PATH = _saved_db_path
+finally:
+    if _saved_output_dir is None:
+        os.environ.pop("OUTPUT_DIR", None)
+    else:
+        os.environ["OUTPUT_DIR"] = _saved_output_dir
+    shutil.rmtree(_seed_dir, ignore_errors=True)
+
+# The per-build split is what makes future seeding exact rather than an estimate,
+# so the pipeline has to actually record it.
+llm_client.reset_daily_usage()
+llm_client.set_current_build_id("b-split")
+llm_client._add_tokens(700, 300, "openai/gpt-oss-120b")
+llm_client._add_tokens(100, 100, "openai/gpt-oss-20b")
+_usage = llm_client.get_and_reset_token_usage("b-split")
+check("per-build usage now carries the per-model split",
+      _usage["by_model"] == {"openai/gpt-oss-120b": 1000, "openai/gpt-oss-20b": 200},
+      f"by_model={_usage.get('by_model')}")
+check("…without disturbing the totals the API already reports",
+      _usage["total_tokens"] == 1200 and _usage["prompt_tokens"] == 800)
+check("an unknown build still returns a usable, empty shape",
+      llm_client.get_and_reset_token_usage("nope")["by_model"] == {})
+llm_client._current_build_id.value = None
+llm_client.reset_daily_usage()
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
@@ -827,6 +1049,7 @@ except Exception:
     pass
 llm_client._LEDGER_PATH = _REAL_LEDGER_PATH
 llm_client._ledger = []
+llm_client._ledger_covered = {}
 llm_client._ledger_load()
 
 

@@ -86,6 +86,10 @@ def initialize_db():
         # before remediation/quota interception took over.
         ("completion_reason", "TEXT"),
         ("progress_percent",  "REAL"),
+        # Phase 23: JSON {model: tokens}. The totals above cannot say which
+        # model's daily quota a build spent, which is what the token ledger
+        # needs to rebuild itself after a restart instead of estimating.
+        ("tokens_by_model",   "TEXT"),
     ]
     with get_connection() as conn:
         for col_name, col_def in new_columns:
@@ -144,7 +148,7 @@ def list_projects(limit: int = 100, offset: int = 0) -> list[dict]:
                       debug_score, review_score, test_score, output_path,
                       created_at, completed_at, duration_seconds,
                       prompt_tokens, completion_tokens, total_tokens,
-                      completion_reason, progress_percent
+                      completion_reason, progress_percent, tokens_by_model
                FROM projects ORDER BY created_at DESC LIMIT ? OFFSET ?""",
             (limit, offset),
         ).fetchall()

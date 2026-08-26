@@ -44,7 +44,7 @@ import threading
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -457,6 +457,9 @@ def set_current_build_id(build_id: str):
         if build_id not in _token_store:
             _token_store[build_id] = {
                 "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                # Per-model split. Persisted with the build so the daily ledger
+                # can be rebuilt exactly after a restart instead of estimated.
+                "by_model": {},
             }
 
 
@@ -473,18 +476,23 @@ def _add_tokens(prompt_tokens: int, completion_tokens: int, model: str = ""):
     with _token_lock:
         rec = _token_store.setdefault(
             bid,
-            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+             "by_model": {}},
         )
         rec["prompt_tokens"]     += prompt_tokens
         rec["completion_tokens"] += completion_tokens
         rec["total_tokens"]      += prompt_tokens + completion_tokens
+        if model:
+            by_model = rec.setdefault("by_model", {})
+            by_model[model] = by_model.get(model, 0) + prompt_tokens + completion_tokens
 
 
 def get_and_reset_token_usage(build_id: str) -> dict:
     with _token_lock:
         return _token_store.pop(
             build_id,
-            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+             "by_model": {}},
         )
 
 
@@ -506,34 +514,58 @@ def get_and_reset_token_usage(build_id: str) -> dict:
 GROQ_DAILY_TOKEN_LIMIT = int(os.getenv("GROQ_DAILY_TOKEN_LIMIT", "200000"))
 _LEDGER_WINDOW_SECONDS = 24 * 3600
 _LEDGER_PATH = Path(os.getenv("OUTPUT_DIR", "generated_projects")) / "token_ledger.json"
+_LEDGER_FORMAT = 2
 
-# (timestamp, model, total_tokens) — pruned to the rolling window on every touch.
+# Build rows are written by another process with its own clock, and a build that
+# has only just finished must not read as "the future".
+_SEED_CLOCK_SKEW_SECONDS = 300
+
+# Entries are [timestamp, model, total_tokens, source] where source is "live"
+# (this or an earlier process watched the call happen) or "seeded"
+# (reconstructed from a finished build's DB row — see `seed_ledger_from_history`).
+# Legacy 3-element entries are read as "live". Pruned to the window on every touch.
 _ledger: list[list] = []
+
+# build_id -> the timestamp its spend is attributed to. This is what makes
+# seeding idempotent: a build the ledger already accounts for, live or seeded,
+# must never be added a second time. Pruned with the window.
+_ledger_covered: dict[str, float] = {}
 _ledger_lock = threading.Lock()
 
 
 def _ledger_prune(now: Optional[float] = None) -> None:
     """Drop entries that have aged out of the window. Caller holds the lock."""
-    global _ledger
+    global _ledger, _ledger_covered
     cutoff = (now if now is not None else time.time()) - _LEDGER_WINDOW_SECONDS
     _ledger = [e for e in _ledger if e[0] >= cutoff]
+    _ledger_covered = {b: ts for b, ts in _ledger_covered.items() if ts >= cutoff}
 
 
 def _ledger_load() -> None:
     """Restore the ledger across restarts — this workflow restarts a lot."""
-    global _ledger
+    global _ledger, _ledger_covered
+    _ledger, _ledger_covered = [], {}
     try:
         import json
-        if _LEDGER_PATH.is_file():
-            raw = json.loads(_LEDGER_PATH.read_text(encoding="utf-8"))
-            if isinstance(raw, list):
-                _ledger = [e for e in raw if isinstance(e, list) and len(e) == 3]
-                _ledger_prune()
+        if not _LEDGER_PATH.is_file():
+            return
+        raw = json.loads(_LEDGER_PATH.read_text(encoding="utf-8"))
+        # Format 1 was a bare list of entries with no build attribution.
+        entries = raw if isinstance(raw, list) else raw.get("entries", [])
+        _ledger = [
+            list(e) for e in entries
+            if isinstance(e, (list, tuple)) and len(e) in (3, 4)
+        ]
+        if isinstance(raw, dict) and isinstance(raw.get("covered_builds"), dict):
+            _ledger_covered = {
+                str(b): float(ts) for b, ts in raw["covered_builds"].items()
+            }
+        _ledger_prune()
     except Exception as e:
         # A corrupt ledger must never stop the app from making calls; the worst
         # case is that we under-count and hit the wall as blindly as before.
         logger.warning(f"Token ledger could not be read ({e}); starting empty.")
-        _ledger = []
+        _ledger, _ledger_covered = [], {}
 
 
 def _ledger_save() -> None:
@@ -541,7 +573,14 @@ def _ledger_save() -> None:
     try:
         import json
         _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _LEDGER_PATH.write_text(json.dumps(_ledger), encoding="utf-8")
+        _LEDGER_PATH.write_text(
+            json.dumps({
+                "version": _LEDGER_FORMAT,
+                "entries": _ledger,
+                "covered_builds": _ledger_covered,
+            }),
+            encoding="utf-8",
+        )
     except Exception as e:
         logger.debug(f"Token ledger could not be written: {e}")
 
@@ -549,11 +588,173 @@ def _ledger_save() -> None:
 def _ledger_record(model: str, total_tokens: int) -> None:
     if not model or total_tokens <= 0:
         return
+    build_id = getattr(_current_build_id, "value", None)
     with _ledger_lock:
         now = time.time()
-        _ledger.append([now, model, int(total_tokens)])
+        _ledger.append([now, model, int(total_tokens), "live"])
+        if build_id:
+            # Watched live, so `seed_ledger_from_history` must leave this build
+            # alone when its DB row shows up after a restart.
+            _ledger_covered[str(build_id)] = now
         _ledger_prune(now)
         _ledger_save()
+
+
+# ── Seeding the ledger from finished builds ───────────────────────────────────
+#
+# The ledger only ever knew about calls it watched happen. Spend from before it
+# existed, from a process that wrote its DB row and exited, or from a run whose
+# ledger file was cleared, was invisible: it read `gpt-oss-20b` at 3.6% while
+# Groq's own counter said 99.9% — a gauge that errs in the one direction that
+# matters. Seeding closes the gap by reconstructing spend from the `projects`
+# rows inside the window.
+#
+# Attribution: a build row records totals, not a per-model split. Builds from
+# here on store one (`tokens_by_model`) and it is used verbatim. Older rows have
+# nothing to read, so the total is split evenly across the configured models and
+# marked `seeded`; `get_daily_usage` reports how much of each model's figure
+# came from an estimate rather than an observation.
+
+def _ledger_history_rows() -> list[dict]:
+    """Finished builds from the platform database. Read-only and best-effort."""
+    try:
+        import sqlite3 as _sqlite3
+        db_path = Path(os.getenv("OUTPUT_DIR", "generated_projects")) / "platform.db"
+        if not db_path.is_file():
+            return []
+        conn = _sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        try:
+            conn.row_factory = _sqlite3.Row
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
+            if not {"build_id", "total_tokens"} <= cols:
+                return []
+            selected = ["build_id", "total_tokens", "created_at", "completed_at"]
+            if "tokens_by_model" in cols:
+                selected.append("tokens_by_model")
+            rows = conn.execute(
+                f"SELECT {', '.join(selected)} FROM projects "
+                f"WHERE total_tokens > 0 ORDER BY created_at DESC LIMIT 200"
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Token ledger could not read build history: {e}")
+        return []
+
+
+def _row_timestamp(value) -> Optional[float]:
+    """One DB timestamp as an epoch. They are naive UTC (`utcnow()`)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _row_epoch(row: dict) -> Optional[float]:
+    """When a build's spend happened — its end, or its start if it has no end."""
+    for field in ("completed_at", "created_at"):
+        ts = _row_timestamp(row.get(field))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _row_span(row: dict) -> tuple:
+    """The interval a build's calls fall inside, as (start, end)."""
+    start = _row_timestamp(row.get("created_at"))
+    end = _row_timestamp(row.get("completed_at"))
+    if start is None:
+        start = end
+    if end is None:
+        end = start
+    return start, end
+
+
+def _row_split(row: dict, total: int) -> dict:
+    """Per-model tokens for one build row."""
+    raw = row.get("tokens_by_model")
+    if raw:
+        try:
+            import json
+            parsed = raw if isinstance(raw, dict) else json.loads(raw)
+            split = {
+                str(m): int(t) for m, t in parsed.items()
+                if str(m) and int(t) > 0
+            }
+            if split:
+                return split
+        except Exception:
+            pass  # unreadable split — fall through to the even estimate
+    models = [_HEAVY_MODEL] if _FAST_MODEL == _HEAVY_MODEL else [_HEAVY_MODEL, _FAST_MODEL]
+    share, remainder = divmod(total, len(models))
+    split = {m: share for m in models}
+    split[models[0]] += remainder
+    return {m: t for m, t in split.items() if t > 0}
+
+
+def seed_ledger_from_history(
+    rows: Optional[list] = None, now: Optional[float] = None
+) -> dict:
+    """
+    Add spend from builds the ledger never watched happen. Idempotent: a build
+    already covered — live or previously seeded — is skipped.
+    """
+    if rows is None:
+        rows = _ledger_history_rows()
+    now = now if now is not None else time.time()
+    cutoff = now - _LEDGER_WINDOW_SECONDS
+
+    seeded_builds = 0
+    seeded_tokens = 0
+    with _ledger_lock:
+        _ledger_prune(now)
+        # A format-1 ledger carries entries with no build attribution, and every
+        # checkout that ran the previous version has one on disk. Those entries
+        # are spend already counted, so a build whose own run window contains
+        # live entries was watched after all — seeding it would double-count.
+        live_entries = sorted(e[0] for e in _ledger if len(e) < 4 or e[3] == "live")
+
+        for row in rows:
+            build_id = str(row.get("build_id") or "")
+            total = int(row.get("total_tokens") or 0)
+            if not build_id or total <= 0 or build_id in _ledger_covered:
+                continue
+            ts = _row_epoch(row)
+            # A build that finished a moment ago reads as "the future" under any
+            # clock skew between the writer and this process, so allow a margin
+            # and attribute the spend to now rather than dropping it.
+            if ts is None or ts < cutoff or ts > now + _SEED_CLOCK_SKEW_SECONDS:
+                continue
+            ts = min(ts, now)
+            start, end = _row_span(row)
+            start = (start if start is not None else ts) - _SEED_CLOCK_SKEW_SECONDS
+            end = (end if end is not None else ts) + _SEED_CLOCK_SKEW_SECONDS
+            if any(start <= e <= end for e in live_entries):
+                _ledger_covered[build_id] = ts   # already counted, just unlabelled
+                continue
+            for model, tokens in _row_split(row, total).items():
+                _ledger.append([ts, model, int(tokens), "seeded"])
+            _ledger_covered[build_id] = ts
+            seeded_builds += 1
+            seeded_tokens += total
+
+        if seeded_builds:
+            _ledger.sort(key=lambda e: e[0])
+        _ledger_save()
+
+    if seeded_builds:
+        logger.info(
+            f"📒 Token ledger seeded from history: {seeded_builds} build(s), "
+            f"{seeded_tokens:,} tokens inside the "
+            f"{_LEDGER_WINDOW_SECONDS // 3600}h window"
+        )
+    return {"builds_seeded": seeded_builds, "tokens_seeded": seeded_tokens}
 
 
 def get_daily_usage() -> dict:
@@ -561,21 +762,28 @@ def get_daily_usage() -> dict:
     Tokens spent per model inside the rolling 24h window, with what is left.
 
     This is the number there was previously no way to obtain. It is an estimate
-    of Groq's own counter, not a reading of it: it counts only what this process
-    has spent, so anything else using the same organisation's keys is invisible
-    to it.
+    of Groq's own counter, not a reading of it: it counts what this process has
+    spent plus what `seed_ledger_from_history` could reconstruct from finished
+    builds, so anything else spending the same organisation's quota — another
+    machine, another checkout — remains invisible to it.
     """
     with _ledger_lock:
         _ledger_prune()
         entries = list(_ledger)
 
-    per_model: dict[str, dict] = {}
-    for ts, model, tokens in entries:
+    per_model: dict = {}
+    for entry in entries:
+        ts, model, tokens = entry[0], entry[1], entry[2]
+        source = entry[3] if len(entry) > 3 else "live"
         rec = per_model.setdefault(
-            model, {"tokens_used": 0, "calls": 0, "oldest_entry_epoch": ts}
+            model,
+            {"tokens_used": 0, "calls": 0, "seeded_tokens": 0,
+             "oldest_entry_epoch": ts},
         )
         rec["tokens_used"] += tokens
         rec["calls"] += 1
+        if source == "seeded":
+            rec["seeded_tokens"] += tokens
         rec["oldest_entry_epoch"] = min(rec["oldest_entry_epoch"], ts)
 
     for model, rec in per_model.items():
@@ -599,13 +807,16 @@ def get_daily_usage() -> dict:
 
 def reset_daily_usage() -> None:
     """Clear the ledger (tests, and the admin reset path)."""
-    global _ledger
+    global _ledger, _ledger_covered
     with _ledger_lock:
         _ledger = []
+        _ledger_covered = {}
         _ledger_save()
 
 
 _ledger_load()
+if os.getenv("GROQ_LEDGER_SEED", "1").lower() not in ("0", "false", "no"):
+    seed_ledger_from_history()
 
 
 # ── Key helpers (v3.6.0: model-scoped) ────────────────────────────────────────
