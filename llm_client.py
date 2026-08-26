@@ -746,7 +746,11 @@ def seed_ledger_from_history(
 
         if seeded_builds:
             _ledger.sort(key=lambda e: e[0])
-        _ledger_save()
+            # Only when something changed: the file is shared with any other
+            # process using this checkout, and each save rewrites the whole
+            # thing, so a pointless write can drop a concurrent server's
+            # freshly recorded calls.
+            _ledger_save()
 
     if seeded_builds:
         logger.info(

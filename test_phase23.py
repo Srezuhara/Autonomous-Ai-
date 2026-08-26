@@ -1120,6 +1120,86 @@ else:
           f"status={_escape.status_code}")
 
 
+# ── 19. The handoff's key table must not read as a contradiction ──────────────
+# It rendered "Keys still usable | 8" directly above "Keys exhausted (any
+# model) | 8". Both were true — usable on 120b, exhausted on 20b — and the
+# reader of a handoff document is someone trying to work out whether they can
+# re-run the build, which that table cannot answer. It also never mentioned the
+# daily token budget, which is the thing that actually ran out: all 8 keys share
+# one pool per model, so "8 keys available" and "no budget left" coexist.
+print("\n[19] the handoff quota table says which model it means")
+
+from agents.documenter import Documenter  # noqa: E402
+
+_doc = Documenter.__new__(Documenter)
+
+# The exact live situation that produced the contradiction.
+_snapshot = {
+    "heavy_model": "openai/gpt-oss-120b",
+    "fast_model": "openai/gpt-oss-20b",
+    "total_keys": 8,
+    "available_keys": 8,
+    "exhausted_keys": 8,
+    "exhausted_heavy": 0,
+    "exhausted_fast": 8,
+    "fully_exhausted": 0,
+    "heavy_exhausted": False,
+    "fast_exhausted": True,
+    "daily_usage": {
+        "window_hours": 24,
+        "limit_per_model": 200_000,
+        "models": {
+            "openai/gpt-oss-20b": {
+                "tokens_used": 199_306, "percent_used": 99.7, "limit": 200_000,
+                "tokens_remaining": 694, "seeded_tokens": 60_000,
+                "window_resets_in_seconds": 1080, "calls": 41,
+            },
+            "openai/gpt-oss-120b": {
+                "tokens_used": 40_000, "percent_used": 20.0, "limit": 200_000,
+                "tokens_remaining": 160_000, "seeded_tokens": 0,
+                "window_resets_in_seconds": 3600, "calls": 12,
+            },
+        },
+    },
+    "reset_hint": "Groq free-tier daily quotas reset at 00:00 UTC.",
+}
+_table = _doc._format_quota_block(_snapshot)
+
+check("the unqualified 'keys still usable' row is gone",
+      "Keys still usable" not in _table)
+check("…as is the 'exhausted (any model)' row it contradicted",
+      "Keys exhausted (any model)" not in _table)
+check("the count that matters — keys with nothing left — is stated",
+      "Keys with no model left | 0" in _table, _table)
+check("spent keys are reported against the model they were spent on",
+      "Keys spent on `openai/gpt-oss-20b` | 8" in _table
+      and "Keys spent on `openai/gpt-oss-120b` | 0" in _table, _table)
+check("a model with no keys left says so instead of 'exhausted'",
+      "no keys left" in _table and "| available |" in _table, _table)
+check("the reader is told quota is counted per key and per model",
+      "per key and per model" in _table)
+
+check("the daily budget — the thing that actually ran out — is in the table",
+      "Daily token budget" in _table, _table)
+check("the exhausted model's own numbers are shown",
+      "199,306" in _table and "(99.7%)" in _table, _table)
+check("…including how long until that budget frees up",
+      "18 min" in _table, _table)
+check("a figure that is partly reconstructed is marked as an estimate",
+      "*(part estimated)*" in _table)
+check("…and a fully observed figure is not",
+      _table.count("*(part estimated)*") == 1, _table)
+check("the reset hint still closes the block",
+      _table.rstrip().endswith("reset at 00:00 UTC."))
+
+# A build that never touched the quota path has no snapshot at all.
+check("no snapshot renders nothing, not an empty table",
+      _doc._format_quota_block({}) == "")
+check("a snapshot with no daily figures still renders the key table",
+      "Daily token budget" not in _doc._format_quota_block(
+          {k: v for k, v in _snapshot.items() if k != "daily_usage"}))
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

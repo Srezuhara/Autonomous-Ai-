@@ -474,22 +474,64 @@ everything downstream of it.
     def _format_quota_block(self, snapshot: dict) -> str:
         if not snapshot:
             return ""
+        # Quotas are per key AND per model, so a key can be spent on one model
+        # and fine on the other. This table used to report that as
+        # "Keys still usable | 8" beside "Keys exhausted (any model) | 8" —
+        # both true, and unreadable. Every row now names its model.
+        heavy = snapshot.get("heavy_model", "—")
+        fast = snapshot.get("fast_model", "—")
         lines = [
             "### 🔑 API key status at the time of the interruption",
+            "",
+            "Groq counts quota **per key and per model**, so a key spent on "
+            "one model is still usable on the other.",
             "",
             "| Metric | Value |",
             "|--------|-------|",
             f"| Total keys | {snapshot.get('total_keys', '—')} |",
-            f"| Keys still usable | {snapshot.get('available_keys', '—')} |",
-            f"| Keys exhausted (any model) | {snapshot.get('exhausted_keys', '—')} |",
-            f"| Heavy model (`{snapshot.get('heavy_model', '—')}`) | "
-            f"{'exhausted' if snapshot.get('heavy_exhausted') else 'available'} |",
-            f"| Fast model (`{snapshot.get('fast_model', '—')}`) | "
-            f"{'exhausted' if snapshot.get('fast_exhausted') else 'available'} |",
+            f"| Keys with at least one model left | {snapshot.get('available_keys', '—')} |",
+            f"| Keys with no model left | {snapshot.get('fully_exhausted', '—')} |",
+            f"| Keys spent on `{heavy}` | {snapshot.get('exhausted_heavy', '—')} |",
+            f"| Keys spent on `{fast}` | {snapshot.get('exhausted_fast', '—')} |",
+            f"| Heavy model (`{heavy}`) | "
+            f"{'no keys left' if snapshot.get('heavy_exhausted') else 'available'} |",
+            f"| Fast model (`{fast}`) | "
+            f"{'no keys left' if snapshot.get('fast_exhausted') else 'available'} |",
         ]
+        lines += self._format_daily_usage_rows(snapshot.get("daily_usage") or {})
         if snapshot.get("reset_hint"):
             lines += ["", f"> {snapshot['reset_hint']}"]
         return "\n".join(lines)
+
+    def _format_daily_usage_rows(self, daily: dict) -> list:
+        """
+        The daily token budget, which is what actually ran out.
+
+        Key counts say nothing about it: all keys share one per-model daily
+        pool, so "8 keys available" and "no budget left" are true at once.
+        """
+        models = daily.get("models") or {}
+        if not models:
+            return []
+        window = daily.get("window_hours", 24)
+        rows = [
+            "",
+            f"**Daily token budget** (rolling {window}h, per model):",
+            "",
+            "| Model | Used | Limit | Left | Frees up in |",
+            "|-------|------|-------|------|-------------|",
+        ]
+        for model, rec in sorted(models.items()):
+            resets = rec.get("window_resets_in_seconds")
+            when = "—" if resets is None else f"{int(resets) // 60} min"
+            estimated = " *(part estimated)*" if rec.get("seeded_tokens") else ""
+            rows.append(
+                f"| `{model}` | {rec.get('tokens_used', 0):,}"
+                f" ({rec.get('percent_used', 0)}%){estimated}"
+                f" | {rec.get('limit', 0):,} | {rec.get('tokens_remaining', 0):,}"
+                f" | {when} |"
+            )
+        return rows
 
     def _format_remediation_block(self, remediation: Any) -> str:
         if remediation is None or not getattr(remediation, "ran", False):
