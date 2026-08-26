@@ -38,6 +38,7 @@ import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from api_platform.database import (
@@ -45,6 +46,7 @@ from api_platform.database import (
     create_project,
     get_project,
     update_project,
+    add_project_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,6 +229,53 @@ def _safe_arch(result, build_id: str) -> dict:
 
 
 # ── JobRunner ─────────────────────────────────────────────────────────────────
+
+# Files a build produced, recorded so `GET /projects/{id}` can list them.
+# `add_project_file` has existed since Phase 14 and nothing ever called it: the
+# `files` table was empty for all 58 builds in the database, so every project
+# detail page reported `file_count: 0` while its ZIP held eighteen files.
+_FILES_SKIPPED_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules",
+                       ".pytest_cache", ".mypy_cache", "dist", "build"}
+_FILES_MAX_RECORDED = 500
+
+
+def _record_project_files(build_id: str, output_path: Optional[str]) -> int:
+    """
+    Walk a finished build's output directory into the `files` table.
+
+    Best-effort by design: a build that produced real code must not be marked
+    failed because listing its files went wrong.
+    """
+    if not output_path:
+        return 0
+    root = Path(output_path)
+    if not root.is_dir():
+        return 0
+    recorded = 0
+    try:
+        for path in sorted(root.rglob("*")):
+            if recorded >= _FILES_MAX_RECORDED:
+                logger.warning(
+                    f"[{build_id[:8]}] More than {_FILES_MAX_RECORDED} files — "
+                    f"recording stopped there"
+                )
+                break
+            if not path.is_file():
+                continue
+            if any(part in _FILES_SKIPPED_DIRS for part in path.parts):
+                continue
+            try:
+                relative = path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            add_project_file(build_id, relative, path.suffix.lstrip(".") or None)
+            recorded += 1
+    except Exception as e:
+        logger.warning(f"[{build_id[:8]}] Could not record project files: {e}")
+    if recorded:
+        logger.info(f"[{build_id[:8]}] Recorded {recorded} generated file(s)")
+    return recorded
+
 
 class JobRunner:
     def __init__(self, max_workers: int = 3):
@@ -596,6 +645,7 @@ class JobRunner:
                     completion_reason = completion_reason[:500] or None,
                     progress_percent  = progress_percent,
                 )
+                _record_project_files(build_id, output_path)
 
                 if final_status == "done_with_context":
                     logger.warning(

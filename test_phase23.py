@@ -1200,6 +1200,64 @@ check("a snapshot with no daily figures still renders the key table",
           {k: v for k, v in _snapshot.items() if k != "daily_usage"}))
 
 
+# ── 20. A finished build must record the files it produced ────────────────────
+# `add_project_file` has existed since Phase 14 and nothing ever called it. The
+# `files` table was empty for all 58 builds in the database, so every project
+# detail page reported `file_count: 0` and an empty file list while the build's
+# ZIP held eighteen files. Nothing failed; the information simply was not there.
+print("\n[20] a finished build records its files")
+
+from api_platform.runner import _record_project_files  # noqa: E402
+
+_files_root = Path(config.OUTPUT_DIR) / "_phase23_files_build"
+shutil.rmtree(_files_root, ignore_errors=True)
+(_files_root / "backend").mkdir(parents=True, exist_ok=True)
+(_files_root / "backend" / "__pycache__").mkdir(parents=True, exist_ok=True)
+(_files_root / "node_modules" / "dep").mkdir(parents=True, exist_ok=True)
+(_files_root / "backend" / "main.py").write_text("app = 1\n", encoding="utf-8")
+(_files_root / "backend" / "models.py").write_text("x = 1\n", encoding="utf-8")
+(_files_root / "README.md").write_text("# hi\n", encoding="utf-8")
+(_files_root / "backend" / "__pycache__" / "main.pyc").write_bytes(b"\x00")
+(_files_root / "node_modules" / "dep" / "index.js").write_text("1\n", encoding="utf-8")
+
+import api_platform.database as _fdb  # noqa: E402
+
+_files_db = Path(config.OUTPUT_DIR) / "_phase23_files.db"
+_files_db.unlink(missing_ok=True)
+_saved_files_db_path = _fdb.DB_PATH
+_fdb.DB_PATH = _files_db
+try:
+    _fdb.initialize_db()
+    _fdb.create_project("b-files", "a prompt")
+    _count = _record_project_files("b-files", str(_files_root))
+    _recorded = {f["file_path"] for f in _fdb.get_project_files("b-files")}
+
+    check("the build's files are recorded, not left to an empty table",
+          _count == 3 and len(_recorded) == 3, f"count={_count} files={_recorded}")
+    check("paths are stored relative to the build root, with forward slashes",
+          _recorded == {"backend/main.py", "backend/models.py", "README.md"},
+          f"recorded={_recorded}")
+    check("build artefacts are not recorded as source",
+          not any("__pycache__" in f or "node_modules" in f for f in _recorded))
+    check("the file type is stored alongside the path",
+          {f["file_type"] for f in _fdb.get_project_files("b-files")} == {"py", "md"},
+          f"types={[f['file_type'] for f in _fdb.get_project_files('b-files')]}")
+    check("the project detail endpoint's count now matches reality",
+          len(_fdb.get_project_files("b-files")) == 3)
+
+    # Recording must never be able to fail a build that produced real code.
+    check("a build with no output path records nothing and does not raise",
+          _record_project_files("b-files", None) == 0)
+    check("a path that is not a directory records nothing and does not raise",
+          _record_project_files("b-files", str(_files_root / "README.md")) == 0)
+    check("a directory that does not exist records nothing and does not raise",
+          _record_project_files("b-files", str(_files_root / "nope")) == 0)
+finally:
+    _fdb.DB_PATH = _saved_files_db_path
+    _files_db.unlink(missing_ok=True)
+    shutil.rmtree(_files_root, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
