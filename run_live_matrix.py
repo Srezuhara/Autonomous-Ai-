@@ -1,0 +1,378 @@
+"""
+Phase 23 A2 — the live build matrix
+====================================
+Four builds of deliberately different shape, run sequentially against a live
+server, with the result of each recorded from the database rather than from
+whatever the API happened to say at the time.
+
+The pass criterion was fixed before any build ran (`PHASE23_PLAN.md` A2):
+
+    >= 3 of 4 reach `done` or `done_with_context` with a downloadable ZIP, and
+    every build that boots reports 0 5xx from the runtime smoke test.
+
+Run:
+    venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+    venv/Scripts/python.exe run_live_matrix.py                # all four rows
+    venv/Scripts/python.exe run_live_matrix.py --rows 1,2     # just those
+    venv/Scripts/python.exe run_live_matrix.py --dry-run      # no tokens spent
+
+Budget reality: a build costs roughly 85-98K tokens against 200K per model per
+day, so the whole matrix needs close to a full day's quota on both models. The
+driver reads `/health` before each row and stops rather than starting a build it
+cannot finish — a half-spent build teaches nothing and costs the same.
+"""
+
+import argparse
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+BASE = "http://localhost:8000"
+
+# Enough headroom for one build. Below this, starting a row buys a quota wall
+# rather than a result.
+MIN_TOKENS_TO_START = 70_000
+
+POLL_SECONDS = 15
+BUILD_TIMEOUT_SECONDS = 45 * 60
+
+# The four shapes, and what each one is here to exercise. Row 2 and row 4 have
+# never run: between them they hold every unknown this matrix exists to remove.
+MATRIX = [
+    {
+        "row": 1,
+        "shape": "simple FastAPI + SQLite CRUD",
+        "exercises": "baseline; the runtime smoke test; the entry-point fix",
+        "prompt": (
+            "A simple FastAPI task manager with SQLite. One Task entity: id, "
+            "title, done, created_at. CRUD endpoints to create, list, get, "
+            "update and delete a task."
+        ),
+        "expect_boot": True,
+    },
+    {
+        "row": 2,
+        "shape": "medium FastAPI + JS frontend",
+        "exercises": "frontend_generator, frontend_debugger, dangling-import guard",
+        "prompt": (
+            "A bookmark manager: FastAPI backend with SQLite storing bookmarks "
+            "(id, url, title, tags, created_at) with full CRUD and tag "
+            "filtering, plus a plain HTML/CSS/JavaScript frontend that lists "
+            "bookmarks, adds one through a form and filters by tag."
+        ),
+        "expect_boot": True,
+    },
+    {
+        "row": 3,
+        "shape": "complex / multi-entity",
+        "exercises": "the architecture cap at `complex`; architect variance",
+        "prompt": (
+            "An inventory system with FastAPI and SQLite covering four related "
+            "entities — Supplier, Product, StockMovement and Warehouse — with "
+            "CRUD for each, stock level queries per warehouse and a low-stock "
+            "report endpoint."
+        ),
+        "expect_boot": True,
+    },
+    {
+        "row": 4,
+        "shape": "non-FastAPI (CLI)",
+        "exercises": "the documented blind spot — the smoke test must skip cleanly",
+        "prompt": (
+            "A Python command line tool that renames files in bulk. It takes a "
+            "directory, a match pattern and a replacement, supports a dry-run "
+            "flag and writes an undo log so a rename can be reversed."
+        ),
+        "expect_boot": False,
+    },
+]
+
+
+# ── HTTP ──────────────────────────────────────────────────────────────────────
+
+def _get(path: str, timeout: int = 30):
+    req = urllib.request.Request(f"{BASE}{path}", headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def _post(path: str, body: dict, timeout: int = 60):
+    req = urllib.request.Request(
+        f"{BASE}{path}",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def check_zip(build_id: str) -> dict:
+    """
+    Is the download a real archive?
+
+    The route is `GET /projects/{id}/download`. There is no `/downloads/{id}`,
+    and a wrong path used to come back as the SPA shell with HTTP 200 — so this
+    checks the ZIP magic bytes, never the status code.
+    """
+    url = f"{BASE}/projects/{build_id}/download"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/zip"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            head = r.read(4)
+            rest = r.read()
+            return {
+                "ok": head == b"PK\x03\x04",
+                "status": r.status,
+                "content_type": r.headers.get("content-type", ""),
+                "bytes": len(head) + len(rest),
+            }
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "status": e.code, "content_type": "", "bytes": 0}
+    except Exception as e:
+        return {"ok": False, "status": 0, "content_type": str(e)[:60], "bytes": 0}
+
+
+# ── Quota ─────────────────────────────────────────────────────────────────────
+
+def daily_usage() -> dict:
+    try:
+        health = _get("/health")
+    except Exception as e:
+        print(f"  ! /health unreadable: {e}")
+        return {}
+    llm = health.get("llm") or {}
+    return llm.get("daily_usage") or health.get("daily_usage") or {}
+
+
+def print_quota(label: str) -> dict:
+    usage = daily_usage()
+    models = usage.get("models") or {}
+    if not models:
+        print(f"  {label}: no daily figures available")
+        return models
+    print(f"  {label}:")
+    for model, rec in sorted(models.items()):
+        estimated = (
+            f", {rec['seeded_tokens']:,} reconstructed"
+            if rec.get("seeded_tokens") else ""
+        )
+        print(
+            f"    {model}: {rec.get('tokens_used', 0):,} used "
+            f"({rec.get('percent_used', 0)}%), "
+            f"{rec.get('tokens_remaining', 0):,} left{estimated}"
+        )
+    return models
+
+
+def budget_blocks_start(models: dict) -> str:
+    """The reason not to start a build, or an empty string."""
+    if not models:
+        return ""          # no figures is not evidence of no budget
+    best = max((r.get("tokens_remaining", 0) for r in models.values()), default=0)
+    if best < MIN_TOKENS_TO_START:
+        return (
+            f"no model has {MIN_TOKENS_TO_START:,} tokens left "
+            f"(best is {best:,})"
+        )
+    return ""
+
+
+# ── One row ───────────────────────────────────────────────────────────────────
+
+def run_row(entry: dict) -> dict:
+    print(f"\n{'=' * 70}")
+    print(f"  Row {entry['row']} — {entry['shape']}")
+    print(f"  Exercises: {entry['exercises']}")
+    print(f"{'=' * 70}")
+
+    started = _post("/projects/", {"prompt": entry["prompt"]})
+    build_id = started["build_id"]
+    print(f"  build_id: {build_id}")
+
+    began = time.time()
+    last_step = None
+    while True:
+        time.sleep(POLL_SECONDS)
+        try:
+            status = _get(f"/jobs/{build_id}/status")
+        except Exception as e:
+            print(f"  ! status unreadable: {e}")
+            continue
+
+        step = status.get("current_step")
+        if step != last_step:
+            print(f"  step {step}  ({int(time.time() - began)}s elapsed)")
+            last_step = step
+
+        state = (status.get("status") or "").lower()
+        if state in ("done", "done_with_context", "failed", "cancelled"):
+            break
+        if time.time() - began > BUILD_TIMEOUT_SECONDS:
+            print(f"  ! giving up after {BUILD_TIMEOUT_SECONDS}s")
+            break
+
+    # The database is the record, not the poll response.
+    project = _get(f"/projects/{build_id}")
+    zip_result = check_zip(build_id)
+    result = {
+        "row": entry["row"],
+        "shape": entry["shape"],
+        "build_id": build_id,
+        "status": project.get("status"),
+        "completion_reason": project.get("completion_reason"),
+        "progress_percent": project.get("progress_percent"),
+        "duration_seconds": project.get("duration_seconds"),
+        "total_tokens": project.get("total_tokens"),
+        "tokens_by_model": project.get("tokens_by_model"),
+        "file_count": project.get("file_count"),
+        "zip": zip_result,
+        "expect_boot": entry["expect_boot"],
+    }
+    print(
+        f"  -> {result['status']}  "
+        f"{(result['total_tokens'] or 0):,} tokens  "
+        f"{(result['duration_seconds'] or 0):.0f}s  "
+        f"zip={'ok' if zip_result['ok'] else 'NOT A ZIP'} "
+        f"({zip_result['bytes']:,} bytes)"
+    )
+    if result["completion_reason"]:
+        print(f"     reason: {result['completion_reason']}")
+    return result
+
+
+# ── Report ────────────────────────────────────────────────────────────────────
+
+def write_report(results: list, path: Path) -> None:
+    ok_states = {"done", "done_with_context"}
+    passing = [
+        r for r in results
+        if r["status"] in ok_states and r["zip"]["ok"]
+    ]
+    lines = [
+        "# Phase 23 A2 — live matrix results",
+        "",
+        f"*Run {datetime.now().isoformat(timespec='seconds')}*",
+        "",
+        "Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` "
+        "or `done_with_context` with a downloadable ZIP, and every build that "
+        "boots reports **0 5xx** from the runtime smoke test.",
+        "",
+        f"**Result: {len(passing)} of {len(results)} rows pass"
+        f"{' (matrix incomplete)' if len(results) < len(MATRIX) else ''}.**",
+        "",
+        "| Row | Shape | Status | Tokens | Duration | Files | ZIP |",
+        "|-----|-------|--------|--------|----------|-------|-----|",
+    ]
+    for r in results:
+        lines.append(
+            f"| {r['row']} | {r['shape']} | `{r['status']}` | "
+            f"{(r['total_tokens'] or 0):,} | "
+            f"{(r['duration_seconds'] or 0):.0f}s | {r.get('file_count', '—')} | "
+            f"{'yes' if r['zip']['ok'] else 'NO'} |"
+        )
+    lines += [
+        "",
+        "The smoke-test line is not in the API — read it from the server log:",
+        "",
+        "```bash",
+        'grep -E "Runtime smoke test|failed to boot|no FastAPI entry point" server.log',
+        "```",
+        "",
+        "## Per-row detail",
+        "",
+    ]
+    for r in results:
+        lines += [
+            f"### Row {r['row']} — {r['shape']}",
+            "",
+            f"- build_id: `{r['build_id']}`",
+            f"- status: `{r['status']}`"
+            + (f" — {r['completion_reason']}" if r["completion_reason"] else ""),
+            f"- progress: {r.get('progress_percent') or '—'}%",
+            f"- tokens by model: `{r.get('tokens_by_model') or '—'}`",
+            f"- download: HTTP {r['zip']['status']}, "
+            f"{r['zip']['content_type'] or '—'}, {r['zip']['bytes']:,} bytes",
+            f"- expected to boot: {'yes' if r['expect_boot'] else 'no (smoke test must skip cleanly)'}",
+            "",
+        ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"\n  Report written to {path}")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rows", default="", help="comma-separated row numbers")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the plan and the budget, start nothing")
+    parser.add_argument("--out", default="PHASE23_MATRIX_RESULTS.md")
+    args = parser.parse_args()
+
+    wanted = (
+        [int(x) for x in args.rows.split(",") if x.strip()]
+        if args.rows else [e["row"] for e in MATRIX]
+    )
+    rows = [e for e in MATRIX if e["row"] in wanted]
+    if not rows:
+        print(f"No rows match {args.rows!r}")
+        return 2
+
+    try:
+        health = _get("/health")
+    except Exception as e:
+        print(f"No server at {BASE} ({e}).")
+        print("Start it: venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1")
+        return 2
+    print(f"Server: {health.get('status')}  |  rows: {[e['row'] for e in rows]}")
+    models = print_quota("quota before")
+
+    if args.dry_run:
+        for entry in rows:
+            print(f"\n  Row {entry['row']} — {entry['shape']}")
+            print(f"    {entry['prompt']}")
+        blocked = budget_blocks_start(models)
+        print(f"\n  Would start: {'NO — ' + blocked if blocked else 'yes'}")
+        return 0
+
+    results = []
+    for entry in rows:
+        blocked = budget_blocks_start(print_quota("quota now"))
+        if blocked:
+            print(f"\n  Stopping before row {entry['row']}: {blocked}.")
+            print("  A build that runs out mid-flight costs the same and proves nothing.")
+            break
+        try:
+            results.append(run_row(entry))
+        except KeyboardInterrupt:
+            print("\n  Interrupted.")
+            break
+        except Exception as e:
+            print(f"  ! row {entry['row']} raised: {e}")
+            results.append({
+                "row": entry["row"], "shape": entry["shape"], "build_id": "—",
+                "status": f"driver error: {e}", "completion_reason": None,
+                "progress_percent": None, "duration_seconds": 0,
+                "total_tokens": 0, "tokens_by_model": None, "file_count": 0,
+                "zip": {"ok": False, "status": 0, "content_type": "", "bytes": 0},
+                "expect_boot": entry["expect_boot"],
+            })
+
+    print_quota("quota after")
+    if results:
+        write_report(results, Path(args.out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
