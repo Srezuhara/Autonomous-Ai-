@@ -192,6 +192,47 @@ _REWRITE_HEADROOM        = 400     # a fix is usually a little longer than the b
 _TARGETED_MIN_FILE_CHARS = 2000
 
 
+def _shared_cause(error_text: str) -> str:
+    """
+    The exception type when many endpoints fail the same way, else "".
+
+    A block repair fixes the block the traceback names. That is right when one
+    endpoint is wrong, and useless when twenty are wrong for one reason — the
+    cause is then somewhere no traceback points at, because the code that should
+    have run never did.
+
+    Both live examples say the same thing. Row 3 (2026-08-28): twelve endpoints,
+    every one `OperationalError: no such table`, because `@router.on_event(
+    "startup")` does not fire for an included router, so init_db() never ran.
+    Repairing `list_suppliers` was applied and changed nothing — worse than
+    nothing, since it edited code that was never wrong. Row 1, a day earlier:
+    three endpoints, every one `AttributeError: 'generator' object has no
+    attribute 'execute'`, and the fault was a duplicated `get_db`.
+
+    In both, the repair belongs in a block the failures do not name. So the test
+    is: more than one endpoint, one exception type, and more than one distinct
+    function blamed. That last clause is what separates a shared cause from one
+    broken handler probed twice.
+    """
+    entries = [ln for ln in (error_text or "").splitlines() if " (at " in ln]
+    if len(entries) < 2:
+        return ""
+
+    types, functions = set(), set()
+    for line in entries:
+        head = line.split(" (at ", 1)[0]
+        # "GET /x -> 500: OperationalError: no such table: supplier"
+        message = head.split(": ", 1)[1] if ": " in head else head
+        types.add(message.split(":", 1)[0].strip())
+        frames = _parse_frames(line)
+        if frames:
+            functions.add(frames[-1]["function"])
+
+    if len(types) == 1 and len(functions) > 1:
+        return types.pop()
+    return ""
+
+
 def _rewrite_budget(agent, current_code: str) -> int:
     """Output cap for a prompt that must return code, sized to the code."""
     needed = len(current_code or "") // _REWRITE_CHARS_PER_TOKEN + _REWRITE_HEADROOM
@@ -1296,6 +1337,18 @@ Return ONLY the complete fixed Python code."""
         caller back to the full-file path unchanged.
         """
         if len(current_code or "") < _TARGETED_MIN_FILE_CHARS:
+            return None
+
+        shared = _shared_cause(error_text)
+        if shared:
+            # Every endpoint failing the same way means the fault is not in the
+            # block any one of them names. Hand this to the full-file prompt,
+            # which is the only one that can see the code that never ran.
+            logger.info(
+                f"  \U0001f9ee [{file_path}] {shared} on several endpoints at once — "
+                f"a shared cause, so repairing one block cannot fix it; "
+                f"using the whole-file prompt"
+            )
             return None
 
         frames = _parse_frames(error_text)

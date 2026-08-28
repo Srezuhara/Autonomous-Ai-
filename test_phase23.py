@@ -2313,6 +2313,70 @@ check("…and llm_client's own hint does not either",
       "reset at 00:00 UTC" not in Path("llm_client.py").read_text(encoding="utf-8"))
 
 
+# ── 29. Many endpoints failing one way is not a block-level bug ───────────────
+# Verified live on 2026-08-28 against row 3's own project, and this is the check
+# that turned it from 7/19 routes into 19/19.
+#
+# Twelve endpoints returned `OperationalError: no such table`. The traceback
+# blamed a different handler each time and every one of them was innocent: the
+# generated code registered its schema creation on `@router.on_event("startup")`,
+# which does not fire for an included router, so init_db() never ran. Repairing
+# `list_suppliers` — the handler that happened to be blamed — was APPLIED and
+# fixed nothing, which is worse than doing nothing: it edited working code.
+#
+# The fix has to go in a block no failure names, so the whole-file prompt is the
+# only tool that can see it.
+print("\n[29] a fault shared by many endpoints is not repaired one block at a time")
+
+from agents.debugger import _shared_cause   # noqa: E402
+
+_ROW3 = "\n".join(
+    f"GET /{n} → 500: OperationalError: no such table: {n} "
+    f"(at backend/routes.py:{100 + i} in list_{n})"
+    for i, n in enumerate(["supplier", "product", "warehouse", "stock_movement"])
+)
+check("row 3's twelve identical failures are recognised as one cause",
+      _shared_cause(_ROW3) == "OperationalError", _shared_cause(_ROW3))
+
+# Row 1, a day earlier: three endpoints, one duplicated `get_db`. The same rule
+# would have aimed that repair correctly too.
+_ROW1 = "\n".join([
+    "GET /tasks → 500: AttributeError: 'generator' object has no attribute "
+    "'execute' (at backend/routes.py:53 in list_tasks)",
+    "GET /tasks/1 → 500: AttributeError: 'generator' object has no attribute "
+    "'execute' (at backend/routes.py:61 in get_task)",
+])
+check("…as are row 1's, which had a shared cause of its own",
+      _shared_cause(_ROW1) == "AttributeError", _shared_cause(_ROW1))
+
+_ONE = "GET /x → 500: ValueError: boom (at backend/routes.py:5 in handler)"
+check("one broken endpoint is still a block-level bug",
+      _shared_cause(_ONE) == "")
+check("the same handler probed twice is one bug, not a shared cause",
+      _shared_cause(_ONE + "\nPOST /x → 500: ValueError: boom "
+                           "(at backend/routes.py:5 in handler)") == "",
+      "distinct functions is what separates the two cases")
+check("two different faults are not a shared cause",
+      _shared_cause(_ONE + "\nGET /y → 500: KeyError: 'z' "
+                           "(at backend/routes.py:9 in other)") == "")
+check("text with no frames at all yields nothing",
+      _shared_cause("boom") == "" and _shared_cause("") == "")
+
+# And the debugger must act on it: no block repair, hand back to the full file.
+_shared_dbg = _TargetedDebugger(_GOOD_REPLY)
+check("a shared cause skips the targeted path entirely",
+      _shared_dbg._generate_targeted_runtime_fix(
+          "proj/backend/routes.py", _TARGET_SRC, _ROW3, "MAP") is None
+      and _shared_dbg.prompts == [],
+      f"prompts={len(_shared_dbg.prompts)}")
+
+_single_dbg = _TargetedDebugger(_GOOD_REPLY)
+_single_dbg._generate_targeted_runtime_fix(
+    "proj/backend/routes.py", _TARGET_SRC, _TARGET_ERR, "MAP")
+check("…while a single failing endpoint still gets one",
+      len(_single_dbg.prompts) == 1)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
