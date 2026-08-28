@@ -21,7 +21,7 @@ to wait for**: the budget refills continuously at ~8,333 tokens/hour per model
 | Row | Shape | Status | Tokens | Boots? | Smoke | After the fixes (§4.9) |
 |---|---|---|---|---|---|---|
 | 1 | simple FastAPI + SQLite CRUD | `done_with_context` | 94,576 | yes | ✅ **5/5 routes** (was 2/5) | — |
-| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | **no** | 🚨 app never loads | repair re-aimed (§4.10) |
+| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | **no** | 🚨 app never loads | ✅ **6/6** (§4.10) |
 | 3 | complex / multi-entity | `done_with_context` | 131,848 | yes | 🚨 **7/19 routes** | ✅ **19/19** |
 | 4 | non-FastAPI (CLI) | ⬜ refused — quota | — | — | — | — |
 
@@ -58,14 +58,15 @@ tokens.
 
 ## 0.0.1 Ten fixes — and row 3 is now repaired end to end, live
 
-**Five of the ten are confirmed live** — not by rebuilding, but by cloning
+**Seven of the ten are confirmed live** — not by rebuilding, but by cloning
 the broken projects the matrix already produced and driving the real debugger
 against the real API for ~11K tokens instead of ~300K (§4.9). Row 3 went from
 **7/19 routes to 19/19**. Row 2's repair is correctly aimed and still does not
-land; §4.10 says exactly why — a missing blame rule, since fixed, so its repair
-now targets the file that actually defines the broken class. Three further
-mistakes the live run exposed are fixed too (§4.10-§4.12), none of which needed
-quota.
+land; §4.10 says exactly why — a missing blame rule. With it added, **row 2
+boots too: 6/6 routes.** Between them the two builds that the matrix left broken
+are now repaired live for **~14K tokens**, where rebuilding them would have cost
+~300K. Two further mistakes the live run exposed are fixed as well (§4.11,
+§4.12), neither of which needed quota.
 
 | # | Fix | What it removes | Tests |
 |---|---|---|---|
@@ -76,7 +77,7 @@ quota.
 | 5 | `reasoning_effort` on both models; retries that grow (§4.7) | 13 completions that returned **zero characters** and were billed anyway | §27, 9 assertions |
 | 6 | The budget refills, it does not reset (§4.8) | A ledger and a shipped handoff that both overstated the wait by ~14h | §28, 22 assertions |
 | 7 | A shared fault is not repaired block by block (§4.9) | Row 3 stuck at 7/19 while a repair edited innocent code | §29, 8 assertions |
-| 8 | A bad imported symbol is repaired where it is defined (§4.10) | Row 2's repair aimed at the file that was right | §23/§30, 8 assertions |
+| 8 | A bad imported symbol is repaired where it is defined (§4.10) | Row 2's repair aimed at the file that was right — **now 6/6 live** | §23/§30, 8 assertions |
 | 9 | Two defects forbidden at generation time (§4.11) | Needing either repair at all | §30, 5 assertions |
 | 10 | The driver's report merges and stops overstating (§4.12) | A results file that erased the run before it | §30, 8 assertions |
 
@@ -512,7 +513,7 @@ and **26,395 on 20b** (7,749).
 budget than there is. Truncating `used` lost a token to sub-second decay between
 two calls in one build, which is the one direction this number must not move.
 
-### 4.9 — Live verification without rebuilding: row 3 goes 19/19 ✅ **confirmed live**
+### 4.9 — Live verification without rebuilding: rows 3 and 2 both repaired ✅ **confirmed live**
 
 A matrix row costs 95-172K tokens. The two repair paths can be exercised on the
 same two failures for a couple of thousand, by cloning the broken project the
@@ -520,8 +521,13 @@ matrix already produced and driving the real debugger against the real API. The
 whole verification below cost **~11K tokens**; the equivalent two rebuilds would
 have cost ~300K and taken 45 minutes.
 
-**Row 3: 7/19 → 19/19 routes, 6,539 tokens, 6 seconds.** The chain that has been
-broken since Phase 22 now completes end to end.
+| Row | Was | Now | Cost | Fixed by |
+|---|---|---|---|---|
+| 3 | 7/19 routes | ✅ **19/19** | 6,539 tokens, 6s | the shared-cause guard below |
+| 2 | app never loads | ✅ **6/6** | 2,640 tokens, 3s | the fourth blame rule (§4.10) |
+
+**The chain that has been broken since Phase 22 now completes end to end, on
+both builds.**
 
 The first attempt did not fix it, and why is the finding. All twelve 500s were
 `OperationalError: no such table`. The traceback blamed a different handler each
@@ -558,7 +564,7 @@ answered.
 > ("No module-level DB connections"). It works and preserves everything, but the
 > better fix is an app-level lifespan handler. The rule and the repair disagree.
 
-### 4.10 — Row 2's repair is aimed at the wrong file ✅ *fixed, unverified live*
+### 4.10 — Row 2's repair is aimed at the wrong file ✅ **fixed and confirmed live**
 
 The boot-failure plumbing of §4.4 is confirmed live: the smoke test reports the
 failure, it is classified repairable, and the repair is aimed at
@@ -609,9 +615,24 @@ failure, and all four are now asserted:
 | Many endpoints, one exception type (§4.9) | **no frame — the whole file** | the cause is code that never ran |
 | A bad symbol imported from elsewhere | **the file that defines it** | the file that raised is not the file that is wrong |
 
-**Still unverified:** that the repair now *lands* on row 2. The aim is
-confirmed; whether the model fixes `services.py` given the right target costs
-~2-3K tokens to find out and has not been spent.
+**Row 2 now boots: `app failed to load` → 6/6 routes, 2,640 tokens, 3 seconds.**
+Given the right target the model did the obvious thing:
+
+```python
+-class BookmarkOut:                        +class BookmarkOut(BaseModel):
+-    def __init__(self, id, url, ...):     +    id: int
+-        self.id = id                      +    url: str
+                                           +    tags: List[str]
+```
+
+All nine top-level names in `services.py` survived. Nothing about the model
+changed between this attempt and the two that failed — only where the repair was
+pointed.
+
+> **This is also §4.6's first landed repair.** `services.py` is 4,234 characters,
+> over the 2,000 threshold, so the block-level path handled it: it replaced the
+> `BookmarkOut` class and nothing else. The mechanism is no longer just proven to
+> aim correctly — it is proven to fix a build.
 
 ### 4.11 — Two defects are now forbidden at generation time ✅ *fixed, unverified live*
 

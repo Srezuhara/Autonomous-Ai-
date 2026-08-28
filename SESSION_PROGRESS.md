@@ -26,12 +26,13 @@ to accept `reasoning_effort` after all, which is what had it returning zero
 characters thirteen times in one matrix. All five fixes are covered offline
 (`test_phase23.py` is 289/289, was 182). **Five of the seven are now confirmed
 live**, without rebuilding anything: cloning the broken projects the matrix
-already produced and driving the real debugger against the real API costs ~11K
-tokens where two rebuilds would cost ~300K. **Row 3 went from 7 of 19 routes
-answering to 19 of 19.** Row 2 still does not boot, for a reason now diagnosed
-precisely and **fixed**: the repair was aimed at the file where the error
-surfaced rather than the file that defines the broken type, which is the fourth
-blame rule this system needed (§4.10). Two more no-quota fixes came out of the
+already produced and driving the real debugger against the real API costs ~14K
+tokens where two rebuilds would cost ~300K. **Both builds the matrix left broken
+are now repaired.** Row 3 went from 7 of 19 routes answering to 19 of 19, once a
+fault shared by every endpoint stopped being repaired one block at a time
+(§4.9). Row 2 went from never booting to 6 of 6, once the repair was aimed at the
+file that *defines* the broken class rather than the file where the error
+surfaced — the fourth blame rule this system needed (§4.10). Two more no-quota fixes came out of the
 same run — the prompts now forbid both defects the matrix produced (§4.11), and
 the matrix driver no longer erases the rows of the run before it (§4.12).
 Chasing *when* the builds could be re-run is what turned up the other finding:
@@ -58,9 +59,10 @@ this is the only item that can start immediately.** Auth needs migrations to
 exist first, which is why it is B1 and not B2. Fresh-session sized.
 
 **2. Re-run row 3, then row 2, as the budget refills.** The repair paths are
-already proven against row 3's real project (§4.9 — 19/19 routes); a full rebuild
-now checks that the *whole pipeline* produces a clean build, which is a different
-question and the one A2 actually asks. Restart the server first: it holds the
+already proven against both projects (§4.9 — 19/19 and 6/6); a full rebuild now
+checks that the *whole pipeline* produces a clean build, which is a different
+question and the one A2 actually asks. It also exercises §4.11, the two prompt
+rules, which only a fresh generation can test. Restart the server first: it holds the
 code it started with.
 
 ```bash
@@ -106,8 +108,9 @@ All committed on `main`, `31d36ad`..`6a0d804`, tests green at each step.
 > **Verifying a repair no longer needs a rebuild.** Clone the broken project the
 > matrix produced, run `Pipeline._smoke_test_runtime` on the clone to get the
 > real blame, then `Debugger._repair_runtime_error`, then smoke it again. Row 3's
-> whole 7/19 → 19/19 proof took 6,539 tokens and six seconds. The repaired copy
-> is kept at `generated_projects/_live_verify_row3b/` as evidence.
+> 7/19 → 19/19 took 6,539 tokens and six seconds; row 2's dead app → 6/6 took
+> 2,640 and three. Both repaired copies are kept as evidence, at
+> `generated_projects/_live_verify_row3b/` and `_live_verify_row2_final/`.
 
 | File | Change |
 |---|---|
