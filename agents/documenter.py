@@ -453,8 +453,14 @@ everything downstream of it.
 
     def _resume_instructions(self, reason: str, quota_snapshot: dict) -> str:
         if reason == "quota_exhausted":
+            # Measured 2026-08-28: Groq's daily budget is a leaky bucket, not a
+            # calendar day. Its own 429 says "try again in 47.52s" for a 110-token
+            # shortfall, which is exactly 110 / (200000/86400). Telling a user to
+            # come back after midnight sent them away for a day when the wait was
+            # a few hours.
             hint = quota_snapshot.get("reset_hint") or (
-                "Groq free-tier daily quotas reset at 00:00 UTC."
+                "Groq's free-tier budget refills continuously at about 8,333 "
+                "tokens per hour per model — there is no daily reset to wait for."
             )
             return (
                 f"{hint}\n\n"
@@ -513,17 +519,27 @@ everything downstream of it.
         models = daily.get("models") or {}
         if not models:
             return []
-        window = daily.get("window_hours", 24)
+        per_hour = 0
+        for rec in models.values():
+            per_hour = rec.get("refill_tokens_per_hour") or 0
+            if per_hour:
+                break
+        refill = f", refilling ~{per_hour:,} tokens/hour" if per_hour else ""
         rows = [
             "",
-            f"**Daily token budget** (rolling {window}h, per model):",
+            f"**Daily token budget** (per model{refill}):",
             "",
-            "| Model | Used | Limit | Left | Frees up in |",
-            "|-------|------|-------|------|-------------|",
+            "| Model | Used | Limit | Left | Full again in |",
+            "|-------|------|-------|------|---------------|",
         ]
         for model, rec in sorted(models.items()):
             resets = rec.get("window_resets_in_seconds")
-            when = "—" if resets is None else f"{int(resets) // 60} min"
+            if resets is None:
+                when = "—"
+            elif resets >= 3600:
+                when = f"{int(resets) // 3600}h {(int(resets) % 3600) // 60}m"
+            else:
+                when = f"{int(resets) // 60} min"
             estimated = " *(part estimated)*" if rec.get("seeded_tokens") else ""
             rows.append(
                 f"| `{model}` | {rec.get('tokens_used', 0):,}"

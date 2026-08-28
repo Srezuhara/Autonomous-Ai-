@@ -856,13 +856,20 @@ seeded = llm_client.seed_ledger_from_history(
           {"openai/gpt-oss-120b": 25_000, "openai/gpt-oss-20b": 5_000})],
     now=_now,
 )
-usage = llm_client.get_daily_usage()["models"]
+usage = llm_client.get_daily_usage(now=_now)["models"]
 check("a build the ledger never saw is counted after seeding",
       seeded["builds_seeded"] == 1 and seeded["tokens_seeded"] == 30_000,
       f"seeded={seeded}")
 check("the recorded per-model split is used verbatim, not estimated",
-      usage["openai/gpt-oss-120b"]["tokens_used"] == 25_000
-      and usage["openai/gpt-oss-20b"]["tokens_used"] == 5_000,
+      usage["openai/gpt-oss-120b"]["seeded_tokens"] == 25_000
+      and usage["openai/gpt-oss-20b"]["seeded_tokens"] == 5_000,
+      f"usage={usage}")
+# The build is two hours old, so the bucket has already returned two hours of
+# budget against it — 16,666 tokens. That is the point of §28, asserted here so
+# the two views of the same ledger cannot drift apart.
+check("…while what is still owed has decayed by two hours of refill",
+      usage["openai/gpt-oss-120b"]["tokens_used"]
+      == round(25_000 - 2 * llm_client._REFILL_RATE * 3600),
       f"usage={usage}")
 check("seeded spend is reported as seeded, so the estimate is visible",
       usage["openai/gpt-oss-120b"]["seeded_tokens"] == 25_000)
@@ -870,10 +877,10 @@ check("seeded spend is reported as seeded, so the estimate is visible",
 # Seeding runs on every boot, and the server restarts constantly. Running it
 # twice must not spend the budget twice.
 again = llm_client.seed_ledger_from_history([_row("b-recent", 30_000, 2)], now=_now)
-after = llm_client.get_daily_usage()["models"]
+after = llm_client.get_daily_usage(now=_now)["models"]
 check("seeding the same build again adds nothing",
       again["builds_seeded"] == 0
-      and after["openai/gpt-oss-120b"]["tokens_used"] == 25_000,
+      and after["openai/gpt-oss-120b"]["seeded_tokens"] == 25_000,
       f"again={again}")
 
 # …and it must survive the restart it exists for.
@@ -881,9 +888,9 @@ llm_client._ledger, llm_client._ledger_covered = [], {}
 llm_client._ledger_load()
 llm_client.seed_ledger_from_history([_row("b-recent", 30_000, 2)], now=_now)
 check("the covered-builds record survives a restart, so seeding stays idempotent",
-      llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
+      llm_client.get_daily_usage(now=_now)["models"]["openai/gpt-oss-120b"]["seeded_tokens"]
       == 25_000,
-      f"usage={llm_client.get_daily_usage()['models']}")
+      f"usage={llm_client.get_daily_usage(now=_now)['models']}")
 
 # A build this process watched live is already in the ledger call by call.
 llm_client.reset_daily_usage()
@@ -892,7 +899,7 @@ llm_client._add_tokens(6_000, 2_000, "openai/gpt-oss-120b")
 live_seed = llm_client.seed_ledger_from_history([_row("b-live", 8_000, 0.1)], now=_now)
 check("a build watched live is not seeded on top of itself",
       live_seed["builds_seeded"] == 0
-      and llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
+      and llm_client.get_daily_usage(now=_now)["models"]["openai/gpt-oss-120b"]["tokens_used"]
       == 8_000,
       f"live_seed={live_seed}")
 llm_client._current_build_id.value = None
@@ -902,24 +909,25 @@ llm_client.reset_daily_usage()
 old_seed = llm_client.seed_ledger_from_history([_row("b-old", 99_000, 30)], now=_now)
 check("a build older than the 24h window is not seeded",
       old_seed["builds_seeded"] == 0
-      and llm_client.get_daily_usage()["models"] == {},
+      and llm_client.get_daily_usage(now=_now)["models"] == {},
       f"old_seed={old_seed}")
 
 # Rows written before `tokens_by_model` existed carry no split. Half each is an
 # estimate, and it is labelled as one rather than silently presented as measured.
 llm_client.reset_daily_usage()
 llm_client.seed_ledger_from_history([_row("b-legacy", 90_001, 3)], now=_now)
-legacy = llm_client.get_daily_usage()["models"]
+legacy = llm_client.get_daily_usage(now=_now)["models"]
 check("a row with no split is divided across both configured models",
-      legacy["openai/gpt-oss-120b"]["tokens_used"]
-      + legacy["openai/gpt-oss-20b"]["tokens_used"] == 90_001,
+      legacy["openai/gpt-oss-120b"]["seeded_tokens"]
+      + legacy["openai/gpt-oss-20b"]["seeded_tokens"] == 90_001,
       f"legacy={legacy}")
 check("…and the odd token is not lost to integer division",
-      abs(legacy["openai/gpt-oss-120b"]["tokens_used"]
-          - legacy["openai/gpt-oss-20b"]["tokens_used"]) == 1)
-check("…and every token of it is marked as an estimate",
-      legacy["openai/gpt-oss-120b"]["seeded_tokens"]
-      == legacy["openai/gpt-oss-120b"]["tokens_used"])
+      abs(legacy["openai/gpt-oss-120b"]["seeded_tokens"]
+          - legacy["openai/gpt-oss-20b"]["seeded_tokens"]) == 1)
+check("…and every token of it is marked as an estimate, none observed live",
+      legacy["openai/gpt-oss-120b"]["seeded_tokens"] == 45_001
+      and legacy["openai/gpt-oss-120b"]["calls"] == 1,
+      f"legacy={legacy}")
 
 # Junk rows must not stop a boot: seeding runs at import time.
 llm_client.reset_daily_usage()
@@ -935,7 +943,7 @@ junk = llm_client.seed_ledger_from_history(
     now=_now,
 )
 check("rows with no tokens, no id, no usable date or a future date are skipped",
-      junk["builds_seeded"] == 0 and llm_client.get_daily_usage()["models"] == {},
+      junk["builds_seeded"] == 0 and llm_client.get_daily_usage(now=_now)["models"] == {},
       f"junk={junk}")
 
 # A format-1 ledger (a bare list, no build attribution) is still on disk in every
@@ -948,18 +956,18 @@ llm_client._LEDGER_PATH.write_text(
 )
 llm_client._ledger, llm_client._ledger_covered = [], {}
 llm_client._ledger_load()
+# A live entry carries no `seeded_tokens`, so this one is asserted against the
+# ledger itself: the entry loaded, with its tokens intact and its age unchanged.
 check("a format-1 ledger file still loads",
-      llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
-      == 40_000)
+      [e[1:3] for e in llm_client._ledger] == [["openai/gpt-oss-120b", 40_000]],
+      llm_client._ledger)
 check("…and its unlabelled entries count as observed, not estimated",
-      llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["seeded_tokens"]
+      llm_client.get_daily_usage(now=_now)["models"]["openai/gpt-oss-120b"]["seeded_tokens"]
       == 0)
 blind = llm_client.seed_ledger_from_history([_row("b-inspan", 40_000, 1)], now=_now)
 check("a build inside a format-1 ledger's recorded span is not double-counted",
-      blind["builds_seeded"] == 0
-      and llm_client.get_daily_usage()["models"]["openai/gpt-oss-120b"]["tokens_used"]
-      == 40_000,
-      f"blind={blind}")
+      blind["builds_seeded"] == 0 and len(llm_client._ledger) == 1,
+      f"blind={blind} ledger={llm_client._ledger}")
 
 # The reader itself is best-effort: no database, or one without the column, must
 # degrade to "nothing to seed" rather than take the process down.
@@ -1193,6 +1201,7 @@ _snapshot = {
                 "tokens_used": 199_306, "percent_used": 99.7, "limit": 200_000,
                 "tokens_remaining": 694, "seeded_tokens": 60_000,
                 "window_resets_in_seconds": 1080, "calls": 41,
+                "refill_tokens_per_hour": 8_333,
             },
             "openai/gpt-oss-120b": {
                 "tokens_used": 40_000, "percent_used": 20.0, "limit": 200_000,
@@ -1201,7 +1210,8 @@ _snapshot = {
             },
         },
     },
-    "reset_hint": "Groq free-tier daily quotas reset at 00:00 UTC.",
+    "reset_hint": "Groq's free-tier budget refills continuously at about 8,333 "
+                  "tokens per hour per model — there is no daily reset to wait for.",
 }
 _table = _doc._format_quota_block(_snapshot)
 
@@ -1230,7 +1240,9 @@ check("a figure that is partly reconstructed is marked as an estimate",
 check("…and a fully observed figure is not",
       _table.count("*(part estimated)*") == 1, _table)
 check("the reset hint still closes the block",
-      _table.rstrip().endswith("reset at 00:00 UTC."))
+      _table.rstrip().endswith("no daily reset to wait for."), _table[-120:])
+check("the table says how fast the budget comes back",
+      "refilling ~8,333 tokens/hour" in _table, _table)
 
 # A build that never touched the quota path has no snapshot at all.
 check("no snapshot renders nothing, not an empty table",
@@ -2196,6 +2208,109 @@ check("so an oversized request is clamped on the very first call",
       llm_client._fit_output_budget_to_model_limit(
           "brand-new-model", "x" * 4000, "", 99999)
       < 99999)
+
+
+# ── 28. The daily budget is a bucket that refills, not a day that resets ──────
+# The ledger summed a rolling 24h window, so budget only came back when an
+# individual call aged out. After the 2026-08-28 matrix that meant it reported 0
+# remaining for six hours during which Groq would have accepted a build — and
+# `run_live_matrix.py` refuses below 70,000, so it would have idled for nothing.
+#
+# Groq's own 429s say what the shape really is. Both are reproduced below as
+# the test that matters: if our model and Groq's disagree, ours is wrong.
+#
+#   limit 200000, used 197225, requested 2885 -> "please try again in 47.52s"
+#   limit 200000, used 196757, requested 4131 -> "please try again in 6m23.616s"
+print("\n[28] the daily budget refills continuously")
+
+_RATE = llm_client._REFILL_RATE
+
+check("the refill rate is the limit spread over the window",
+      abs(_RATE - llm_client.GROQ_DAILY_TOKEN_LIMIT / (24 * 3600)) < 1e-9,
+      _RATE)
+check("…which is about 8,333 tokens per hour",
+      8_300 < _RATE * 3600 < 8_400, _RATE * 3600)
+
+# Groq's arithmetic, ours. Its retry-after carries fractional seconds; we return
+# whole ones, so the tolerance is one second and nothing more.
+for _used, _requested, _groq_said in ((197_225, 2_885, 47.52),
+                                      (196_757, 4_131, 383.616)):
+    _remaining = llm_client.GROQ_DAILY_TOKEN_LIMIT - _used
+    _ours = llm_client.seconds_until_tokens(_requested, _remaining)
+    check(f"the wait for {_requested:,} tokens at {_used:,} used matches Groq's own",
+          abs(_ours - _groq_said) <= 1,
+          f"groq={_groq_said}s ours={_ours}s")
+
+check("no wait when the budget is already there",
+      llm_client.seconds_until_tokens(1_000, 5_000) == 0)
+
+# The bucket itself: spend it all at once, then watch it come back.
+_t0 = 1_000_000.0
+_spent = [(_t0, 100_000), (_t0 + 60, 100_000)]
+
+check("a budget spent to the floor reads as spent",
+      llm_client._bucket_level(_spent, _t0 + 60) > 199_000,
+      llm_client._bucket_level(_spent, _t0 + 60))
+# The delta, not the absolute: 139 tokens had already come back during the 60
+# seconds between the two calls, and an assertion that ignores that is testing
+# the fixture rather than the refill.
+check("an hour later, exactly an hour of refill is back",
+      abs((llm_client._bucket_level(_spent, _t0 + 60)
+           - llm_client._bucket_level(_spent, _t0 + 60 + 3600))
+          - _RATE * 3600) < 2,
+      llm_client._bucket_level(_spent, _t0 + 60)
+      - llm_client._bucket_level(_spent, _t0 + 60 + 3600))
+check("the driver's 70,000 threshold is reached in about 8.4 hours",
+      200_000 - llm_client._bucket_level(_spent, _t0 + 60 + 8.4 * 3600) >= 70_000,
+      200_000 - llm_client._bucket_level(_spent, _t0 + 60 + 8.4 * 3600))
+check("after a full window the budget is whole again",
+      llm_client._bucket_level(_spent, _t0 + 60 + 86_400) == 0.0)
+check("and it never goes past whole, however long the gap",
+      llm_client._bucket_level(_spent, _t0 + 60 + 10 * 86_400) == 0.0)
+
+# Draining each entry independently would refund the same seconds once per
+# entry, so a build of many small calls would appear to repay itself many times.
+_many = [(_t0 + i, 1_000) for i in range(50)]
+check("many small calls owe their sum, not their sum minus one refund each",
+      abs(llm_client._bucket_level(_many, _t0 + 49) - (50_000 - _RATE * 49)) < 1,
+      llm_client._bucket_level(_many, _t0 + 49))
+
+check("an empty ledger owes nothing", llm_client._bucket_level([], _t0) == 0.0)
+check("entries out of order are still handled in call order",
+      llm_client._bucket_level(list(reversed(_spent)), _t0 + 60)
+      == llm_client._bucket_level(_spent, _t0 + 60))
+
+# End to end through the public snapshot, with the clock stopped.
+llm_client.reset_daily_usage()
+llm_client._ledger = [
+    [_t0, "openai/gpt-oss-120b", 200_000, "live"],
+]
+_fresh = llm_client.get_daily_usage(now=_t0)["models"]["openai/gpt-oss-120b"]
+check("a model just spent reports nothing left",
+      _fresh["tokens_remaining"] == 0 and _fresh["percent_used"] == 100.0,
+      _fresh)
+check("…and says how long until the budget is whole again",
+      abs(_fresh["window_resets_in_seconds"] - 86_400) <= 1,
+      _fresh["window_resets_in_seconds"])
+check("…and how fast it is coming back, so the number can be acted on",
+      _fresh["refill_tokens_per_hour"] == int(_RATE * 3600), _fresh)
+
+_later = llm_client.get_daily_usage(now=_t0 + 4 * 3600)["models"]["openai/gpt-oss-120b"]
+check("four hours later a third of the budget is usable again",
+      abs(_later["tokens_remaining"] - 4 * _RATE * 3600) < 2,
+      _later["tokens_remaining"])
+check("spend and remaining still add up to the limit",
+      _later["tokens_used"] + _later["tokens_remaining"]
+      == llm_client.GROQ_DAILY_TOKEN_LIMIT, _later)
+
+llm_client.reset_daily_usage()
+
+# The claim we used to ship to users in every quota-interrupted build.
+_hint_src = Path("agents/documenter.py").read_text(encoding="utf-8")
+check("the documenter no longer tells users to wait for a midnight reset",
+      "reset at 00:00 UTC" not in _hint_src)
+check("…and llm_client's own hint does not either",
+      "reset at 00:00 UTC" not in Path("llm_client.py").read_text(encoding="utf-8"))
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

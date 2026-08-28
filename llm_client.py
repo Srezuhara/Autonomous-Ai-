@@ -526,9 +526,25 @@ def get_and_reset_token_usage(build_id: str) -> dict:
 # idea. The first indication that 190K of 200K was gone was the failure itself,
 # which is why a four-build matrix run died after one build.
 #
-# So we keep the count ourselves. The window is a rolling 24 hours rather than a
-# calendar day, because that is what Groq appears to enforce: the wall arrived
-# with `please try again in 17m56.976s`, not "at midnight UTC".
+# So we keep the count ourselves.
+#
+# The shape of Groq's day, measured 2026-08-28. It is not a calendar reset and
+# not a rolling window either — it is a LEAKY BUCKET that refills continuously.
+# Two 429s, and the arithmetic matches both to within a second:
+#
+#   limit 200000, used 197225, requested 2885 -> "try again in 47.52s"
+#     short by 110 tokens;  110 / (200000/86400) = 47.5s
+#   limit 200000, used 196757, requested 4131 -> "try again in 6m23.616s"
+#     short by 888 tokens;  888 / (200000/86400) = 6m23s
+#
+# So the budget comes back at GROQ_DAILY_TOKEN_LIMIT / 86400 ≈ 2.315 tokens per
+# second, ≈ 8,333 per hour, per model. There is no midnight to wait for, and
+# telling a user to wait for one — as this code used to — costs them a day.
+#
+# Summing the window instead of draining a bucket was the pessimistic version of
+# the same idea: it only gave budget back when an individual call aged out, so
+# after a matrix run it reported 0 remaining for six hours during which Groq
+# would happily have accepted a build.
 GROQ_DAILY_TOKEN_LIMIT = int(os.getenv("GROQ_DAILY_TOKEN_LIMIT", "200000"))
 _LEDGER_WINDOW_SECONDS = 24 * 3600
 _LEDGER_PATH = Path(os.getenv("OUTPUT_DIR", "generated_projects")) / "token_ledger.json"
@@ -779,7 +795,47 @@ def seed_ledger_from_history(
     return {"builds_seeded": seeded_builds, "tokens_seeded": seeded_tokens}
 
 
-def get_daily_usage() -> dict:
+# Tokens returned per second. The same figure Groq's own retry-after is computed
+# from — see the measurement above `_LEDGER_WINDOW_SECONDS`.
+_REFILL_RATE = GROQ_DAILY_TOKEN_LIMIT / _LEDGER_WINDOW_SECONDS
+
+
+def _bucket_level(entries: list, now: float) -> float:
+    """
+    How much of the daily budget is still owed, as a leaky bucket.
+
+    Each call fills the bucket; time drains it at `_REFILL_RATE`. Decaying every
+    entry independently would look similar and be wrong — it refunds the same
+    elapsed seconds once per entry, so a build of 40 calls would appear to repay
+    itself 40 times over. Draining the running total once, in call order, is the
+    bucket Groq actually operates.
+    """
+    if not entries:
+        return 0.0
+    ordered = sorted(entries)
+    level = 0.0
+    prev = ordered[0][0]
+    for ts, tokens in ordered:
+        level = max(0.0, level - _REFILL_RATE * (ts - prev)) + tokens
+        prev = ts
+    return max(0.0, level - _REFILL_RATE * (now - prev))
+
+
+def seconds_until_tokens(need: int, remaining: int) -> int:
+    """
+    How long until `need` tokens are available, given `remaining` now.
+
+    This is Groq's own formula: the 429 that reports `used 197225, requested
+    2885` says "try again in 47.52s", and 110 / 2.315 is 47.5.
+    """
+    if remaining >= need:
+        return 0
+    if _REFILL_RATE <= 0:
+        return 0
+    return int((need - remaining) / _REFILL_RATE)
+
+
+def get_daily_usage(now: Optional[float] = None) -> dict:
     """
     Tokens spent per model inside the rolling 24h window, with what is left.
 
@@ -789,8 +845,12 @@ def get_daily_usage() -> dict:
     builds, so anything else spending the same organisation's quota — another
     machine, another checkout — remains invisible to it.
     """
+    # `now` is injectable for the same reason `seed_ledger_from_history` takes it:
+    # the figures move with the clock, so a test that wants to assert what was
+    # spent — rather than how much has since come back — must be able to stop it.
+    now = now if now is not None else time.time()
     with _ledger_lock:
-        _ledger_prune()
+        _ledger_prune(now)
         entries = list(_ledger)
 
     per_model: dict = {}
@@ -798,26 +858,31 @@ def get_daily_usage() -> dict:
         ts, model, tokens = entry[0], entry[1], entry[2]
         source = entry[3] if len(entry) > 3 else "live"
         rec = per_model.setdefault(
-            model,
-            {"tokens_used": 0, "calls": 0, "seeded_tokens": 0,
-             "oldest_entry_epoch": ts},
+            model, {"calls": 0, "seeded_tokens": 0, "_entries": []},
         )
-        rec["tokens_used"] += tokens
+        rec["_entries"].append((ts, tokens))
         rec["calls"] += 1
         if source == "seeded":
             rec["seeded_tokens"] += tokens
-        rec["oldest_entry_epoch"] = min(rec["oldest_entry_epoch"], ts)
 
     for model, rec in per_model.items():
-        remaining = max(0, GROQ_DAILY_TOKEN_LIMIT - rec["tokens_used"])
+        used = _bucket_level(rec.pop("_entries"), now)
+        # Round the spend and floor what is left: both err towards reporting
+        # less budget than there is. Truncating `used` instead lost a token to
+        # sub-second decay between two calls in the same build, which is the
+        # one direction this number must never move.
+        remaining = max(0, int(GROQ_DAILY_TOKEN_LIMIT - used))
+        rec["tokens_used"] = int(round(used))
         rec["limit"] = GROQ_DAILY_TOKEN_LIMIT
         rec["tokens_remaining"] = remaining
         rec["percent_used"] = round(
-            100.0 * rec["tokens_used"] / GROQ_DAILY_TOKEN_LIMIT, 1
+            100.0 * used / GROQ_DAILY_TOKEN_LIMIT, 1
         ) if GROQ_DAILY_TOKEN_LIMIT else 0.0
-        # When the oldest entry ages out, that much budget comes back.
-        rec["window_resets_in_seconds"] = max(
-            0, int(rec.pop("oldest_entry_epoch") + _LEDGER_WINDOW_SECONDS - time.time())
+        rec["refill_tokens_per_hour"] = int(_REFILL_RATE * 3600)
+        # Seconds until the bucket is empty again, i.e. a full budget. Kept
+        # under the old key because the documenter's table reads it.
+        rec["window_resets_in_seconds"] = seconds_until_tokens(
+            GROQ_DAILY_TOKEN_LIMIT, remaining
         )
 
     return {
@@ -1076,7 +1141,8 @@ def _mark_model_daily_limited(model: str, reason: str = "daily quota"):
 
 
 _DEFAULT_RESET_HINT = (
-    "Groq free-tier daily quotas reset at 00:00 UTC. Re-run the same prompt "
+    "Groq's free-tier budget refills continuously at about 8,333 tokens per "
+    "hour per model — there is no daily reset to wait for. Re-run the same prompt "
     "after the reset, or add fresh GROQ_API_KEY values to .env and restart."
 )
 
