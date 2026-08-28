@@ -21,7 +21,7 @@ to wait for**: the budget refills continuously at ~8,333 tokens/hour per model
 | Row | Shape | Status | Tokens | Boots? | Smoke | After the fixes (§4.9) |
 |---|---|---|---|---|---|---|
 | 1 | simple FastAPI + SQLite CRUD | `done_with_context` | 94,576 | yes | ✅ **5/5 routes** (was 2/5) | — |
-| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | **no** | 🚨 app never loads | still 🚨 (§4.10) |
+| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | **no** | 🚨 app never loads | repair re-aimed (§4.10) |
 | 3 | complex / multi-entity | `done_with_context` | 131,848 | yes | 🚨 **7/19 routes** | ✅ **19/19** |
 | 4 | non-FastAPI (CLI) | ⬜ refused — quota | — | — | — | — |
 
@@ -56,14 +56,16 @@ tokens.
 
 ---
 
-## 0.0.1 Seven fixes — and row 3 is now repaired end to end, live
+## 0.0.1 Ten fixes — and row 3 is now repaired end to end, live
 
-**Five of the seven are now confirmed live** — not by rebuilding, but by cloning
+**Five of the ten are confirmed live** — not by rebuilding, but by cloning
 the broken projects the matrix already produced and driving the real debugger
 against the real API for ~11K tokens instead of ~300K (§4.9). Row 3 went from
 **7/19 routes to 19/19**. Row 2's repair is correctly aimed and still does not
-land; §4.10 says exactly why, and it is a missing blame rule rather than a bad
-model.
+land; §4.10 says exactly why — a missing blame rule, since fixed, so its repair
+now targets the file that actually defines the broken class. Three further
+mistakes the live run exposed are fixed too (§4.10-§4.12), none of which needed
+quota.
 
 | # | Fix | What it removes | Tests |
 |---|---|---|---|
@@ -74,8 +76,11 @@ model.
 | 5 | `reasoning_effort` on both models; retries that grow (§4.7) | 13 completions that returned **zero characters** and were billed anyway | §27, 9 assertions |
 | 6 | The budget refills, it does not reset (§4.8) | A ledger and a shipped handoff that both overstated the wait by ~14h | §28, 22 assertions |
 | 7 | A shared fault is not repaired block by block (§4.9) | Row 3 stuck at 7/19 while a repair edited innocent code | §29, 8 assertions |
+| 8 | A bad imported symbol is repaired where it is defined (§4.10) | Row 2's repair aimed at the file that was right | §23/§30, 8 assertions |
+| 9 | Two defects forbidden at generation time (§4.11) | Needing either repair at all | §30, 5 assertions |
+| 10 | The driver's report merges and stops overstating (§4.12) | A results file that erased the run before it | §30, 8 assertions |
 
-`test_phase23.py` is **289 / 289** (was 182). Every other suite is unchanged and
+`test_phase23.py` is **312 / 312** (was 182). Every other suite is unchanged and
 green: phase 21 77/77, phase 22 85/85, phase 17 58/58, rate-limit 4/4, frontend
 typecheck clean and 191 unit tests.
 
@@ -553,7 +558,7 @@ answered.
 > ("No module-level DB connections"). It works and preserves everything, but the
 > better fix is an app-level lifespan handler. The rule and the repair disagree.
 
-### 4.10 — Row 2's repair is aimed at the wrong file ❌ *diagnosed, not fixed*
+### 4.10 — Row 2's repair is aimed at the wrong file ✅ *fixed, unverified live*
 
 The boot-failure plumbing of §4.4 is confirmed live: the smoke test reports the
 failure, it is classified repairable, and the repair is aimed at
@@ -583,17 +588,64 @@ replaced with `return []` or a 404, and the broken `response_model` left in
 place. `gpt-oss-120b` returned something that failed the import check. Both were
 correctly rejected and rolled back, so the guards are doing their job.
 
-**The fix, for a future session:** a boot failure whose exception names a symbol
-imported from another generated module should be allowed to target the file that
-*defines* the symbol. That is a blame rule, like the two in §4.4, and it is the
-third one this system needs:
+**Fixed** in `Pipeline._redirect_blame_to_definition`: when the blamed file
+merely *imports* a name the error complains about, and that name resolves to
+another generated module, the repair is aimed at the module that defines it.
+Confirmed against row 2's own project — the repair now targets
+`backend/services.py` instead of `backend/routes.py`.
 
-| Failure | Repair belongs in |
-|---|---|
-| 500 at request time, one endpoint | the outermost project frame (the caller) |
-| Import-time boot failure | the innermost project frame (the module that raised) |
-| Many endpoints, one exception type | **no frame — the whole file** (§4.9) |
-| A bad symbol imported from elsewhere | **the file that defines it** ← missing |
+It fires narrowly on purpose. A genuine in-file bug keeps the frame-based rule,
+and a complaint naming `List` or `BaseModel` never chases a repair out into
+`typing` or `pydantic`, because only modules that exist as generated files
+qualify.
+
+That completes the set. Which rule applies is decided by the shape of the
+failure, and all four are now asserted:
+
+| Failure | Repair belongs in | Why |
+|---|---|---|
+| 500 at request time, one endpoint | the outermost project frame | the caller handed a helper the wrong thing |
+| Import-time boot failure | the innermost project frame | the outermost is `main.py` doing nothing but importing |
+| Many endpoints, one exception type (§4.9) | **no frame — the whole file** | the cause is code that never ran |
+| A bad symbol imported from elsewhere | **the file that defines it** | the file that raised is not the file that is wrong |
+
+**Still unverified:** that the repair now *lands* on row 2. The aim is
+confirmed; whether the model fixes `services.py` given the right target costs
+~2-3K tokens to find out and has not been spent.
+
+### 4.11 — Two defects are now forbidden at generation time ✅ *fixed, unverified live*
+
+Repairing a defect costs an LLM call and can fail. Not generating it costs
+nothing, and both of the matrix's structural failures were preventable.
+
+`prompts/backend_developer.txt` gained two rules, in the style of the existing
+`get_db` rule that came out of row 1:
+
+- **STARTUP RULE.** `@router.on_event("startup")` does not fire for a router
+  included with `app.include_router(...)`, which is why row 3 shipped twelve
+  endpoints returning `no such table` alongside a perfectly good `init_db()`
+  that nothing ever called. The prompt shows the `lifespan` handler instead —
+  and says not to create tables at module level either, which is precisely what
+  the winning repair did (§4.9's caveat, now covered by the rule that would have
+  prevented needing the repair at all).
+- **RESPONSE MODEL RULE.** Anything named in `response_model=` must subclass
+  `BaseModel`. A plain class raises `FastAPIError` during import and takes the
+  whole app down — not one endpoint, all of them. That is row 2.
+
+Both rules name the failure they prevent, so neither reads as arbitrary.
+
+### 4.12 — The matrix driver overwrote its own results ✅ *fixed*
+
+Listed as a trap twice and better fixed than documented. `--rows 1` followed by
+`--rows 2,3` left a report describing rows 2 and 3 with no trace of row 1, which
+is exactly what happened on 2026-08-28. Rows are now carried forward from the
+previous report, labelled *(earlier run)* so nothing is passed off as fresh, and
+a row that is re-run wins over the record of it.
+
+Its headline also read `N of N rows pass` while counting only status and ZIP.
+Row 3 was counted as passing while shipping twelve dead endpoints. It now says
+what it measured — *reach a terminal state with a valid ZIP* — and points at the
+half that lives in the server log.
 
 ### 4.2 — Still open
 
@@ -641,10 +693,9 @@ third one this system needs:
    `/downloads/{id}`. A wrong path used to answer 200 with the SPA shell; it now
    404s for anything that did not ask for HTML, but check the `PK` magic
    rather than the status code anyway — `run_live_matrix.py` does.
-7. **`run_live_matrix.py` overwrites `PHASE23_MATRIX_RESULTS.md`**, it does not
-   merge. Running `--rows 1` and then `--rows 2,3,4` leaves a report describing
-   rows 2 and 3 only, and its "N of N rows pass" line counts status and ZIP —
-   **not** the smoke test, which is not in the API. The full picture is §0.0.
+7. ~~`run_live_matrix.py` overwrites its results file~~ — **fixed, §4.12.** It
+   merges now, and its headline no longer implies the smoke test was checked.
+   The smoke-test line is still only in the server log.
 8. **The server holds the code it started with.** Every fix in §4.3-4.5 was made
    while a build was running, so the process that produced rows 2 and 3 never
    had them. Restart before reading anything into a re-run.

@@ -29,9 +29,12 @@ live**, without rebuilding anything: cloning the broken projects the matrix
 already produced and driving the real debugger against the real API costs ~11K
 tokens where two rebuilds would cost ~300K. **Row 3 went from 7 of 19 routes
 answering to 19 of 19.** Row 2 still does not boot, for a reason now diagnosed
-precisely (§4.10 — the repair is aimed at the file where the error surfaced, not
-the file that defines the broken type). Chasing *when* the builds could be re-run
-is what turned up the other finding:
+precisely and **fixed**: the repair was aimed at the file where the error
+surfaced rather than the file that defines the broken type, which is the fourth
+blame rule this system needed (§4.10). Two more no-quota fixes came out of the
+same run — the prompts now forbid both defects the matrix produced (§4.11), and
+the matrix driver no longer erases the rows of the run before it (§4.12).
+Chasing *when* the builds could be re-run is what turned up the other finding:
 Groq's daily budget is a leaky bucket refilling at ~8,333 tokens/hour, not a
 quota that resets at midnight — so the ledger, and the `SESSION_CONTEXT.md` we
 ship to users, were both telling people to wait about fourteen hours longer than
@@ -98,7 +101,7 @@ quality is limited by missing precedent, and **every** failure diagnosed so far
 
 ## 0.1 What today's commits changed
 
-All committed on `main`, `31d36ad`..`92dccdd`, tests green at each step.
+All committed on `main`, `31d36ad`..`6a0d804`, tests green at each step.
 
 > **Verifying a repair no longer needs a rebuild.** Clone the broken project the
 > matrix produced, run `Pipeline._smoke_test_runtime` on the clone to get the
@@ -116,7 +119,10 @@ All committed on `main`, `31d36ad`..`92dccdd`, tests green at each step.
 | `llm_client.py` | `reasoning_effort` on both models; retries double the effective cap; the TPM ceiling is known before the first response |
 | `llm_client.py`, `agents/documenter.py` | The daily budget is a refilling bucket, not a midnight reset — and users are no longer told to wait for one |
 | `agents/debugger.py` | A fault shared by many endpoints goes to the whole-file prompt, not to one block (§4.9) |
-| `test_phase23.py` | Sections 22-29, +107 assertions (182 → 289) |
+| `agents/pipeline.py`, `tools/code_patcher.py` | A boot failure about an imported name is repaired where the name is defined (§4.10) |
+| `prompts/backend_developer.txt` | The router startup hook that never fires, and a non-Pydantic `response_model`, are both forbidden (§4.11) |
+| `run_live_matrix.py` | The results file merges instead of overwriting, and its headline claims only what it measured (§4.12) |
+| `test_phase23.py` | Sections 22-30, +130 assertions (182 → 312) |
 
 `PHASE23_MATRIX_RESULTS.md` is written by the driver and describes only the
 **last** invocation (rows 2 and 3), not row 1. Its "N of N rows pass" line counts
@@ -177,7 +183,7 @@ npm run test:e2e       # 80 Playwright + axe — needs BOTH servers up
 venv/Scripts/python.exe test_phase17.py                  # 58/58 (pinned to a fixture)
 venv/Scripts/python.exe test_phase21.py                  # 77/77
 venv/Scripts/python.exe test_phase22.py                  # 85/85
-venv/Scripts/python.exe test_phase23.py                  # 289/289
+venv/Scripts/python.exe test_phase23.py                  # 312/312
 venv/Scripts/python.exe test_groq_rate_limit_handling.py # OK
 ```
 
