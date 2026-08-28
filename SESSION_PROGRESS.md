@@ -1,21 +1,33 @@
 # Session Progress — start here
 
-**Last session: 2026-08-26 (Phase 23 — Groq/API fixes, live validation).**
-The work is **committed** on `main`, as eleven commits named `groq api fixes…`,
-newest `f67bf9a`.
+**Last session: 2026-08-28 (Phase 23 — the live matrix, rows 1-3).**
+The previous session's work is **committed** on `main` (eleven commits named
+`groq api fixes…`, newest `f67bf9a`). **This session's changes are in the
+working tree, not committed** — five files, listed in §0.1.
 
 > **Backend/pipeline work now has its own state doc: `PHASE23_HANDOFF.md`.**
 > Read that first if you are touching `llm_client.py`, the agents, the pipeline
 > or the platform API. This file remains the frontend and general entry point.
 
-**Where things stand in one paragraph.** Phase 23's six build-destroying fixes
-are committed and one of them (the entry-point fix) is confirmed end to end on a
-live build. The token ledger now seeds itself from build history, so it no longer
-under-reports after a restart. Two defects that only a real browser could expose
-were found and fixed: the ZIP download did nothing when clicked, and the live E2E
-suite could never run at all. The last change — sending request-time failures to
-the repair passes — is **fully tested offline but has never run on a live
-build**; that is the first thing to verify when Groq quota returns.
+**Where things stand in one paragraph.** The A2 live matrix ran three of its
+four rows today and row 4 was refused for want of quota. All three built,
+finished and produced a valid ZIP; the entry-point fix and the request-time
+repair path are now both confirmed on real builds, and row 1 went from 2 of 5
+routes answering to **5 of 5**. The matrix still fails its own criterion,
+because rows 2 and 3 exposed two further mechanical defects — an app that fails
+to *boot* was classified as unrepairable, and a repair prompt asking for a whole
+file back was capped below the size of that file. Both are fixed, along with a
+third defect all three rows hit: a completed `requirements.txt` that the audit
+read as an empty scaffold and degraded the build over. Chasing row 3's failure
+to the bottom turned up the real constraint — Groq bills prompt and completion
+against a single 8,000-token minute, so rewriting a whole file to repair it is
+impossible above ~11KB — so the repair now sends one block instead, a 2,351-char
+prompt where the file alone was 10,776. Along the way, `gpt-oss-20b` turned out
+to accept `reasoning_effort` after all, which is what had it returning zero
+characters thirteen times in one matrix. All five fixes are covered offline
+(`test_phase23.py` is 259/259, was 182) and **none has run on a live build** —
+both daily budgets are spent until 00:00 UTC. The next thing that can be done
+without quota is Phase B1.
 
 **Earlier frontend work is unchanged and committed:** the landing restructure
 (`FRONTEND_LANDING_PLAN.md`, fully executed — see §2.7/§2.8) and everything in
@@ -29,29 +41,61 @@ build**; that is the first thing to verify when Groq quota returns.
 
 ## 0. Next session — pick up here
 
-**1. Re-run matrix row 1 and check the repair path (needs quota).**
-The runtime-repair work is untested live. Row 1's prompt is in
-`run_live_matrix.py`; the thing to watch for in the server log is a repair pass
-that now *does* something:
+**1. Phase B1 — SQLAlchemy + Alembic (`PHASE23_PLAN.md`). No quota needed, so
+this is the only item that can start immediately.** Auth needs migrations to
+exist first, which is why it is B1 and not B2. Fresh-session sized.
+
+**2. After the 00:00 UTC reset, re-run rows 2 and 3.** Three fixes made today
+are offline-verified and have never run on a live build — the same position the
+request-time repair was in yesterday, and it duly proved out. Restart the server
+first: it holds the code it started with.
 
 ```bash
 venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
-venv/Scripts/python.exe run_live_matrix.py --rows 1
-grep -E "Repairing a request-time failure|Runtime repair|Every endpoint now responds" server.log
+venv/Scripts/python.exe run_live_matrix.py --dry-run     # check the quota first
+venv/Scripts/python.exe run_live_matrix.py --rows 2,3
+grep -E "Runtime smoke test|failed to boot|Repairing a request-time" server.log
 ```
 
-Success is `🔥 Runtime smoke test: N/N routes` — every route, not 2 of 5.
+What each fix should show:
+- **Row 2** must get past `🚨 App failed to boot` — the boot failure is now a
+  repairable issue with a blamed file, so the log should show the debugger
+  aiming at `routes.py` instead of the finding going to the advisory list.
+- **Row 3** must stop rejecting its own repair. The rejection to watch for is
+  `a repair must not delete the definitions other modules import`; the repair now
+  sends one block instead of the whole file, so there is nothing to delete. The
+  line that says it is working is `🎯 Targeted repair of ...`.
+- **Both** should reach `done`, not `done_with_context`, if the
+  `requirements.txt` audit fix is the last thing degrading them.
 
-**2. Then matrix rows 2-4** (`--rows 2,3,4`). Rows 2 and 4 have never run and
-hold all the remaining unknown. Budget ~83K tokens per build against 200K per
-model per day; the driver refuses to start a row it cannot finish.
+**3. Then row 4** (`--rows 4`), the one shape never yet built — a CLI, so it
+exercises the "no FastAPI entry point" path rather than the smoke test.
 
-**3. Then Phase B** (`PHASE23_PLAN.md`), starting with B1 — SQLAlchemy +
-Alembic — because auth needs migrations to exist first. Fresh-session sized.
+Budget ~95-170K tokens per build against 200K per model per day. Rows 2 and 3
+cost 172K and 132K; two rows is realistically a whole day's quota.
 
 Phase C stays blocked until the matrix is complete: its premise is that build
-quality is limited by missing precedent, and every failure diagnosed so far has
-been a mechanical defect instead.
+quality is limited by missing precedent, and **every** failure diagnosed so far
+— five now — has been a mechanical defect instead.
+
+---
+
+## 0.1 Uncommitted work in the tree
+
+Seven files, all of it today's. Nothing is committed; the tests are green.
+
+| File | Change |
+|---|---|
+| `tools/requirements_builder.py` | Strips the scaffold placeholder once real packages are written; adds uvicorn for a FastAPI app that never imports it |
+| `tools/runtime_smoke.py` | An import-time failure now reports its frame chain, so a boot failure can be blamed on a file; interpreter pseudo-frames excluded |
+| `tools/code_patcher.py` | **New.** Locate one top-level block from a traceback frame and splice a replacement back, refusing anything that does not parse |
+| `agents/pipeline.py` | A boot failure is filed as repairable instead of advisory; the error trim keeps the frame chain the repair aims at |
+| `agents/debugger.py` | Repairs the failing block instead of the whole file, falling back to the old path; `_rewrite_budget()` sizes to the code and imposes no ceiling of its own |
+| `llm_client.py` | `reasoning_effort` on both models; retries double the effective cap; the TPM ceiling is known before the first response |
+| `test_phase23.py` | Sections 22-27, +77 assertions (182 → 259) |
+
+`PHASE23_MATRIX_RESULTS.md` is untracked and is written by the driver; it
+describes only the **last** invocation (rows 2 and 3), not row 1.
 
 ---
 
@@ -102,9 +146,10 @@ npm run test:e2e       # 80 Playwright + axe — needs BOTH servers up
                        # 5 new: the dashboard status-filter guard, §2.8.
 
 # Backend (test_phase17 needs the server running)
-venv/Scripts/python.exe test_phase17.py                  # 54/54
+venv/Scripts/python.exe test_phase17.py                  # 58/58 (pinned to a fixture)
 venv/Scripts/python.exe test_phase21.py                  # 77/77
 venv/Scripts/python.exe test_phase22.py                  # 85/85
+venv/Scripts/python.exe test_phase23.py                  # 259/259
 venv/Scripts/python.exe test_groq_rate_limit_handling.py # OK
 ```
 
