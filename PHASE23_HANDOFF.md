@@ -14,8 +14,9 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 **The matrix is three rows deep and the runtime-repair path has now run live.**
 Rows 1, 2 and 3 all built; row 4 was refused by the driver because neither model
 had 70,000 tokens left, which is the refusal working as designed. Both daily
-budgets are spent — `gpt-oss-120b` 103%, `gpt-oss-20b` 96% — so **no further
-live build is possible until the 00:00 UTC reset.**
+budgets are spent — `gpt-oss-120b` 103%, `gpt-oss-20b` 96%. **There is no reset
+to wait for**: the budget refills continuously at ~8,333 tokens/hour per model
+(§4.8), so the question is how long, not until when.
 
 | Row | Shape | Status | Tokens | Boots? | Smoke |
 |---|---|---|---|---|---|
@@ -55,7 +56,7 @@ tokens.
 
 ---
 
-## 0.0.1 Three fixes, all offline-verified, none yet run live
+## 0.0.1 Six fixes; five are offline-verified and none has run live
 
 Quota ran out before any of them could be exercised on a build. They are the
 first thing to check after the reset — the same position §4.1 was in last
@@ -68,8 +69,9 @@ session, and §4.1 duly proved out.
 | 3 | Rewrite budgets sized to the code (§4.5) | A flat cap smaller than the file it must reproduce | §24, 7 assertions |
 | 4 | **Repair one block, not the whole file (§4.6)** | Row 3: a 10.7KB repair that could not fit the minute it was sent in | §25-26, 37 assertions |
 | 5 | `reasoning_effort` on both models; retries that grow (§4.7) | 13 completions that returned **zero characters** and were billed anyway | §27, 9 assertions |
+| 6 | The budget refills, it does not reset (§4.8) | A ledger and a shipped handoff that both overstated the wait by ~14h | §28, 22 assertions |
 
-`test_phase23.py` is **259 / 259** (was 182). Every other suite is unchanged and
+`test_phase23.py` is **281 / 281** (was 182). Every other suite is unchanged and
 green: phase 21 77/77, phase 22 85/85, phase 17 58/58, rate-limit 4/4, frontend
 typecheck clean and 191 unit tests.
 
@@ -112,12 +114,14 @@ Both are fixed, with tests.
 | # | What | Needs quota |
 |---|---|---|
 | 1 | **Phase B, starting with B1 (SQLAlchemy + Alembic)** — the only item that can start now | no |
-| 2 | Re-run rows 2 and 3 to verify the §4.3-§4.7 fixes on a live build | yes — after 00:00 UTC |
+| 2 | Re-run row 3, then row 2, to verify the §4.3-§4.7 fixes on a live build | yes — ~13h of refill for row 3 |
 | 3 | Row 4, the one shape never yet built: `run_live_matrix.py --rows 4` | yes |
 | 4 | A1 assertion 2 — a clean build reaching `done` with no `SESSION_CONTEXT.md`. §4.3 removes the reason all three rows missed it | falls out of 2-3 |
 
-**Both daily budgets are spent** (120b 103%, 20b 96%). Nothing in 2-4 can start
-before the reset; item 1 needs no quota at all and is fresh-session sized.
+**Both daily budgets are spent** (120b 103%, 20b 96%), and refilling at ~8,333
+tokens/hour each. `run_live_matrix.py --dry-run` reports what is actually
+available and costs nothing; item 1 needs no quota at all and is fresh-session
+sized.
 
 Phase C stays blocked until the matrix is complete — see §3.6.
 
@@ -461,6 +465,43 @@ is no code at all.
 > (8000, env-overridable) instead of starting at `None`. An unknown ceiling is
 > not the same as no ceiling, and treating it as none let the first call of every
 > process skip the fit entirely.
+
+### 4.8 — The daily budget refills; it does not reset ✅ *fixed, measured live*
+
+Chasing *when* §4.3-§4.7 could be verified turned this up, and it was worth more
+than the answer to the original question.
+
+Groq's TPD is a **leaky bucket**. Its own 429s carry the arithmetic, and both
+reproduce to within a second at `GROQ_DAILY_TOKEN_LIMIT / 86400`:
+
+| Groq's 429 | short by | Groq said | `short ÷ 2.315` |
+|---|---|---|---|
+| used 197,225, requested 2,885 | 110 | `47.52s` | **47.5s** |
+| used 196,757, requested 4,131 | 888 | `6m23.616s` | **6m23s** |
+
+**≈ 2.315 tokens/second, ≈ 8,333 per hour, per model.** Two things followed from
+believing in a midnight reset instead:
+
+1. **We shipped the false claim to users.** "Groq free-tier daily quotas reset at
+   00:00 UTC" went into the `SESSION_CONTEXT.md` of every quota-interrupted
+   build, sending people away for a day when the wait was a few hours.
+2. **The ledger blocked us longer than Groq did.** Summing a rolling 24h window
+   only returns budget as individual calls age out, so after this matrix it read
+   0 remaining until 06:08 the next morning — while Groq would have accepted a
+   70K build from ~16:25 the same afternoon. `run_live_matrix.py` refuses below
+   70,000, so it would have idled ~14 hours for nothing.
+
+`get_daily_usage` now drains a running total in call order. Reading it back on
+the real ledger immediately recovered **12,791 tokens on 120b** (reported as 0)
+and **26,395 on 20b** (7,749).
+
+> Decaying each entry independently would look similar and be wrong: it refunds
+> the same elapsed seconds once per entry, so a build of 40 calls would appear to
+> repay itself 40 times over. §28 asserts that specifically.
+
+`used` is rounded and `remaining` floored — both err towards reporting less
+budget than there is. Truncating `used` lost a token to sub-second decay between
+two calls in one build, which is the one direction this number must not move.
 
 ### 4.2 — Still open
 

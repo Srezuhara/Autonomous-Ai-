@@ -1,9 +1,8 @@
 # Session Progress — start here
 
 **Last session: 2026-08-28 (Phase 23 — the live matrix, rows 1-3).**
-The previous session's work is **committed** on `main` (eleven commits named
-`groq api fixes…`, newest `f67bf9a`). **This session's changes are in the
-working tree, not committed** — five files, listed in §0.1.
+Everything is **committed** on `main`: seven commits, `31d36ad`..`6396f28`,
+six named `matrix fixes…` and one `quota…`.
 
 > **Backend/pipeline work now has its own state doc: `PHASE23_HANDOFF.md`.**
 > Read that first if you are touching `llm_client.py`, the agents, the pipeline
@@ -25,9 +24,13 @@ impossible above ~11KB — so the repair now sends one block instead, a 2,351-ch
 prompt where the file alone was 10,776. Along the way, `gpt-oss-20b` turned out
 to accept `reasoning_effort` after all, which is what had it returning zero
 characters thirteen times in one matrix. All five fixes are covered offline
-(`test_phase23.py` is 259/259, was 182) and **none has run on a live build** —
-both daily budgets are spent until 00:00 UTC. The next thing that can be done
-without quota is Phase B1.
+(`test_phase23.py` is 281/281, was 182) and **none has run on a live build**.
+Chasing *when* they could be is what turned up the last finding:
+Groq's daily budget is a leaky bucket refilling at ~8,333 tokens/hour, not a
+quota that resets at midnight — so the ledger, and the `SESSION_CONTEXT.md` we
+ship to users, were both telling people to wait about fourteen hours longer than
+Groq does. Fixed and measured. The next thing that needs no quota at all is
+Phase B1.
 
 **Earlier frontend work is unchanged and committed:** the landing restructure
 (`FRONTEND_LANDING_PLAN.md`, fully executed — see §2.7/§2.8) and everything in
@@ -45,7 +48,7 @@ without quota is Phase B1.
 this is the only item that can start immediately.** Auth needs migrations to
 exist first, which is why it is B1 and not B2. Fresh-session sized.
 
-**2. After the 00:00 UTC reset, re-run rows 2 and 3.** Three fixes made today
+**2. Re-run row 3, then row 2, as the budget refills.** Five fixes made today
 are offline-verified and have never run on a live build — the same position the
 request-time repair was in yesterday, and it duly proved out. Restart the server
 first: it holds the code it started with.
@@ -53,9 +56,15 @@ first: it holds the code it started with.
 ```bash
 venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
 venv/Scripts/python.exe run_live_matrix.py --dry-run     # check the quota first
-venv/Scripts/python.exe run_live_matrix.py --rows 2,3
-grep -E "Runtime smoke test|failed to boot|Repairing a request-time" server.log
+venv/Scripts/python.exe run_live_matrix.py --rows 3
+grep -E "Targeted repair of|Rejecting LLM fix|0 chars|Runtime smoke test" server.log
 ```
+
+> **There is no reset to wait for.** The budget returns at ~8,333 tokens/hour
+> per model, continuously; `--dry-run` reports what is actually there. From the
+> 2026-08-28 exhaustion the driver's 70,000 threshold was reached about 13:41
+> UTC the same day and row 3's own 132K cost about 21:07 UTC. One row per
+> ~16-21h is the honest ceiling.
 
 What each fix should show:
 - **Row 2** must get past `🚨 App failed to boot` — the boot failure is now a
@@ -80,9 +89,9 @@ quality is limited by missing precedent, and **every** failure diagnosed so far
 
 ---
 
-## 0.1 Uncommitted work in the tree
+## 0.1 What today's commits changed
 
-Seven files, all of it today's. Nothing is committed; the tests are green.
+All committed on `main`, `31d36ad`..`6396f28`, tests green at each step.
 
 | File | Change |
 |---|---|
@@ -92,10 +101,15 @@ Seven files, all of it today's. Nothing is committed; the tests are green.
 | `agents/pipeline.py` | A boot failure is filed as repairable instead of advisory; the error trim keeps the frame chain the repair aims at |
 | `agents/debugger.py` | Repairs the failing block instead of the whole file, falling back to the old path; `_rewrite_budget()` sizes to the code and imposes no ceiling of its own |
 | `llm_client.py` | `reasoning_effort` on both models; retries double the effective cap; the TPM ceiling is known before the first response |
-| `test_phase23.py` | Sections 22-27, +77 assertions (182 → 259) |
+| `llm_client.py`, `agents/documenter.py` | The daily budget is a refilling bucket, not a midnight reset — and users are no longer told to wait for one |
+| `test_phase23.py` | Sections 22-28, +99 assertions (182 → 281) |
 
-`PHASE23_MATRIX_RESULTS.md` is untracked and is written by the driver; it
-describes only the **last** invocation (rows 2 and 3), not row 1.
+`PHASE23_MATRIX_RESULTS.md` is written by the driver and describes only the
+**last** invocation (rows 2 and 3), not row 1. Its "N of N rows pass" line counts
+status and ZIP, not the smoke test. `frontend-screenshots/` stays untracked.
+
+The full runbook for the live verification — what to watch for, and when each
+row becomes affordable — is in the plan file, not repeated here.
 
 ---
 
@@ -149,7 +163,7 @@ npm run test:e2e       # 80 Playwright + axe — needs BOTH servers up
 venv/Scripts/python.exe test_phase17.py                  # 58/58 (pinned to a fixture)
 venv/Scripts/python.exe test_phase21.py                  # 77/77
 venv/Scripts/python.exe test_phase22.py                  # 85/85
-venv/Scripts/python.exe test_phase23.py                  # 259/259
+venv/Scripts/python.exe test_phase23.py                  # 281/281
 venv/Scripts/python.exe test_groq_rate_limit_handling.py # OK
 ```
 
