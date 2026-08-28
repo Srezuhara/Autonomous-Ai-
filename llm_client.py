@@ -60,6 +60,12 @@ MAX_DAILY_QUOTA_ROTATIONS_PER_CALL = int(
 GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "900"))
 GROQ_RATE_LIMIT_MAX_RETRIES = int(os.getenv("GROQ_RATE_LIMIT_MAX_RETRIES", "20"))
 GROQ_TPM_SAFETY_TOKENS = int(os.getenv("GROQ_TPM_SAFETY_TOKENS", "800"))
+# The tokens-per-minute ceiling, covering prompt AND completion together, used
+# until a real `x-ratelimit-limit-tokens` header replaces it. Without a starting
+# value `_fit_output_budget_to_model_limit` cannot clamp anything on the first
+# call of a process, so an oversized request went out unchecked. 8000 is the
+# free-tier figure this project actually runs against, observed in the header.
+GROQ_TPM_LIMIT_DEFAULT = int(os.getenv("GROQ_TPM_LIMIT_DEFAULT", "8000"))
 GROQ_CONTEXT_MAX_CHARS = int(os.getenv("GROQ_CONTEXT_MAX_CHARS", "2500"))
 GROQ_FREE_TIER_CONSERVE = os.getenv("GROQ_FREE_TIER_CONSERVE", "true").lower() in {
     "1", "true", "yes", "on"
@@ -177,7 +183,9 @@ class RateLimitInfo:
 
 @dataclass
 class ModelRateState:
-    limit_tokens: Optional[int] = None
+    # Seeded rather than None: an unknown ceiling is not the same as no ceiling,
+    # and treating it as none let the first call of every process skip the fit.
+    limit_tokens: Optional[int] = GROQ_TPM_LIMIT_DEFAULT
     remaining_tokens: Optional[int] = None
     reset_tokens_at: float = 0.0
     limit_requests: Optional[int] = None
@@ -336,14 +344,24 @@ _DEFAULT_MAX_TOKENS = 1024
 # then burns retries on. `reasoning_effort=low` fixes it outright and costs
 # FEWER tokens, because the budget goes to code instead of deliberation.
 #
-# gpt-oss-20b rejects reasoning_effort with HTTP 400 ("Tool choice is none, but
-# model called a tool"), so it is excluded and given a larger budget floor
-# instead — it needs ~1600 tokens to finish the same prompt cleanly.
+# gpt-oss-20b USED to reject reasoning_effort with HTTP 400 ("Tool choice is none,
+# but model called a tool"), so it was excluded and given a larger budget floor
+# instead. Groq has since fixed it. Re-measured 2026-08-28, same prompt, same
+# 600-token budget:
+#
+#   gpt-oss-20b  no effort param      → 1614 chars reasoning, 254 chars code, 442 tok
+#   gpt-oss-20b  reasoning_effort=low →  578 chars reasoning, 582 chars code, 276 tok
+#
+# Twice the code for 38% fewer tokens. Keeping it excluded was costing whole
+# calls: the matrix on 2026-08-28 logged THIRTEEN completions that finished with
+# `finish_reason=length` and zero characters of content — the entire budget spent
+# deliberating, nothing returned, then retried at double the budget and billed
+# again. That is what this parameter prevents.
 
 _REASONING_MODEL_MARKERS = ("gpt-oss", "qwen3", "deepseek-r1")
 
 # Models verified to accept the `reasoning_effort` parameter on Groq.
-_REASONING_EFFORT_SUPPORTED = ("gpt-oss-120b",)
+_REASONING_EFFORT_SUPPORTED = ("gpt-oss-120b", "gpt-oss-20b")
 
 _REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
 
@@ -1648,13 +1666,30 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                 if choice.get("finish_reason") == "length":
                     if truncation_retries < GROQ_TRUNCATION_MAX_RETRIES:
                         truncation_retries += 1
+                        # Double the EFFECTIVE cap, not the requested one. A
+                        # reasoning model without `reasoning_effort` support has
+                        # its cap raised to _REASONING_MIN_TOKENS on the way out,
+                        # so doubling the request could leave the payload
+                        # unchanged: the Reviewer asked for 600, the floor made it
+                        # 1600, the retry asked for 1200 — and the floor made that
+                        # 1600 too. A byte-identical call, billed in full. Seen
+                        # twice in the 2026-08-28 matrix.
+                        effective = _apply_reasoning_budget(model, requested_max_tokens)
                         bumped = max(
                             requested_max_tokens + 1,
-                            int(requested_max_tokens * GROQ_TRUNCATION_BUDGET_MULTIPLIER),
+                            int(effective * GROQ_TRUNCATION_BUDGET_MULTIPLIER),
+                        )
+                        # Zero content with finish_reason=length is not truncated
+                        # code, it is no code at all — the whole budget went on
+                        # hidden reasoning. Different cause, different fix.
+                        shape = (
+                            "spent its entire budget on reasoning and returned no "
+                            "content" if not content.strip()
+                            else f"returned {len(content)} chars before running out"
                         )
                         logger.warning(
                             f"✂️  Groq [{model}] hit its output budget "
-                            f"(finish_reason=length, {len(content)} chars). "
+                            f"(finish_reason=length): {shape}. "
                             f"Retrying with max_tokens {requested_max_tokens} → {bumped} "
                             f"(attempt {truncation_retries}/{GROQ_TRUNCATION_MAX_RETRIES}) "
                             "rather than returning truncated code."
