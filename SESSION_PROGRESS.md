@@ -1,46 +1,23 @@
 # Session Progress — start here
 
-**Last session: 2026-08-28 (Phase 23 — the live matrix, rows 1-3).**
-Everything is **committed** on `main`: seven commits, `31d36ad`..`6396f28`,
-six named `matrix fixes…` and one `quota…`.
+**Last session: 2026-08-28 (Phase 23 — the live matrix, and the ten fixes it
+produced).** Everything is **committed** on `main`, twelve commits,
+`31d36ad`..`70d707b`. Working tree clean apart from `frontend-screenshots/`.
 
-> **Backend/pipeline work now has its own state doc: `PHASE23_HANDOFF.md`.**
-> Read that first if you are touching `llm_client.py`, the agents, the pipeline
-> or the platform API. This file remains the frontend and general entry point.
+> **Backend/pipeline work has its own state doc: `PHASE23_HANDOFF.md`.** Read it
+> first if you are touching `llm_client.py`, the agents, the pipeline or the
+> platform API — §4.x there is the per-defect detail this file summarises. This
+> file remains the frontend and general entry point.
 
-**Where things stand in one paragraph.** The A2 live matrix ran three of its
-four rows today and row 4 was refused for want of quota. All three built,
-finished and produced a valid ZIP; the entry-point fix and the request-time
-repair path are now both confirmed on real builds, and row 1 went from 2 of 5
-routes answering to **5 of 5**. The matrix still fails its own criterion,
-because rows 2 and 3 exposed two further mechanical defects — an app that fails
-to *boot* was classified as unrepairable, and a repair prompt asking for a whole
-file back was capped below the size of that file. Both are fixed, along with a
-third defect all three rows hit: a completed `requirements.txt` that the audit
-read as an empty scaffold and degraded the build over. Chasing row 3's failure
-to the bottom turned up the real constraint — Groq bills prompt and completion
-against a single 8,000-token minute, so rewriting a whole file to repair it is
-impossible above ~11KB — so the repair now sends one block instead, a 2,351-char
-prompt where the file alone was 10,776. Along the way, `gpt-oss-20b` turned out
-to accept `reasoning_effort` after all, which is what had it returning zero
-characters thirteen times in one matrix. All five fixes are covered offline
-(`test_phase23.py` is 289/289, was 182). **Five of the seven are now confirmed
-live**, without rebuilding anything: cloning the broken projects the matrix
-already produced and driving the real debugger against the real API costs ~14K
-tokens where two rebuilds would cost ~300K. **Both builds the matrix left broken
-are now repaired.** Row 3 went from 7 of 19 routes answering to 19 of 19, once a
-fault shared by every endpoint stopped being repaired one block at a time
-(§4.9). Row 2 went from never booting to 6 of 6, once the repair was aimed at the
-file that *defines* the broken class rather than the file where the error
-surfaced — the fourth blame rule this system needed (§4.10). Two more no-quota fixes came out of the
-same run — the prompts now forbid both defects the matrix produced (§4.11), and
-the matrix driver no longer erases the rows of the run before it (§4.12).
-Chasing *when* the builds could be re-run is what turned up the other finding:
-Groq's daily budget is a leaky bucket refilling at ~8,333 tokens/hour, not a
-quota that resets at midnight — so the ledger, and the `SESSION_CONTEXT.md` we
-ship to users, were both telling people to wait about fourteen hours longer than
-Groq does. Fixed and measured. The next thing that needs no quota at all is
-Phase B1.
+**Where things stand.** The A2 live matrix ran three of its four rows; row 4 was
+refused for want of quota. All three finished with a valid ZIP, but two shipped
+broken — row 2's app never booted and row 3 answered 7 of 19 routes. Diagnosing
+those two builds produced **ten fixes**, and **both broken builds are now
+repaired**: row 3 answers 19/19 and row 2 answers 6/6. That was done without
+rebuilding anything (§0.3), for ~14K tokens against the ~300K two rebuilds would
+have cost. Seven of the ten fixes are confirmed on live builds; the three that
+are not need a fresh generation to exercise, which is what the next rebuild is
+for. `test_phase23.py` is **312/312**, up from 182.
 
 **Earlier frontend work is unchanged and committed:** the landing restructure
 (`FRONTEND_LANDING_PLAN.md`, fully executed — see §2.7/§2.8) and everything in
@@ -54,85 +31,195 @@ Phase B1.
 
 ## 0. Next session — pick up here
 
-**1. Phase B1 — SQLAlchemy + Alembic (`PHASE23_PLAN.md`). No quota needed, so
-this is the only item that can start immediately.** Auth needs migrations to
-exist first, which is why it is B1 and not B2. Fresh-session sized.
+Three things are worth doing, and only one of them needs quota.
 
-**2. Re-run row 3, then row 2, as the budget refills.** The repair paths are
-already proven against both projects (§4.9 — 19/19 and 6/6); a full rebuild now
-checks that the *whole pipeline* produces a clean build, which is a different
-question and the one A2 actually asks. It also exercises §4.11, the two prompt
-rules, which only a fresh generation can test. Restart the server first: it holds the
-code it started with.
+| # | Work | Quota | Size | Unblocks |
+|---|---|---|---|---|
+| 1 | **Phase B1 — SQLAlchemy + Alembic** | none | fresh session | B2 auth, and everything after it |
+| 2 | **Re-run row 3** (then 2, then 4) | ~132K, ~16h of refill | half a session | A2, and Phase C behind it |
+| 3 | Row 2's remaining `done_with_context` causes | small | an hour | a build reaching plain `done` |
+
+### 1. Phase B1 — the only item that can start immediately
+
+Fully specified in `PHASE23_PLAN.md`. Auth needs migrations to exist first, which
+is why it is B1 and not B2. The load-bearing constraint: **keep
+`api_platform/database.py`'s function signatures as the seam** — `get_project`,
+`list_projects`, `update_project`, `add_build_step` are called from `runner.py`,
+all five route modules and the tests, so reimplementing their bodies over
+SQLAlchemy means zero call-site changes. Alembic's first revision must be
+**stamped** against the existing DB so the 58 live builds survive.
+
+### 2. Re-run the matrix rows
+
+The repair paths are proven against both broken projects (§0.3). A rebuild asks
+a different and larger question: does the *whole pipeline* now produce a clean
+build? That is what A2 actually measures, and it is the only way to exercise
+§4.11's two prompt rules, since a prompt rule can only be tested by generating
+code.
 
 ```bash
 venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
-venv/Scripts/python.exe run_live_matrix.py --dry-run     # check the quota first
+venv/Scripts/python.exe run_live_matrix.py --dry-run     # what is actually there
 venv/Scripts/python.exe run_live_matrix.py --rows 3
-grep -E "Targeted repair of|Rejecting LLM fix|0 chars|Runtime smoke test" server.log
+grep -E "Targeted repair of|Rejecting LLM fix|0 chars|scaffold placeholder|Runtime smoke test" server.log
 ```
 
-> **There is no reset to wait for.** The budget returns at ~8,333 tokens/hour
-> per model, continuously; `--dry-run` reports what is actually there. From the
-> 2026-08-28 exhaustion the driver's 70,000 threshold was reached about 13:41
-> UTC the same day and row 3's own 132K cost about 21:07 UTC. One row per
-> ~16-21h is the honest ceiling.
+**Restart the server first** — `--no-reload` is deliberate, so a running process
+holds the code it started with.
 
-What each fix should show:
-- **Row 2** must get past `🚨 App failed to boot` — the boot failure is now a
-  repairable issue with a blamed file, so the log should show the debugger
-  aiming at `routes.py` instead of the finding going to the advisory list.
-- **Row 3** must stop rejecting its own repair. The rejection to watch for is
-  `a repair must not delete the definitions other modules import`; the repair now
-  sends one block instead of the whole file, so there is nothing to delete. The
-  line that says it is working is `🎯 Targeted repair of ...`.
-- **Both** should reach `done`, not `done_with_context`, if the
-  `requirements.txt` audit fix is the last thing degrading them.
+What to watch for, and what each line proves:
 
-**3. Then row 4** (`--rows 4`), the one shape never yet built — a CLI, so it
-exercises the "no FastAPI entry point" path rather than the smoke test.
+| Expect | Proves | Was |
+|---|---|---|
+| `🎯 … Targeted repair of '…'` | §4.6 block repair fired | the whole file was sent |
+| `🧭 … only imports \`X\` from \`Y\`` | §4.10 re-aimed the repair | it repaired the wrong file |
+| `🧮 … on several endpoints at once` | §4.9 spotted a shared cause | one block was repaired twelve times over |
+| **no** `finish_reason=length, 0 chars` | §4.7 reasoning budget | 13 wasted calls in one matrix |
+| **no** `still contain the scaffold placeholder` | §4.3 requirements audit | degraded all three rows |
+| **no** `@router.on_event("startup")` generated | §4.11 startup rule | row 3's twelve dead endpoints |
+| `🔥 Runtime smoke test: 19/19 routes` | the whole chain | 7/19 |
+| status `done`, not `done_with_context` | nothing left degrading it | all three rows degraded |
 
-Budget ~95-170K tokens per build against 200K per model per day. Rows 2 and 3
-cost 172K and 132K; two rows is realistically a whole day's quota.
+### 3. What still degrades a build that otherwise works
 
-Phase C stays blocked until the matrix is complete: its premise is that build
-quality is limited by missing precedent, and **every** failure diagnosed so far
-— five now — has been a mechanical defect instead.
+Row 1 finished `done_with_context` over two issues, one of which (§4.3) is fixed.
+The other was a generated test failing 2/3. **A1 assertion 2 — a clean build
+reaching `done` with no `SESSION_CONTEXT.md` — has still never been observed**,
+and it is the cheapest remaining signal that the pipeline is healthy end to end.
+
+Phase C stays blocked until the matrix is complete. Its premise is that build
+quality is limited by missing precedent, and **every** failure diagnosed so far —
+ten now — has been a mechanical defect instead.
 
 ---
 
-## 0.1 What today's commits changed
+## 0.1 The ten fixes, and which are proven
 
-All committed on `main`, `31d36ad`..`6a0d804`, tests green at each step.
+`test_phase23.py` sections 22-30 cover all of them offline. "Live" means it ran
+against the real API on a real project, not that a full build was rebuilt.
 
-> **Verifying a repair no longer needs a rebuild.** Clone the broken project the
-> matrix produced, run `Pipeline._smoke_test_runtime` on the clone to get the
-> real blame, then `Debugger._repair_runtime_error`, then smoke it again. Row 3's
-> 7/19 → 19/19 took 6,539 tokens and six seconds; row 2's dead app → 6/6 took
-> 2,640 and three. Both repaired copies are kept as evidence, at
-> `generated_projects/_live_verify_row3b/` and `_live_verify_row2_final/`.
+| § | Fix | Live? | Evidence |
+|---|---|---|---|
+| 4.3 | `requirements.txt` no longer reads as a stub once filled; uvicorn added | ⬜ | deterministic; needs a fresh build to observe |
+| 4.4 | A boot failure is repairable, not advisory | ✅ | row 2 aimed and repaired |
+| 4.5 | Rewrite budgets sized to the code, no ceiling of their own | ✅ | the clamp fired live, 3992 → 3462 |
+| 4.6 | Repair the failing block, not the whole file | ✅ | **fixed row 2** — replaced one class in a 4,234-char file |
+| 4.7 | `reasoning_effort` on both models; retries that actually grow | ✅ | measured: 2× the code for 38% fewer tokens |
+| 4.8 | The daily budget refills; it does not reset | ✅ | matches Groq's own 429 arithmetic to the second |
+| 4.9 | A fault shared by many endpoints is not a block-level bug | ✅ | **fixed row 3** — 7/19 → 19/19 |
+| 4.10 | A bad imported symbol is repaired where it is defined | ✅ | **fixed row 2** — dead app → 6/6 |
+| 4.11 | The startup hook and non-Pydantic `response_model` are forbidden | ⬜ | a prompt rule needs a generation to test |
+| 4.12 | The driver's report merges and stops overstating | ✅ᵒ | deterministic, covered offline |
+
+ᵒ offline-deterministic; there is nothing a live run would add.
+
+### Where the code lives
 
 | File | Change |
 |---|---|
+| `tools/code_patcher.py` | **New.** Locate one top-level block from a traceback frame, splice a replacement back, refuse anything that does not parse; read a file's imports |
 | `tools/requirements_builder.py` | Strips the scaffold placeholder once real packages are written; adds uvicorn for a FastAPI app that never imports it |
-| `tools/runtime_smoke.py` | An import-time failure now reports its frame chain, so a boot failure can be blamed on a file; interpreter pseudo-frames excluded |
-| `tools/code_patcher.py` | **New.** Locate one top-level block from a traceback frame and splice a replacement back, refusing anything that does not parse |
-| `agents/pipeline.py` | A boot failure is filed as repairable instead of advisory; the error trim keeps the frame chain the repair aims at |
-| `agents/debugger.py` | Repairs the failing block instead of the whole file, falling back to the old path; `_rewrite_budget()` sizes to the code and imposes no ceiling of its own |
-| `llm_client.py` | `reasoning_effort` on both models; retries double the effective cap; the TPM ceiling is known before the first response |
-| `llm_client.py`, `agents/documenter.py` | The daily budget is a refilling bucket, not a midnight reset — and users are no longer told to wait for one |
-| `agents/debugger.py` | A fault shared by many endpoints goes to the whole-file prompt, not to one block (§4.9) |
-| `agents/pipeline.py`, `tools/code_patcher.py` | A boot failure about an imported name is repaired where the name is defined (§4.10) |
-| `prompts/backend_developer.txt` | The router startup hook that never fires, and a non-Pydantic `response_model`, are both forbidden (§4.11) |
-| `run_live_matrix.py` | The results file merges instead of overwriting, and its headline claims only what it measured (§4.12) |
+| `tools/runtime_smoke.py` | An import-time failure reports its frame chain, so a boot failure can be blamed; interpreter pseudo-frames excluded |
+| `agents/pipeline.py` | A boot failure is repairable, not advisory; blame is re-aimed at the file that defines a bad symbol; the error trim keeps the frame chain |
+| `agents/debugger.py` | Repairs the failing block with a full-file fallback; a shared cause skips the block path; budgets sized to the code |
+| `llm_client.py` | `reasoning_effort` on both models; retries double the *effective* cap; the TPM ceiling is known before the first response; the budget is a refilling bucket |
+| `agents/documenter.py` | Users are no longer told to wait for a midnight reset that does not exist |
+| `prompts/backend_developer.txt` | The router startup hook that never fires, and a non-Pydantic `response_model`, are both forbidden |
+| `run_live_matrix.py` | The results file merges instead of overwriting; the headline claims only what it measured |
 | `test_phase23.py` | Sections 22-30, +130 assertions (182 → 312) |
 
-`PHASE23_MATRIX_RESULTS.md` is written by the driver and describes only the
-**last** invocation (rows 2 and 3), not row 1. Its "N of N rows pass" line counts
-status and ZIP, not the smoke test. `frontend-screenshots/` stays untracked.
+---
 
-The full runbook for the live verification — what to watch for, and when each
-row becomes affordable — is in the plan file, not repeated here.
+## 0.2 The four blame rules — the design worth carrying forward
+
+Most of this session was one question in different disguises: *given a failure,
+which file should the repair be aimed at?* Getting it wrong wastes a call and can
+edit working code. All four rules are asserted in the suite.
+
+| Failure | Repair belongs in | Why |
+|---|---|---|
+| 500 at request time, one endpoint | the **outermost** project frame | the caller handed a helper the wrong thing; repairing the helper would teach it to accept bad input |
+| Import-time boot failure | the **innermost** project frame | the outermost is `main.py` doing nothing but `from routes import router` |
+| Many endpoints, one exception type | **no frame — the whole file** | the cause is code that never ran, so no traceback names it |
+| A bad symbol imported from elsewhere | **the file that defines it** | the file that raised is not the file that is wrong |
+
+The last two came from live failures and each turned a broken build into a
+working one. The evidence that they are about aim rather than model capability:
+row 2's repair failed on *both* models while pointed at `routes.py`, and
+succeeded on the fast model the moment it was pointed at `services.py`.
+
+---
+
+## 0.3 How to verify a repair without rebuilding
+
+This is the technique that made the session cheap, and it is reusable for any
+future repair work.
+
+```python
+# 1. Clone the broken project the matrix already produced — never mutate it.
+shutil.copytree(OUT / "inventory_system_e9eac7be", OUT / "_probe")
+# 2. Ask the pipeline what it thinks is wrong, exactly as a build would.
+pl = Pipeline.__new__(Pipeline); br.architecture = {"root_folder": "_probe"}
+pl._smoke_test_runtime(br)          # -> pl._smoke_runtime_errors
+# 3. Run the real repair against the real API.
+Debugger()._repair_runtime_error(path, err, FileDebugResult(...))
+# 4. Smoke it again and compare.
+```
+
+| Verified | Cost | Time | A rebuild would cost |
+|---|---|---|---|
+| row 3: 7/19 → 19/19 | 6,539 tokens | 6s | 131,848 tokens, 22 min |
+| row 2: dead app → 6/6 | 2,640 tokens | 3s | 171,914 tokens, 24 min |
+
+Both repaired copies are kept as evidence: `generated_projects/_live_verify_row3b/`
+and `_live_verify_row2_final/`.
+
+**What it does not prove:** that a *fresh* build avoids the defect. Prompt changes
+(§4.11) and generation-time audits (§4.3) are invisible to this technique — only
+a rebuild exercises them.
+
+---
+
+## 0.4 Quota: what governs planning
+
+**Groq's daily budget is a leaky bucket, not a calendar day.** It refills
+continuously at `200000/86400 ≈ 2.315 tokens/second ≈ 8,333 per hour, per model`.
+Confirmed against Groq's own 429s to within a second:
+
+```
+limit 200000, used 197225, requested 2885 -> "try again in 47.52s"
+  short by 110 tokens;  110 / 2.315 = 47.5s
+```
+
+There is no reset to wait for, and the ledger now models this — `--dry-run`
+reports what is actually available.
+
+| To afford | Refill needed from empty |
+|---|---|
+| the driver's 70,000 gate | 8.4h |
+| row 4 (CLI, est. 60K) | 7.2h |
+| row 3 (131,848) | 15.8h |
+| row 2 (171,914) | 20.6h |
+
+**One row per ~16-21 hours is the honest ceiling**, and a whole matrix is
+several days. Budget accordingly: prefer §0.3's technique for anything that does
+not strictly need a rebuild.
+
+---
+
+## 0.5 Open, with what it would take
+
+| Item | Cost | Notes |
+|---|---|---|
+| A2 matrix rows 3, 2, 4 re-run | ~360K total, days of refill | the only way to exercise §4.3 and §4.11 |
+| A1 assertion 2 — a build reaching plain `done` | falls out of the above | never once observed |
+| Phase B1-B5 | none | `PHASE23_PLAN.md`; B1 first |
+| Phase C — vector memory | blocked | premise is unproven while every failure is mechanical |
+| The Reviewer's 600-token budget | none | it always received 1,600 from the reasoning floor; now that `gpt-oss-20b` takes `reasoning_effort` the floor no longer applies to it, so the budget table wants re-tuning against measurement |
+| Row 3's repair uses a module-level DB connection | none | it works and the prompt now forbids the pattern that made it necessary, but the repair itself still does what the rules tell generated code not to do |
+| The ledger cannot see other processes | none | per-checkout; two servers sharing the file will under-count. One at a time |
+
+---
 
 ---
 
@@ -580,8 +667,23 @@ worst case and is the smallest step that clears 4.5:1 on all three backgrounds.
 | `fa7533e1-26bc-4ce6-9f0f-502d823e6632` | `failed` | failure path |
 | `d715e3f9-ac30-4d62-947c-97976c75d87e` | `cancelled` | the "Build complete" bug that was fixed |
 
-The DB currently holds 50 builds: 21 done, 17 cancelled, 7 failed, 4 running,
-1 done_with_context. The running ones exercise the live WebSocket spine.
+The DB now holds **66 builds**: 21 done, 21 cancelled, 10 failed, 10
+done_with_context, 4 running. The running ones exercise the live WebSocket spine.
+
+### Broken-on-purpose projects, and their repaired copies
+
+The most useful fixtures in the tree are the two builds the matrix shipped
+broken, because each reproduces a distinct failure class on demand and costs
+nothing to re-run against (§0.3).
+
+| Project | Reproduces | Repaired copy |
+|---|---|---|
+| `inventory_system_e9eac7be` | 12 endpoints 500 on one shared cause — `@router.on_event("startup")` never fires | `_live_verify_row3b` (19/19) |
+| `bookmark_manager_2323e41f` | the app never boots — a plain class used as a `response_model`, defined in another file | `_live_verify_row2_final` (6/6) |
+| `task_manager_7167454c` | row 1's baseline, 5/5 routes | — |
+
+Sections 25, 26 and 30 of `test_phase23.py` use the first two as offline
+fixtures; do not mutate the originals.
 
 ---
 
@@ -603,7 +705,7 @@ frontend/src/
   hooks/
     useFocusTrap.ts             shared by the modal and the drawer
     useMediaQuery.ts            useSyncExternalStore; no setState-in-effect
-  lib/                          ⚠ CURRENTLY GITIGNORED — see §3.0
+  lib/                          tracked since 48d3ae7 — §3.0 is resolved
     motion.ts                   the motion vocabulary; marketing half + app half
                                 `appListExit` — read §2.8 before using exit="exit"
     prompt.ts                   the 2000-char contract + readout state machine
