@@ -42,6 +42,29 @@ SMOKE_TIMEOUT = 120
 _ENTRY_CANDIDATES = ("main.py", "app.py", "api.py", "server.py")
 
 
+def _parse_frames(error: str) -> list:
+    """
+    The project files named in a probe error, in call order.
+
+    Parsed from the `(at a.py:1 in f -> b.py:2 in g)` suffix the probe writes.
+    Empty when the failure produced no traceback at all — a 500 the app
+    returned deliberately, for instance.
+    """
+    match = re.search(r"\(at ([^)]+)\)\s*$", error or "")
+    if not match:
+        return []
+    out = []
+    for part in match.group(1).split("->"):
+        frame = re.match(r"\s*(\S+\.py):(\d+) in (\S+)\s*$", part)
+        if frame:
+            out.append({
+                "file": frame.group(1),
+                "line": int(frame.group(2)),
+                "function": frame.group(3),
+            })
+    return out
+
+
 @dataclass
 class RouteProbe:
     path:   str
@@ -57,26 +80,8 @@ class RouteProbe:
 
     @property
     def frames(self) -> list:
-        """
-        The project files in this probe's traceback, in call order.
-
-        Parsed from the `(at a.py:1 in f -> b.py:2 in g)` suffix the probe
-        writes. Empty when the failure produced no traceback at all — a 500
-        the app returned deliberately, for instance.
-        """
-        match = re.search(r"\(at ([^)]+)\)\s*$", self.error or "")
-        if not match:
-            return []
-        out = []
-        for part in match.group(1).split("->"):
-            frame = re.match(r"\s*(\S+\.py):(\d+) in (\S+)\s*$", part)
-            if frame:
-                out.append({
-                    "file": frame.group(1),
-                    "line": int(frame.group(2)),
-                    "function": frame.group(3),
-                })
-        return out
+        """The project files in this probe's traceback, in call order."""
+        return _parse_frames(self.error)
 
     @property
     def blame_file(self) -> str:
@@ -111,6 +116,21 @@ class SmokeResult:
     def passed(self) -> int:
         return sum(1 for p in self.probes if p.ok)
 
+    @property
+    def blame_file(self) -> str:
+        """
+        The generated file to repair when the app never loaded.
+
+        The *innermost* project frame — the opposite of RouteProbe.blame_file,
+        and deliberately so. A 500 means the caller handed a helper something
+        wrong, so the caller is at fault. A failed import means main.py did
+        nothing but `from routes import router`; the module that raised is the
+        one to repair — a bad response_model on a route decorator, say, which
+        fails at import time and takes every endpoint with it.
+        """
+        frames = _parse_frames(self.error)
+        return frames[-1]["file"] if frames else ""
+
     def summary(self) -> str:
         if not self.ran:
             return f"smoke test did not run ({self.error or 'no entry point'})"
@@ -138,6 +158,43 @@ try:
     for p in (here, os.path.dirname(here)):
         if p not in sys.path:
             sys.path.insert(0, p)
+
+    project_root = os.path.dirname(here)
+
+    def describe(exc):
+        """
+        Type, message, and every frame inside the generated project.
+
+        The chain matters, not just its end. A handler that passes the wrong
+        object to a helper blows up *in the helper*, so recording only the last
+        frame sent the repair to the file that raised rather than the file that
+        was wrong — and a "fix" there means teaching the helper to accept bad
+        input. The caller is the first project frame; both are reported, in
+        call order, so the repair can be aimed and given its context.
+        """
+        import traceback
+        label = "{}: {}".format(type(exc).__name__, str(exc)[:200])
+        try:
+            frames = traceback.extract_tb(exc.__traceback__)
+            chain = []
+            for fr in frames:
+                if fr.filename.startswith("<"):
+                    continue        # <frozen importlib._bootstrap>, <string>, ...
+                fn = os.path.abspath(fr.filename)
+                if not fn.startswith(project_root) or "site-packages" in fn:
+                    continue
+                # This probe is written into the project directory, so it is a
+                # "project frame" too — and it is always the outermost one.
+                # Leaving it in makes it the blamed file for every failure.
+                if os.path.basename(fn) == "_smoke_probe.py":
+                    continue
+                rel = os.path.relpath(fn, project_root).replace("\\", "/")
+                chain.append("{}:{} in {}".format(rel, fr.lineno, fr.name))
+            if chain:
+                return "{} (at {})".format(label, " -> ".join(chain[-4:]))
+        except Exception:
+            pass
+        return label
 
     import importlib
     module = importlib.import_module("__ENTRY_MODULE__")
@@ -167,40 +224,6 @@ try:
     # AttributeError and the generated line that raised it tell them exactly
     # what to fix.
     client = TestClient(app, raise_server_exceptions=True)
-    project_root = os.path.dirname(here)
-
-    def describe(exc):
-        """
-        Type, message, and every frame inside the generated project.
-
-        The chain matters, not just its end. A handler that passes the wrong
-        object to a helper blows up *in the helper*, so recording only the last
-        frame sent the repair to the file that raised rather than the file that
-        was wrong — and a "fix" there means teaching the helper to accept bad
-        input. The caller is the first project frame; both are reported, in
-        call order, so the repair can be aimed and given its context.
-        """
-        import traceback
-        label = "{}: {}".format(type(exc).__name__, str(exc)[:200])
-        try:
-            frames = traceback.extract_tb(exc.__traceback__)
-            chain = []
-            for fr in frames:
-                fn = os.path.abspath(fr.filename)
-                if not fn.startswith(project_root) or "site-packages" in fn:
-                    continue
-                # This probe is written into the project directory, so it is a
-                # "project frame" too — and it is always the outermost one.
-                # Leaving it in makes it the blamed file for every failure.
-                if os.path.basename(fn) == "_smoke_probe.py":
-                    continue
-                rel = os.path.relpath(fn, project_root).replace("\\", "/")
-                chain.append("{}:{} in {}".format(rel, fr.lineno, fr.name))
-            if chain:
-                return "{} (at {})".format(label, " -> ".join(chain[-4:]))
-        except Exception:
-            pass
-        return label
 
     for path, method in routes[:25]:
         # Fill path params with a benign value so the URL is requestable.
@@ -234,7 +257,10 @@ try:
 except SystemExit:
     raise
 except BaseException as e:
-    result["error"] = "{}: {}".format(type(e).__name__, str(e)[:400])
+    try:
+        result["error"] = describe(e)
+    except BaseException:
+        result["error"] = "{}: {}".format(type(e).__name__, str(e)[:400])
 
 emit()
 '''

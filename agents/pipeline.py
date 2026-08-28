@@ -29,6 +29,7 @@ All v2.2.0 features retained unchanged:
 """
 import logging
 import os
+import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -721,6 +722,18 @@ class Pipeline:
 
         if not smoke.app_loaded:
             logger.warning(f"  🚨 App failed to boot: {smoke.error[:200]}")
+            # A build whose app never loads is the worst outcome there is, and
+            # it used to be the one nothing tried to fix: the finding went into
+            # the advisory list while a single broken route — strictly less
+            # damage — was repaired. When the traceback names a generated file,
+            # aim a repair at it exactly as a 5xx does.
+            blame = smoke.blame_file
+            if blame:
+                path = f"{root}/{blame}" if not blame.startswith(root) else blame
+                self._smoke_runtime_errors[path] = (
+                    f"the app does not start — importing it raises: "
+                    f"{self._trim_keeping_frames(smoke.error)}"
+                )
             return [
                 f"the application does not start: {smoke.error[:200]}. "
                 f"Every endpoint is unreachable."
@@ -750,7 +763,7 @@ class Pipeline:
             existing = self._smoke_runtime_errors.get(path, "")
             entry = (
                 f"{probe.method} {probe.path} → {probe.status or 'no response'}: "
-                f"{probe.error[:400]}"
+                f"{self._trim_keeping_frames(probe.error)}"
             )
             self._smoke_runtime_errors[path] = (
                 f"{existing}\n{entry}" if existing else entry
@@ -764,6 +777,35 @@ class Pipeline:
             f"called: {detail}. These fail at request time, which the import check "
             f"cannot see."
         ]
+
+    _RUNTIME_ERROR_CHARS = 400
+
+    @classmethod
+    def _trim_keeping_frames(cls, error: str) -> str:
+        """
+        Trim a probe error without losing the `(at file:line in func)` suffix.
+
+        `error[:400]` cut from the head, which is where the exception message is
+        — and left the frame chain, which is at the tail, to be dropped first.
+        That chain is what `_generate_targeted_runtime_fix` parses to decide
+        which block to repair, so cutting it silently downgrades every long
+        error to a whole-file rewrite. Keep both ends and drop the middle.
+        """
+        text = (error or "").strip()
+        if len(text) <= cls._RUNTIME_ERROR_CHARS:
+            return text
+
+        match = re.search(r"\s*\(at [^)]+\)\s*$", text)
+        if not match:
+            return text[:cls._RUNTIME_ERROR_CHARS]
+
+        frames = match.group(0).strip()
+        head_room = cls._RUNTIME_ERROR_CHARS - len(frames) - 3
+        if head_room < 80:
+            # A frame chain that long IS the useful part; keep it and a stub of
+            # the message rather than dropping the anchor to fit the message.
+            return text[:80] + " … " + frames
+        return text[:head_room] + " … " + frames
 
     def _quota_available(self) -> bool:
         """True when at least one Groq model still has usable daily quota."""
