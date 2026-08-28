@@ -18,12 +18,12 @@ budgets are spent — `gpt-oss-120b` 103%, `gpt-oss-20b` 96%. **There is no rese
 to wait for**: the budget refills continuously at ~8,333 tokens/hour per model
 (§4.8), so the question is how long, not until when.
 
-| Row | Shape | Status | Tokens | Boots? | Smoke |
-|---|---|---|---|---|---|
-| 1 | simple FastAPI + SQLite CRUD | `done_with_context` | 94,576 | yes | ✅ **5/5 routes** (was 2/5) |
-| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | **no** | 🚨 app never loads |
-| 3 | complex / multi-entity | `done_with_context` | 131,848 | yes | 🚨 **7/19 routes** |
-| 4 | non-FastAPI (CLI) | ⬜ refused — quota | — | — | — |
+| Row | Shape | Status | Tokens | Boots? | Smoke | After the fixes (§4.9) |
+|---|---|---|---|---|---|---|
+| 1 | simple FastAPI + SQLite CRUD | `done_with_context` | 94,576 | yes | ✅ **5/5 routes** (was 2/5) | — |
+| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | **no** | 🚨 app never loads | still 🚨 (§4.10) |
+| 3 | complex / multi-entity | `done_with_context` | 131,848 | yes | 🚨 **7/19 routes** | ✅ **19/19** |
+| 4 | non-FastAPI (CLI) | ⬜ refused — quota | — | — | — | — |
 
 Every row that ran reached a terminal state with a valid ZIP, so the *first*
 half of A2's criterion holds three times over. The **0-5xx half fails**: only
@@ -56,11 +56,14 @@ tokens.
 
 ---
 
-## 0.0.1 Six fixes; five are offline-verified and none has run live
+## 0.0.1 Seven fixes — and row 3 is now repaired end to end, live
 
-Quota ran out before any of them could be exercised on a build. They are the
-first thing to check after the reset — the same position §4.1 was in last
-session, and §4.1 duly proved out.
+**Five of the seven are now confirmed live** — not by rebuilding, but by cloning
+the broken projects the matrix already produced and driving the real debugger
+against the real API for ~11K tokens instead of ~300K (§4.9). Row 3 went from
+**7/19 routes to 19/19**. Row 2's repair is correctly aimed and still does not
+land; §4.10 says exactly why, and it is a missing blame rule rather than a bad
+model.
 
 | # | Fix | What it removes | Tests |
 |---|---|---|---|
@@ -70,8 +73,9 @@ session, and §4.1 duly proved out.
 | 4 | **Repair one block, not the whole file (§4.6)** | Row 3: a 10.7KB repair that could not fit the minute it was sent in | §25-26, 37 assertions |
 | 5 | `reasoning_effort` on both models; retries that grow (§4.7) | 13 completions that returned **zero characters** and were billed anyway | §27, 9 assertions |
 | 6 | The budget refills, it does not reset (§4.8) | A ledger and a shipped handoff that both overstated the wait by ~14h | §28, 22 assertions |
+| 7 | A shared fault is not repaired block by block (§4.9) | Row 3 stuck at 7/19 while a repair edited innocent code | §29, 8 assertions |
 
-`test_phase23.py` is **281 / 281** (was 182). Every other suite is unchanged and
+`test_phase23.py` is **289 / 289** (was 182). Every other suite is unchanged and
 green: phase 21 77/77, phase 22 85/85, phase 17 58/58, rate-limit 4/4, frontend
 typecheck clean and 191 unit tests.
 
@@ -502,6 +506,94 @@ and **26,395 on 20b** (7,749).
 `used` is rounded and `remaining` floored — both err towards reporting less
 budget than there is. Truncating `used` lost a token to sub-second decay between
 two calls in one build, which is the one direction this number must not move.
+
+### 4.9 — Live verification without rebuilding: row 3 goes 19/19 ✅ **confirmed live**
+
+A matrix row costs 95-172K tokens. The two repair paths can be exercised on the
+same two failures for a couple of thousand, by cloning the broken project the
+matrix already produced and driving the real debugger against the real API. The
+whole verification below cost **~11K tokens**; the equivalent two rebuilds would
+have cost ~300K and taken 45 minutes.
+
+**Row 3: 7/19 → 19/19 routes, 6,539 tokens, 6 seconds.** The chain that has been
+broken since Phase 22 now completes end to end.
+
+The first attempt did not fix it, and why is the finding. All twelve 500s were
+`OperationalError: no such table`. The traceback blamed a different handler each
+time, and every one of them was innocent — the generated `routes.py` registers
+its schema creation on:
+
+```python
+@router.on_event("startup")
+def startup():
+    conn = sqlite3.connect(DB_PATH); init_db(conn); conn.close()
+```
+
+**Router-level startup events do not fire for an included router.** `init_db()`
+never ran, no tables existed, and every read endpoint 500d. The block repair
+aimed at `list_suppliers`, was *applied*, and fixed nothing — worse than
+nothing, because it edited working code.
+
+So a fault shared by many endpoints is not a block-level bug, and §29 encodes
+the test: **more than one endpoint, one exception type, more than one distinct
+blamed function** → the cause is somewhere no failure names, and only the
+whole-file prompt can see it. The last clause is what separates a shared cause
+from one handler probed twice.
+
+The rule generalises backwards: row 1's three endpoints all raised
+`AttributeError: 'generator' object has no attribute 'execute'` from a
+duplicated `get_db`, and it would have aimed that repair correctly too.
+
+With the guard, the repair added table creation at import, kept all 31 top-level
+names, survived the shrinkage guard and the import check, and every route
+answered.
+
+> **One caveat, recorded rather than fixed.** The model's fix opens a database
+> connection at module level, which the debugger's own prompt rules forbid
+> ("No module-level DB connections"). It works and preserves everything, but the
+> better fix is an app-level lifespan handler. The rule and the repair disagree.
+
+### 4.10 — Row 2's repair is aimed at the wrong file ❌ *diagnosed, not fixed*
+
+The boot-failure plumbing of §4.4 is confirmed live: the smoke test reports the
+failure, it is classified repairable, and the repair is aimed at
+`backend/routes.py`. **The repair itself does not land, on either model.**
+
+The reason is not the model. `routes.py` does:
+
+```python
+from services import BookmarkOut          # a PLAIN class, defined in services.py
+@router.get("/bookmarks/", response_model=List[BookmarkOut])
+```
+
+FastAPI raises at import because `BookmarkOut` is not a Pydantic model. **The fix
+belongs in `services.py`** — and the repair is aimed at `routes.py`, whose prompt
+says in as many words:
+
+> The bug is in THIS file. The traceback may end in another module because this
+> file passed it the wrong value — fix the call here, do not make the other
+> module tolerate it.
+
+That instruction is right for the failure it was written for (§4.1, a handler
+mis-calling a helper) and wrong here, where the type is simply defined wrongly
+somewhere else. The model is being told not to do the only thing that works.
+
+Both models were tried. `gpt-oss-20b` returned a gutted file — every handler
+replaced with `return []` or a 404, and the broken `response_model` left in
+place. `gpt-oss-120b` returned something that failed the import check. Both were
+correctly rejected and rolled back, so the guards are doing their job.
+
+**The fix, for a future session:** a boot failure whose exception names a symbol
+imported from another generated module should be allowed to target the file that
+*defines* the symbol. That is a blame rule, like the two in §4.4, and it is the
+third one this system needs:
+
+| Failure | Repair belongs in |
+|---|---|
+| 500 at request time, one endpoint | the outermost project frame (the caller) |
+| Import-time boot failure | the innermost project frame (the module that raised) |
+| Many endpoints, one exception type | **no frame — the whole file** (§4.9) |
+| A bad symbol imported from elsewhere | **the file that defines it** ← missing |
 
 ### 4.2 — Still open
 

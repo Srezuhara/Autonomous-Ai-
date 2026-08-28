@@ -24,8 +24,14 @@ impossible above ~11KB — so the repair now sends one block instead, a 2,351-ch
 prompt where the file alone was 10,776. Along the way, `gpt-oss-20b` turned out
 to accept `reasoning_effort` after all, which is what had it returning zero
 characters thirteen times in one matrix. All five fixes are covered offline
-(`test_phase23.py` is 281/281, was 182) and **none has run on a live build**.
-Chasing *when* they could be is what turned up the last finding:
+(`test_phase23.py` is 289/289, was 182). **Five of the seven are now confirmed
+live**, without rebuilding anything: cloning the broken projects the matrix
+already produced and driving the real debugger against the real API costs ~11K
+tokens where two rebuilds would cost ~300K. **Row 3 went from 7 of 19 routes
+answering to 19 of 19.** Row 2 still does not boot, for a reason now diagnosed
+precisely (§4.10 — the repair is aimed at the file where the error surfaced, not
+the file that defines the broken type). Chasing *when* the builds could be re-run
+is what turned up the other finding:
 Groq's daily budget is a leaky bucket refilling at ~8,333 tokens/hour, not a
 quota that resets at midnight — so the ledger, and the `SESSION_CONTEXT.md` we
 ship to users, were both telling people to wait about fourteen hours longer than
@@ -48,10 +54,11 @@ Phase B1.
 this is the only item that can start immediately.** Auth needs migrations to
 exist first, which is why it is B1 and not B2. Fresh-session sized.
 
-**2. Re-run row 3, then row 2, as the budget refills.** Five fixes made today
-are offline-verified and have never run on a live build — the same position the
-request-time repair was in yesterday, and it duly proved out. Restart the server
-first: it holds the code it started with.
+**2. Re-run row 3, then row 2, as the budget refills.** The repair paths are
+already proven against row 3's real project (§4.9 — 19/19 routes); a full rebuild
+now checks that the *whole pipeline* produces a clean build, which is a different
+question and the one A2 actually asks. Restart the server first: it holds the
+code it started with.
 
 ```bash
 venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
@@ -91,7 +98,13 @@ quality is limited by missing precedent, and **every** failure diagnosed so far
 
 ## 0.1 What today's commits changed
 
-All committed on `main`, `31d36ad`..`6396f28`, tests green at each step.
+All committed on `main`, `31d36ad`..`92dccdd`, tests green at each step.
+
+> **Verifying a repair no longer needs a rebuild.** Clone the broken project the
+> matrix produced, run `Pipeline._smoke_test_runtime` on the clone to get the
+> real blame, then `Debugger._repair_runtime_error`, then smoke it again. Row 3's
+> whole 7/19 → 19/19 proof took 6,539 tokens and six seconds. The repaired copy
+> is kept at `generated_projects/_live_verify_row3b/` as evidence.
 
 | File | Change |
 |---|---|
@@ -102,7 +115,8 @@ All committed on `main`, `31d36ad`..`6396f28`, tests green at each step.
 | `agents/debugger.py` | Repairs the failing block instead of the whole file, falling back to the old path; `_rewrite_budget()` sizes to the code and imposes no ceiling of its own |
 | `llm_client.py` | `reasoning_effort` on both models; retries double the effective cap; the TPM ceiling is known before the first response |
 | `llm_client.py`, `agents/documenter.py` | The daily budget is a refilling bucket, not a midnight reset — and users are no longer told to wait for one |
-| `test_phase23.py` | Sections 22-28, +99 assertions (182 → 281) |
+| `agents/debugger.py` | A fault shared by many endpoints goes to the whole-file prompt, not to one block (§4.9) |
+| `test_phase23.py` | Sections 22-29, +107 assertions (182 → 289) |
 
 `PHASE23_MATRIX_RESULTS.md` is written by the driver and describes only the
 **last** invocation (rows 2 and 3), not row 1. Its "N of N rows pass" line counts
@@ -163,7 +177,7 @@ npm run test:e2e       # 80 Playwright + axe — needs BOTH servers up
 venv/Scripts/python.exe test_phase17.py                  # 58/58 (pinned to a fixture)
 venv/Scripts/python.exe test_phase21.py                  # 77/77
 venv/Scripts/python.exe test_phase22.py                  # 85/85
-venv/Scripts/python.exe test_phase23.py                  # 281/281
+venv/Scripts/python.exe test_phase23.py                  # 289/289
 venv/Scripts/python.exe test_groq_rate_limit_handling.py # OK
 ```
 
