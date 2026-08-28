@@ -65,6 +65,8 @@ from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file, create_file
 from tools.code_executor import run_python
+from tools.code_patcher import locate_block, splice, file_digest
+from tools.runtime_smoke import _parse_frames
 from tools.dependency_installer import (
     pip_install, extract_missing_package,
     WINDOWS_BUILD_BLOCKLIST, HEAVY_PACKAGES_TIMEOUT_BLOCKLIST,
@@ -164,6 +166,36 @@ class FileDebugResult:
     def __str__(self):
         status = "✅" if self.success else "❌"
         return f"{status} {self.file_path} (attempts: {self.attempts}, fixes: {len(self.fixes_applied)})"
+
+
+# A reply that must reproduce a block of code cannot be shorter than that block,
+# but every prompt below asked for one under the Debugger's flat 1,600-token cap.
+# Matrix row 3 (2026-08-28) is what that costs: a 10,775-character routes.py with
+# twelve endpoints returning 500, whose repair came back compressed, lost a
+# top-level name, and was rejected by the shrinkage guard — so the build shipped
+# with the bug the smoke test had already found and named.
+#
+# There is deliberately NO ceiling here. Groq allows 8,000 tokens per minute
+# covering prompt and completion together, and `llm_client` already discovers
+# that from the `x-ratelimit-limit-tokens` header and clamps every request to fit
+# (`_fit_output_budget_to_model_limit`). A second ceiling in this file could only
+# be wrong: too low and it truncates, too high and it is never reached. Ask for
+# what the text needs and let the one component that knows the limit enforce it.
+_REWRITE_CHARS_PER_TOKEN = 3       # measured on this model's Python output (~3.3)
+_REWRITE_HEADROOM        = 400     # a fix is usually a little longer than the bug
+
+# Below this, repairing one block COSTS more than rewriting the file: the block
+# prompt carries extra rules and a digest of the rest of the file, and on a
+# 322-character module that scaffolding outweighs the body it saves (measured:
+# 1,414 chars targeted vs 1,356 whole-file). Small files also give the model
+# more to work with when sent whole, and skip the splice entirely.
+_TARGETED_MIN_FILE_CHARS = 2000
+
+
+def _rewrite_budget(agent, current_code: str) -> int:
+    """Output cap for a prompt that must return code, sized to the code."""
+    needed = len(current_code or "") // _REWRITE_CHARS_PER_TOKEN + _REWRITE_HEADROOM
+    return max(agent._token_budget, needed)
 
 
 class Debugger(BaseAgent):
@@ -524,7 +556,7 @@ REWRITE RULES:
 
 Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
-        fixed = self.think(prompt)
+        fixed = self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
         if fixed and fixed.strip():
             create_file(file_path, fixed)
             return True
@@ -611,7 +643,7 @@ RULES:
 
 Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
-        fixed = self.think(prompt)
+        fixed = self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
         if not (fixed and fixed.strip()):
             return False
 
@@ -1215,6 +1247,11 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         problem      = "an import error" if import_error else "an error"
 
         if runtime:
+            targeted = self._generate_targeted_runtime_fix(
+                file_path, current_code, error_text, project_map
+            )
+            if targeted:
+                return targeted
             return self._generate_runtime_fix(
                 file_path, current_code, error_text, project_map
             )
@@ -1239,7 +1276,105 @@ RULES:
 
 Return ONLY the complete fixed Python code."""
         logger.info(f"  🧠 LLM fixing: {file_path}")
-        return self.think(prompt)
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
+
+    def _generate_targeted_runtime_fix(
+        self, file_path: str, current_code: str, error_text: str, project_map: str
+    ) -> str | None:
+        """
+        Repair the one block the traceback points at, instead of the whole file.
+
+        Groq bills prompt and completion against a single 8,000-token minute, so
+        a full-file rewrite pays for the file twice and is simply impossible
+        above roughly 11KB. Row 3's routes.py was 10,775 characters — right on
+        the wall — and its repair was rejected for dropping a top-level name it
+        had been forced to re-type. Sending one 408-character handler instead is
+        3% of the cost, and code that is never re-emitted cannot be dropped, so
+        the shrinkage guard has nothing left to catch.
+
+        Returns None whenever the block cannot be identified, which hands the
+        caller back to the full-file path unchanged.
+        """
+        if len(current_code or "") < _TARGETED_MIN_FILE_CHARS:
+            return None
+
+        frames = _parse_frames(error_text)
+        if not frames:
+            return None
+
+        # The frames name paths relative to the project root ("backend/routes.py")
+        # while file_path carries the build folder too. Match on the tail, and
+        # take the LAST matching frame: for a chain inside one file that is the
+        # innermost, which is where the exception actually came from.
+        target = None
+        for frame in frames:
+            if file_path.replace(chr(92), "/").endswith(frame["file"]):
+                target = frame
+        if target is None:
+            return None
+
+        block = locate_block(
+            current_code, line=target.get("line"), function=target.get("function")
+        )
+        if block is None:
+            logger.debug(
+                f"  [{file_path}] no block found at line {target.get('line')}; "
+                f"falling back to a full-file rewrite"
+            )
+            return None
+
+        # A block that is most of the file buys nothing, and the full-file prompt
+        # gives the model more to work with for the same money.
+        if len(block.source) > len(current_code) * 0.6:
+            return None
+
+        digest = file_digest(current_code, exclude=block)
+        prompt = f"""Fix ONE block of a Python file. The application imports and
+starts correctly, but this code fails at REQUEST time with a server error.
+
+FILE: {file_path}
+THE FAILING BLOCK (lines {block.start_line}-{block.end_line}):
+{block.source}
+
+RUNTIME FAILURE (traceback frames are in call order, caller first):
+{self._trim_error(error_text)}
+
+{digest}
+
+{project_map}
+
+RULES:
+- Return a replacement for THAT BLOCK ONLY. Do not return the rest of the file.
+- Keep the same top-level name and signature: something else imports it.
+- Keep every decorator the block already has, unchanged unless the decorator is
+  itself the bug (a response_model naming a class that is not a Pydantic model,
+  for instance).
+- A FastAPI dependency that uses `yield` is a generator function. Never call it
+  directly: pass the function itself to Depends(...) and let FastAPI resolve it.
+  `db = get_db()` gives you a generator, not a connection or session.
+- Use only the imports listed above; do not add new dependencies or new files.
+- Start at column zero, exactly as the block does.
+
+Return ONLY the replacement code for that block."""
+
+        logger.info(
+            f"  \U0001f3af [{file_path}] Targeted repair of {block.name!r} "
+            f"(lines {block.start_line}-{block.end_line}, "
+            f"{len(block.source)} of {len(current_code)} chars)"
+        )
+        reply = self.think(prompt, max_tokens=_rewrite_budget(self, block.source))
+        if not reply or not reply.strip():
+            return None
+
+        patched = splice(current_code, block, reply)
+        if patched is None:
+            logger.warning(
+                f"  [{file_path}] Targeted repair did not splice cleanly; "
+                f"falling back to a full-file rewrite"
+            )
+            return None
+        return patched
+
 
     def _generate_runtime_fix(
         self, file_path: str, current_code: str, error_text: str, project_map: str
@@ -1286,7 +1421,7 @@ RULES:
 
 Return ONLY the complete fixed Python code."""
         logger.info(f"  🧠 LLM repairing runtime failure: {file_path}")
-        return self.think(prompt)
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
 
     def summary(self, results: list[FileDebugResult]) -> str:
         passed = [r for r in results if r.success]
