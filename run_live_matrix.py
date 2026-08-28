@@ -24,6 +24,7 @@ cannot finish — a half-spent build teaches nothing and costs the same.
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -252,6 +253,46 @@ def run_row(entry: dict) -> dict:
 
 # ── Report ────────────────────────────────────────────────────────────────────
 
+def merge_previous(results: list, path: Path) -> list:
+    """
+    Carry forward rows from an earlier invocation that this one did not re-run.
+
+    The driver used to overwrite its report wholesale, so `--rows 1` followed by
+    `--rows 2,3` left a file describing rows 2 and 3 and no trace of row 1 —
+    which is exactly what happened on 2026-08-28. Rows are keyed by number, and
+    a row re-run always wins over the record of it.
+    """
+    if not path.is_file():
+        return results
+
+    fresh = {r["row"] for r in results}
+    kept = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^\| (\d+) \| ([^|]+)\| `([^`]+)` \| ([\d,]+) \|"
+                         r" ([\d.]+)s \| ([^|]+)\| (\w+) \|$", line.strip())
+            if not m or int(m.group(1)) in fresh:
+                continue
+            kept.append({
+                "row": int(m.group(1)), "shape": m.group(2).strip(),
+                "status": m.group(3), "total_tokens": int(m.group(4).replace(",", "")),
+                "duration_seconds": float(m.group(5)),
+                "file_count": m.group(6).strip(),
+                "zip": {"ok": m.group(7) == "yes", "status": "—",
+                        "content_type": None, "bytes": 0},
+                "build_id": "(from an earlier run)", "completion_reason": "",
+                "progress_percent": None, "tokens_by_model": None,
+                "expect_boot": True, "carried": True,
+            })
+    except Exception as e:
+        print(f"  (could not merge previous report: {e})")
+        return results
+
+    if kept:
+        print(f"  carried forward {len(kept)} row(s) from the previous report")
+    return sorted(results + kept, key=lambda r: r["row"])
+
+
 def write_report(results: list, path: Path) -> None:
     ok_states = {"done", "done_with_context"}
     passing = [
@@ -267,8 +308,14 @@ def write_report(results: list, path: Path) -> None:
         "or `done_with_context` with a downloadable ZIP, and every build that "
         "boots reports **0 5xx** from the runtime smoke test.",
         "",
-        f"**Result: {len(passing)} of {len(results)} rows pass"
+        f"**Result: {len(passing)} of {len(results)} rows reach a terminal state "
+        f"with a valid ZIP"
         f"{' (matrix incomplete)' if len(results) < len(MATRIX) else ''}.**",
+        "",
+        "> That count covers the FIRST half of the criterion only. The 0-5xx half "
+        "is not in the API — the smoke-test line lives in the server log, and a "
+        "row counted here can still have shipped every endpoint broken. Row 3 on "
+        "2026-08-28 did exactly that.",
         "",
         "| Row | Shape | Status | Tokens | Duration | Files | ZIP |",
         "|-----|-------|--------|--------|----------|-------|-----|",
@@ -278,7 +325,8 @@ def write_report(results: list, path: Path) -> None:
             f"| {r['row']} | {r['shape']} | `{r['status']}` | "
             f"{(r['total_tokens'] or 0):,} | "
             f"{(r['duration_seconds'] or 0):.0f}s | {r.get('file_count', '—')} | "
-            f"{'yes' if r['zip']['ok'] else 'NO'} |"
+            f"{'yes' if r['zip']['ok'] else 'NO'}"
+            f"{' *(earlier run)*' if r.get('carried') else ''} |"
         )
     lines += [
         "",
@@ -292,6 +340,8 @@ def write_report(results: list, path: Path) -> None:
         "",
     ]
     for r in results:
+        if r.get("carried"):
+            continue          # its detail belongs to the run that produced it
         lines += [
             f"### Row {r['row']} — {r['shape']}",
             "",
@@ -370,7 +420,8 @@ def main() -> int:
 
     print_quota("quota after")
     if results:
-        write_report(results, Path(args.out))
+        out_path = Path(args.out)
+    write_report(merge_previous(results, out_path), out_path)
     return 0
 
 

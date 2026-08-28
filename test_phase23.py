@@ -1836,11 +1836,15 @@ try:
     check("the build is still told, in words, that nothing is reachable",
           len(_boot_issues) == 1 and "does not start" in _boot_issues[0],
           _boot_issues)
-    check("and a repair is aimed at the file, so it is no longer advisory-only",
-          _boot_pl._smoke_runtime_errors
-          == {f"{_boot_root}/backend/routes.py":
-              _boot_pl._smoke_runtime_errors.get(f"{_boot_root}/backend/routes.py", "")}
+    # §30 sends this one further: routes.py only imports the offending class, so
+    # the repair belongs in services.py, which defines it. The smoke test still
+    # blames routes.py — that is where it raised — and the pipeline redirects.
+    check("and a repair is aimed at a file, so it is no longer advisory-only",
+          len(_boot_pl._smoke_runtime_errors) == 1
           and bool(_boot_pl._smoke_runtime_errors),
+          _boot_pl._smoke_runtime_errors)
+    check("…at the file that DEFINES the broken class, not the one that imports it",
+          list(_boot_pl._smoke_runtime_errors) == [f"{_boot_root}/backend/services.py"],
           _boot_pl._smoke_runtime_errors)
     check("the repair prompt carries the exception, not just a file name",
           "FastAPIError" in "".join(_boot_pl._smoke_runtime_errors.values()),
@@ -2375,6 +2379,141 @@ _single_dbg._generate_targeted_runtime_fix(
     "proj/backend/routes.py", _TARGET_SRC, _TARGET_ERR, "MAP")
 check("…while a single failing endpoint still gets one",
       len(_single_dbg.prompts) == 1)
+
+
+# ── 30. Three mistakes found by using the thing ───────────────────────────────
+# None of these needed quota to fix, and all three were found by running the
+# system rather than reading it.
+print("\n[30] the fourth blame rule, the prompts, and the driver's report")
+
+from tools.code_patcher import imported_symbols   # noqa: E402
+
+# ---- 30a. A boot failure about an imported name belongs to its definition ----
+# Row 2 (2026-08-28): routes.py does `from services import BookmarkOut` and uses
+# it as a response_model. BookmarkOut is a plain class, so FastAPI raises while
+# importing routes.py and every frame names routes.py — but routes.py is right.
+# The repair was aimed there anyway and told "the bug is in THIS file, do not
+# make the other module tolerate it", which forbids the only fix that works.
+# Both models were tried live; both produced something the guards rejected.
+check("a file's imports are readable as {symbol: module}",
+      imported_symbols("from services import BookmarkOut\nimport sqlite3\n")
+      == {"BookmarkOut": "services", "sqlite3": "sqlite3"},
+      imported_symbols("from services import BookmarkOut\nimport sqlite3\n"))
+check("an alias binds the name actually used",
+      imported_symbols("from services import BookmarkOut as BM")
+      == {"BM": "services"})
+check("a star import binds nothing that can be blamed",
+      imported_symbols("from services import *") == {})
+check("unparseable source yields nothing rather than raising",
+      imported_symbols("def broken(:") == {})
+
+_blame_root = "_phase23_blame"
+_blame_dir = Path(config.OUTPUT_DIR) / _blame_root
+shutil.rmtree(_blame_dir, ignore_errors=True)
+(_blame_dir / "backend").mkdir(parents=True, exist_ok=True)
+(_blame_dir / "backend" / "services.py").write_text(
+    "class BookmarkOut:\n    def __init__(self, url):\n        self.url = url\n",
+    encoding="utf-8")
+(_blame_dir / "backend" / "routes.py").write_text(
+    "from typing import List\n"
+    "from fastapi import APIRouter\n"
+    "from services import BookmarkOut\n"
+    "\n"
+    "router = APIRouter()\n"
+    "\n"
+    "@router.get('/bookmarks', response_model=List[BookmarkOut])\n"
+    "def list_bookmarks():\n"
+    "    return []\n", encoding="utf-8")
+
+_bp = _BootPipeline.__new__(_BootPipeline)
+_ROW2_ERR = ("FastAPIError: Invalid args for response field! Hint: check that "
+             "typing.List[services.BookmarkOut] is a valid Pydantic field type.")
+try:
+    _to, _note = _bp._redirect_blame_to_definition(
+        _blame_root, "backend/routes.py", _ROW2_ERR)
+    check("the repair is redirected to the file that defines the broken class",
+          _to == "backend/services.py", _to)
+    check("…and says why, so the log explains itself",
+          "only imports `BookmarkOut`" in _note and "services.py" in _note, _note)
+
+    # A genuine in-file bug must keep the frame-based rule.
+    _same, _n2 = _bp._redirect_blame_to_definition(
+        _blame_root, "backend/routes.py", "NameError: name 'router' is not defined")
+    check("an error naming nothing imported leaves the blame where it was",
+          _same == "backend/routes.py" and _n2 == "")
+    # A stdlib or third-party name must never send a repair outside the project.
+    _same2, _ = _bp._redirect_blame_to_definition(
+        _blame_root, "backend/routes.py", "TypeError: List is not callable")
+    check("a name from typing or fastapi is not chased out of the project",
+          _same2 == "backend/routes.py", _same2)
+    _missing, _ = _bp._redirect_blame_to_definition(
+        _blame_root, "backend/nope.py", _ROW2_ERR)
+    check("a blamed file that does not exist is returned unchanged",
+          _missing == "backend/nope.py")
+finally:
+    shutil.rmtree(_blame_dir, ignore_errors=True)
+
+# ---- 30b. The prompts forbid what shipped ----
+# Two defects the matrix produced are cheaper to prevent than to repair.
+_bd = Path("prompts/backend_developer.txt").read_text(encoding="utf-8")
+check("the prompt forbids the router startup hook that never fires",
+      "@router.on_event(\"startup\")" in _bd and "DOES NOT FIRE" in _bd)
+check("…and shows the lifespan handler that does",
+      "lifespan" in _bd and "asynccontextmanager" in _bd)
+check("…and does not merely move the problem to module level",
+      "Do not create tables at module level" in _bd)
+check("the prompt requires a response_model to be a Pydantic model",
+      "RESPONSE MODEL RULE" in _bd and "must be a Pydantic" in _bd)
+check("…naming the failure it prevents, so the rule is not arbitrary",
+      "FastAPIError" in _bd and "never booted" in _bd)
+
+# ---- 30c. The driver's report merges and does not overstate ----
+import run_live_matrix as _M    # noqa: E402
+
+_report = Path(config.OUTPUT_DIR) / "_phase23_report.md"
+_report.unlink(missing_ok=True)
+
+
+def _row_result(row, tokens, ok=True):
+    return {"row": row, "shape": f"shape {row}", "status": "done_with_context",
+            "total_tokens": tokens, "duration_seconds": 100.0, "file_count": 20,
+            "zip": {"ok": ok, "status": 200, "content_type": "application/zip",
+                    "bytes": 1000},
+            "build_id": f"b{row}", "completion_reason": "", "progress_percent": 100,
+            "tokens_by_model": None, "expect_boot": True}
+
+
+try:
+    _M.write_report([_row_result(2, 171_914), _row_result(3, 131_848)], _report)
+    _merged = _M.merge_previous([_row_result(1, 94_576)], _report)
+    check("a later run carries earlier rows forward instead of erasing them",
+          [r["row"] for r in _merged] == [1, 2, 3],
+          [r["row"] for r in _merged])
+    check("…and marks which of them this run did not produce",
+          [r.get("carried", False) for r in _merged] == [False, True, True])
+
+    _M.write_report(_merged, _report)
+    _text = _report.read_text(encoding="utf-8")
+    check("the merged report shows all three rows",
+          _text.count("| 1 |") == 1 and _text.count("| 2 |") == 1
+          and _text.count("| 3 |") == 1, _text[:400])
+    check("a carried row is labelled rather than passed off as fresh",
+          _text.count("*(earlier run)*") == 2, _text)
+    check("only the row this run produced gets a detail section",
+          _text.count("### Row") == 1, _text)
+
+    # The count used to read as the whole criterion. It is half of it: row 3 was
+    # counted as passing on 2026-08-28 while shipping twelve dead endpoints.
+    check("the result line claims only what it actually measured",
+          "reach a terminal state with a valid ZIP" in _text, _text[:600])
+    check("…and says so explicitly, because a counted row can still be broken",
+          "FIRST half of the criterion" in _text and "0-5xx" in _text, _text[:900])
+
+    _re_run = _M.merge_previous([_row_result(3, 999)], _report)
+    check("a row that is re-run wins over the record of it",
+          [r["total_tokens"] for r in _re_run if r["row"] == 3] == [999])
+finally:
+    _report.unlink(missing_ok=True)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

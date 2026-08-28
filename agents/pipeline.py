@@ -729,6 +729,11 @@ class Pipeline:
             # aim a repair at it exactly as a 5xx does.
             blame = smoke.blame_file
             if blame:
+                blame, note = self._redirect_blame_to_definition(
+                    root, blame, smoke.error
+                )
+                if note:
+                    logger.info(f"  \U0001f9ed {note}")
                 path = f"{root}/{blame}" if not blame.startswith(root) else blame
                 self._smoke_runtime_errors[path] = (
                     f"the app does not start — importing it raises: "
@@ -777,6 +782,61 @@ class Pipeline:
             f"called: {detail}. These fail at request time, which the import check "
             f"cannot see."
         ]
+
+    def _redirect_blame_to_definition(
+        self, root: str, blame: str, error: str
+    ) -> tuple:
+        """
+        A boot failure about an imported name belongs to the file that defines it.
+
+        The three blame rules that existed all point at a frame. This one cannot:
+        matrix row 2's `routes.py` does
+
+            from services import BookmarkOut          # a PLAIN class
+            @router.get(..., response_model=List[BookmarkOut])
+
+        and FastAPI raises while importing routes.py, so every frame names
+        routes.py. But routes.py is right — `BookmarkOut` simply is not a Pydantic
+        model, and the fix is in services.py. Aiming the repair at routes.py and
+        telling it "the bug is in THIS file, do not make the other module
+        tolerate it" instructs the model away from the only fix that works, which
+        is exactly what was observed: both models produced something the guards
+        rejected.
+
+        So: if the blamed file merely IMPORTS a name the error complains about,
+        and that name comes from another generated module, repair that module.
+
+        Returns `(path, note)` — the original blame unchanged when no such name
+        is found, so a genuine in-file bug keeps the frame-based rule.
+        """
+        try:
+            import config
+            from tools.code_patcher import imported_symbols
+
+            project_dir = Path(config.OUTPUT_DIR) / root
+            blamed = project_dir / blame
+            if not blamed.is_file():
+                return blame, ""
+            symbols = imported_symbols(blamed.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            return blame, ""
+
+        for symbol, module in symbols.items():
+            if symbol not in error:
+                continue
+            # `services` -> backend/services.py, next to the file that imports it,
+            # or anywhere in the project. Only generated modules qualify: a
+            # complaint naming `List` must not send a repair into typing.
+            leaf = module.split(".")[-1] + ".py"
+            for candidate in (blamed.parent / leaf, project_dir / leaf):
+                if not candidate.is_file() or candidate == blamed:
+                    continue
+                rel = str(candidate.relative_to(project_dir)).replace(chr(92), "/")
+                return rel, (
+                    f"{blame} only imports `{symbol}` from `{module}`; "
+                    f"repairing {rel}, which defines it"
+                )
+        return blame, ""
 
     _RUNTIME_ERROR_CHARS = 400
 

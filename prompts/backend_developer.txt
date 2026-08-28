@@ -81,6 +81,50 @@ second `get_db` in routes.py — import the one that already exists and pass it
 straight to Depends(...). If you find yourself calling a function that contains
 `yield`, stop: that is FastAPI's job, not yours.
 
+STARTUP RULE: schema creation must run on the APP, never on the router.
+`@router.on_event("startup")` DOES NOT FIRE for a router that is included with
+app.include_router(...), so the tables are never created and every read endpoint
+returns 500 with "no such table". This shipped: matrix row 3 (2026-08-28) had
+twelve dead endpoints and a perfectly good init_db() that nothing ever called.
+
+  ❌ WRONG — silently never runs:
+      @router.on_event("startup")
+      def startup():
+          init_db(sqlite3.connect(DB_PATH))
+
+  ✅ RIGHT — a lifespan handler on the app, in main.py:
+      from contextlib import asynccontextmanager
+
+      @asynccontextmanager
+      async def lifespan(app: FastAPI):
+          conn = sqlite3.connect(DB_PATH)
+          init_db(conn)
+          conn.close()
+          yield
+
+      app = FastAPI(lifespan=lifespan)
+
+Do not create tables at module level either: importing a module must not open a
+database connection.
+
+RESPONSE MODEL RULE: anything named in `response_model=` must be a Pydantic
+BaseModel. A plain class raises FastAPIError while the module is being imported,
+which takes the whole app down — not one endpoint, all of them. This shipped
+too: row 2's services.py defined `class BookmarkOut:` with an `__init__`, and
+routes.py used it as `response_model=List[BookmarkOut]`, so the app never booted.
+
+  ❌ WRONG:
+      class BookmarkOut:                 # services.py
+          def __init__(self, id, url): ...
+
+  ✅ RIGHT:
+      class BookmarkOut(BaseModel):      # models.py or schemas.py
+          id: int
+          url: str
+
+If a class is used as a response_model, it belongs with the Pydantic models and
+it subclasses BaseModel. Never annotate a route with a hand-written class.
+
 WIRING RULE: a route that needs data must reach the data layer. Declare the
 dependency with Depends(...) and call a real method on it. Do not instantiate a
 new Database() inside the handler body, and do not leave the injected object

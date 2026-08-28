@@ -153,6 +153,34 @@ def splice(source: str, block: Block, replacement: str) -> str | None:
     return out
 
 
+def imported_symbols(source: str) -> dict:
+    """
+    `{symbol: module}` for everything this file imports by name.
+
+    Used to answer "the thing that blew up — did this file define it, or just
+    import it?". A `from services import BookmarkOut` means a complaint about
+    `BookmarkOut` is a complaint about services.py.
+    """
+    out: dict = {}
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return out
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if not node.module or node.level:      # relative imports resolve elsewhere
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                out[alias.asname or alias.name] = node.module
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                out[alias.asname or alias.name] = alias.name
+    return out
+
+
 def file_digest(source: str, exclude: Block = None) -> str:
     """
     The rest of the file, compressed to what a repair needs to know about it:
