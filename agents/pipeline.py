@@ -530,16 +530,29 @@ class Pipeline:
                 continue
             yield p
 
+    # Files a LATER step owns. This audit runs during remediation (step 8) and
+    # the documenter does not write until step 9, so flagging these is auditing
+    # the future: the claim is guaranteed true here and guaranteed false by the
+    # time SESSION_CONTEXT.md states it. Row 3 was degraded to
+    # done_with_context over a README the documenter then filled in with 46
+    # lines, and told the user to "Implement README.md". A documenter that
+    # genuinely fails is already propagated as a build failure, so nothing is
+    # hidden by waiting for it.
+    _WRITTEN_BY_A_LATER_STEP = {"README.md", "SETUP.md"}
+
     def _audit_placeholders(self, project_dir: Path) -> list[str]:
         """Architect scaffold files that no generator ever filled in."""
         stubs = []
         for p in self._iter_project_files(project_dir, (".py", ".sql", ".txt", ".md", ".json")):
+            rel = str(p.relative_to(project_dir)).replace("\\", "/")
+            if rel in self._WRITTEN_BY_A_LATER_STEP:
+                continue
             try:
                 text = p.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
             if self._PLACEHOLDER_MARKER in text:
-                stubs.append(str(p.relative_to(project_dir)).replace("\\", "/"))
+                stubs.append(rel)
         if not stubs:
             return []
         return [
