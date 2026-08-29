@@ -1019,7 +1019,13 @@ try:
 
         llm_client.reset_daily_usage()
         llm_client.seed_ledger_from_history(now=_now)
-        from_db = llm_client.get_daily_usage()["models"]
+        # Read on the same clock the seed was written on. The bucket refills at
+        # 2.315 tokens/sec, so reading against wall-clock time subtracts however
+        # long the suite took to get here — under half a token on an idle
+        # machine, more than that while a live build is running, which rounded
+        # 12,345 down to 12,344 and failed here for reasons having nothing to do
+        # with the code under test.
+        from_db = llm_client.get_daily_usage(now=_now)["models"]
         check("…and seeds it with the split the build actually recorded",
               from_db.get("openai/gpt-oss-120b", {}).get("tokens_used") == 12_345
               and "openai/gpt-oss-20b" not in from_db,
@@ -2751,6 +2757,109 @@ try:
           f"{_sl_root}/requirements.txt" in _sl_written, _sl_written)
 finally:
     shutil.rmtree(_sl_dir, ignore_errors=True)
+
+
+
+# ---- 34. Pydantic V1 config keys that V2 ignores ----------------------------
+# The project installs pydantic>=2. Generated schemas kept writing the V1 idiom
+# `class Config: orm_mode = True`, which V2 does not reject and does not honour
+# — it is dropped with a UserWarning buried in import stderr. from_attributes
+# is therefore never set, and every response_model that serializes a row 500s
+# at REQUEST time while the module imports perfectly. Twenty across the
+# generated projects on 2026-08-29; six in row 3's schemas.py alone.
+from tools.pydantic_compat import fix_pydantic_v1_config, _rewrite   # noqa: E402
+
+_pc_root = "_test_pydantic_compat"
+_pc_dir = Path(config.OUTPUT_DIR) / _pc_root
+shutil.rmtree(_pc_dir, ignore_errors=True)
+try:
+    (_pc_dir / "backend").mkdir(parents=True)
+    (_pc_dir / "backend" / "schemas.py").write_text(
+        "from pydantic import BaseModel\n"
+        "\n"
+        "class ProductRead(BaseModel):\n"
+        "    id: int\n"
+        "    name: str\n"
+        "\n"
+        "    class Config:\n"
+        "        orm_mode = True\n"
+        "        schema_extra = {'example': {}}\n"
+        "\n"
+        "class SupplierRead(BaseModel):\n"
+        "    id: int\n"
+        "\n"
+        "    class Config:\n"
+        "        orm_mode = True\n"
+        "        allow_population_by_field_name = True\n",
+        encoding="utf-8",
+    )
+    # A test file full of response.json() — the trap a blanket rewrite falls in.
+    (_pc_dir / "backend" / "test_api.py").write_text(
+        "def test_one(client):\n"
+        "    data = client.get('/products').json()\n"
+        "    assert data == []\n"
+        "\n"
+        "def test_two(client):\n"
+        "    assert client.get('/suppliers').json() == []\n",
+        encoding="utf-8",
+    )
+
+    _pc_files = [f"{_pc_root}/backend/schemas.py", f"{_pc_root}/backend/test_api.py"]
+    _pc_res = fix_pydantic_v1_config(_pc_root, _pc_files)
+    _pc_schemas = (_pc_dir / "backend" / "schemas.py").read_text(encoding="utf-8")
+    _pc_tests = (_pc_dir / "backend" / "test_api.py").read_text(encoding="utf-8")
+
+    check("orm_mode is renamed to the key V2 actually reads",
+          "orm_mode" not in _pc_schemas and _pc_schemas.count("from_attributes") == 2,
+          _pc_schemas)
+    check("…and so are the other renames whose meaning did not change",
+          "json_schema_extra" in _pc_schemas and "populate_by_name" in _pc_schemas,
+          _pc_schemas)
+    check("only the file that needed it is rewritten",
+          _pc_res.files_changed == [f"{_pc_root}/backend/schemas.py"],
+          _pc_res.files_changed)
+
+    # The one that would have broken every generated test suite.
+    check("response.json() is NOT rewritten — it is httpx, not a pydantic model",
+          _pc_tests.count(".json()") == 2 and "model_dump_json" not in _pc_tests,
+          _pc_tests)
+
+    # Semantics-changing V1 idioms are deliberately left for the LLM path: a
+    # blind @validator -> @field_validator rename produces broken code.
+    _pc_v, _pc_applied = _rewrite(
+        "from pydantic import validator\n"
+        "@validator('x')\n"
+        "def check(cls, v): return v\n"
+    )
+    check("@validator is left alone — its V2 replacement has a different signature",
+          "@validator" in _pc_v and _pc_applied == [], _pc_applied)
+
+    # Rewriting must be exact, never a substring match.
+    _pc_sub, _ = _rewrite("    not_orm_mode = True\n    orm_mode_extra = 1\n")
+    check("a longer identifier containing the key is not touched",
+          "not_orm_mode = True" in _pc_sub and "orm_mode_extra = 1" in _pc_sub,
+          _pc_sub)
+
+    # Idempotence: the pass runs on every build.
+    _pc_again = fix_pydantic_v1_config(_pc_root, _pc_files)
+    check("a second pass changes nothing", _pc_again.files_changed == [],
+          _pc_again.files_changed)
+
+    # The rewritten config must actually take effect, not merely read well.
+    _pc_ns: dict = {}
+    exec(compile(_pc_schemas, "schemas.py", "exec"), _pc_ns)
+    check("the rewritten model really carries from_attributes at runtime",
+          _pc_ns["ProductRead"].model_config.get("from_attributes") is True,
+          _pc_ns["ProductRead"].model_config)
+finally:
+    shutil.rmtree(_pc_dir, ignore_errors=True)
+
+# The prompt must stop it at the source; the compat pass is the safety net.
+_pc_prompt = Path("prompts/backend_developer.txt").read_text(encoding="utf-8")
+check("the prompt requires pydantic V2 and names the key that keeps shipping",
+      "PYDANTIC VERSION RULE" in _pc_prompt and "orm_mode" in _pc_prompt)
+check("…and explains why V1 keys are worse than an error — they are ignored",
+      "IGNORED" in _pc_prompt and "REQUEST time" in _pc_prompt)
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run

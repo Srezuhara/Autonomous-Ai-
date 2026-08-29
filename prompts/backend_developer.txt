@@ -125,6 +125,31 @@ routes.py used it as `response_model=List[BookmarkOut]`, so the app never booted
 If a class is used as a response_model, it belongs with the Pydantic models and
 it subclasses BaseModel. Never annotate a route with a hand-written class.
 
+PYDANTIC VERSION RULE: this project installs pydantic 2.x. Write V2, never V1.
+V1 config keys are not rejected under V2 — they are IGNORED, with only a warning
+buried in stderr. `orm_mode` is the one that keeps shipping: it is silently
+dropped, so `from_attributes` is never set, and every response_model that has to
+serialize a database row or ORM object then raises a 500 at REQUEST time. The
+module imports perfectly, so the import check sees nothing wrong. Twenty of
+these shipped on 2026-08-29.
+
+  ❌ WRONG:
+      class ProductRead(BaseModel):
+          id: int
+          class Config:
+              orm_mode = True            # ignored under V2
+
+  ✅ RIGHT:
+      class ProductRead(BaseModel):
+          id: int
+          model_config = ConfigDict(from_attributes=True)
+
+Import `ConfigDict` from pydantic. The renamed keys are `orm_mode` →
+`from_attributes`, `schema_extra` → `json_schema_extra`, and
+`allow_population_by_field_name` → `populate_by_name`. Use `.model_dump()` in
+place of `.dict()`, and `@field_validator` in place of `@validator` — the V2
+validator takes the value and returns it, and is a `@classmethod`.
+
 WIRING RULE: a route that needs data must reach the data layer. Declare the
 dependency with Depends(...) and call a real method on it. Do not instantiate a
 new Database() inside the handler body, and do not leave the injected object

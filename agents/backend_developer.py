@@ -115,6 +115,14 @@ class BackendDeveloper(BaseAgent):
         # ── Phase 22: fill SQL schema files nothing else owns ─────────────────
         written.extend(self._generate_sql_files(intent, architecture, root, written))
 
+        # ── Phase 23: pydantic V1 config keys V2 ignores ──────────────────────
+        # Zero tokens, and it runs before the defect scan so the LLM is never
+        # asked to fix something a rename already handled. `orm_mode` is not an
+        # error under V2 — it is ignored, so from_attributes stays unset and
+        # every response_model that serializes a row 500s at request time,
+        # which the import check cannot see.
+        self._fix_pydantic_compat(root, written)
+
         # ── Phase 22: deterministic defect scan + targeted repair ─────────────
         # Runs before requirements validation so any import the repair pass
         # removes or adds is reflected in requirements.txt.
@@ -546,6 +554,18 @@ Only apply this to main.py. Other files do not need CORS configuration.
 Write the complete, working Python code for: {file_path}
 """
         return self.think(prompt)
+
+    # ── Phase 23: pydantic V2 compatibility ───────────────────────────────────
+
+    def _fix_pydantic_compat(self, root: str, written: list[str]) -> None:
+        """Rename V1 config keys that V2 silently ignores. Costs no tokens."""
+        try:
+            from tools.pydantic_compat import fix_pydantic_v1_config
+            result = fix_pydantic_v1_config(root, written)
+            if result.error:
+                logger.warning(f"⚠️  [Phase 23] pydantic compat: {result.error}")
+        except Exception as e:
+            logger.warning(f"⚠️  [Phase 23] pydantic compat pass failed: {e}")
 
     # ── Phase 19.1: requirements validation ───────────────────────────────────
 
