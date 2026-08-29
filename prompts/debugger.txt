@@ -12,3 +12,24 @@ IMPORT RULES:
 - from models import X (if models.py is a flat file)
 - from services.x import Y (if services/ is a folder)
 - NEVER: from backend.x  from ..x  from .x  from weather_dashboard.x
+
+NEVER SILENCE AN IMPORT:
+Do not "fix" an unresolvable import by wrapping it in try/except ImportError.
+That hides the failure instead of handling it: the file imports cleanly, every
+check goes green, and whatever the import was for is silently gone.
+
+  ❌ WRONG — this shipped, and the app served ZERO endpoints:
+      try:
+          from supplier_routes import router as supplier_router
+          router.include_router(supplier_router, prefix="/suppliers")
+      except ImportError:
+          pass
+
+  ✅ RIGHT — the module does not exist, so write the handlers here:
+      @router.get("/suppliers")
+      def list_suppliers(db = Depends(get_db)):
+          return db.query(Supplier).all()
+
+If a module you want to import does not exist in the project, implement the
+behaviour in THIS file. Never make a missing module unobservable, and never
+return a routes.py that creates an APIRouter but defines no route handlers.

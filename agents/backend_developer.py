@@ -282,10 +282,37 @@ Return ONLY raw SQL. No markdown, no explanation."""
 
         for module, fn_name in find_phantom_imports(facts, planned):
             where = f" inside {fn_name}()" if fn_name else ""
+            guarded = module in set(facts.guarded_imports)
+            if guarded:
+                # The dangerous shape. `try: from x import y / except
+                # ImportError: pass` makes an unresolvable import look fixed —
+                # the file imports cleanly and every gate goes green — while
+                # the feature it guarded silently disappears. Row 3 shipped a
+                # routes.py that was nothing but five of these and registered
+                # ZERO routes.
+                defects.append(
+                    f"imports `{module}` inside a try/except that swallows the "
+                    f"ImportError, and `{module}` does not exist. The failure is "
+                    f"hidden, not handled: the file imports cleanly and whatever "
+                    f"the import was for is silently missing. Delete the "
+                    f"try/except and implement the behaviour in THIS file, or "
+                    f"import a module that actually exists."
+                )
+            else:
+                defects.append(
+                    f"imports `{module}`{where}, which is not a planned project file "
+                    f"and is not an installed package. Remove it and use a module "
+                    f"that exists, or implement the behaviour inline."
+                )
+
+        # A router file that defines no routes is an empty app. This is the
+        # observable end-state of the failure above, and it is worth stating
+        # separately because it is what the user actually experiences.
+        if facts.has_router and not facts.route_handlers:
             defects.append(
-                f"imports `{module}`{where}, which is not a planned project file and "
-                f"is not an installed package. Remove it and use a module that exists, "
-                f"or implement the behaviour inline."
+                "this file creates an APIRouter but defines no route handlers, so "
+                "the application exposes no endpoints at all. Define the actual "
+                "@router.get/post/put/delete handlers here."
             )
 
         local_deferred = [

@@ -3077,6 +3077,89 @@ try:
 finally:
     shutil.rmtree(_ph_dir, ignore_errors=True)
 
+
+
+# ---- 38. An import hidden in a try/except is still an import ----------------
+# analyze_module read imports from `tree.body` only, and deferred_imports from
+# function bodies only. An import nested in a module-level try/if/with fell in
+# between and was invisible to both. That is exactly the shape the debugger
+# produced on 2026-08-29 when it "fixed" five unresolvable imports by wrapping
+# each in `try: … except ImportError: pass`: routes.py imported perfectly,
+# every gate went green, and the application registered ZERO routes.
+from tools.code_introspect import (                                 # noqa: E402
+    analyze_module as _am38, find_phantom_imports as _fp38,
+)
+
+_gi_src = (
+    "from fastapi import APIRouter\n"
+    "router = APIRouter()\n"
+    "try:\n"
+    "    from supplier_routes import router as supplier_router\n"
+    "    router.include_router(supplier_router, prefix='/suppliers')\n"
+    "except ImportError:\n"
+    "    pass\n"
+    "if True:\n"
+    "    import nonexistent_helper\n"
+)
+_gi = _am38(_gi_src)
+check("an import inside a module-level try is seen at all",
+      "supplier_router" in _gi.imported_names, _gi.imported_names)
+check("…and one inside a module-level if",
+      "nonexistent_helper" in _gi.imported_names, _gi.imported_names)
+check("…and both are recorded as guarded, not as ordinary top-level imports",
+      set(_gi.guarded_imports) == {"supplier_routes", "nonexistent_helper"},
+      _gi.guarded_imports)
+check("so the phantom-import check can finally see them",
+      {m for m, _ in _fp38(_gi, {"routes", "main"})}
+      == {"supplier_routes", "nonexistent_helper"}, _fp38(_gi, {"routes", "main"}))
+
+# A guarded import of something that DOES resolve is not a defect: guarding an
+# optional third-party dependency is a legitimate pattern.
+_gi_ok = _am38("try:\n    import json\nexcept ImportError:\n    json = None\n")
+check("a guarded import that resolves is not reported",
+      _fp38(_gi_ok, set()) == [], _fp38(_gi_ok, set()))
+
+_gi_root = "_test_guarded_imports"
+_gi_dir = Path(config.OUTPUT_DIR) / _gi_root
+shutil.rmtree(_gi_dir, ignore_errors=True)
+try:
+    (_gi_dir / "backend").mkdir(parents=True)
+    (_gi_dir / "backend" / "routes.py").write_text(_gi_src, encoding="utf-8")
+    _gi_bd = _BD.__new__(_BD)
+    _gi_planned = _gi_bd._planned_modules(
+        {"files": [{"path": "backend/routes.py"}, {"path": "backend/main.py"}]}
+    )
+    _gi_defects = _gi_bd._scan_defects(f"{_gi_root}/backend/routes.py", _gi_planned)
+
+    check("the swallowed ImportError is called out as hiding the failure",
+          any("swallows the ImportError" in d for d in _gi_defects), _gi_defects)
+    check("…and the defect says the import must not merely be silenced",
+          any("hidden, not handled" in d for d in _gi_defects), _gi_defects)
+    check("an APIRouter with no handlers is reported as an app with no endpoints",
+          any("no route handlers" in d and "no endpoints" in d for d in _gi_defects),
+          _gi_defects)
+
+    # A router that does define handlers must not trip that check.
+    (_gi_dir / "backend" / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/items')\n"
+        "def list_items():\n"
+        "    return []\n",
+        encoding="utf-8",
+    )
+    _gi_clean = _gi_bd._scan_defects(f"{_gi_root}/backend/routes.py", _gi_planned)
+    check("a router that defines handlers is left alone",
+          not any("no endpoints" in d for d in _gi_clean), _gi_clean)
+finally:
+    shutil.rmtree(_gi_dir, ignore_errors=True)
+
+_gi_prompt = Path("prompts/debugger.txt").read_text(encoding="utf-8")
+check("the debugger is told never to silence an import",
+      "NEVER SILENCE AN IMPORT" in _gi_prompt)
+check("…and is shown the routes.py that served zero endpoints",
+      "ZERO endpoints" in _gi_prompt and "include_router" in _gi_prompt)
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

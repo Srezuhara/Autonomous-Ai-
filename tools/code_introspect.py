@@ -90,6 +90,10 @@ class ModuleFacts:
     # file that is not there is not a file with a syntax error, and callers
     # that repair syntax must not be handed one. See analyze_file().
     read_error:       str | None = None
+    # Modules imported inside a module-level try/if/with. They run at import
+    # time, but a `try: … except ImportError: pass` around one means a missing
+    # module fails SILENTLY — the file imports clean and the feature is gone.
+    guarded_imports:  list[str] = field(default_factory=list)
 
     @property
     def is_fastapi(self) -> bool:
@@ -213,6 +217,29 @@ def analyze_module(source: str) -> ModuleFacts:
     except Exception as e:                      # syntax error → caller decides
         facts.parse_error = str(e)
         return facts
+
+    # An import nested in a module-level `try:` / `if:` / `with:` runs at import
+    # time exactly like a top-level one, but it is not in `tree.body`, so the
+    # loop below never saw it and the function-body scan below never saw it
+    # either. Five phantom imports lived in that gap on 2026-08-29: the debugger
+    # "fixed" unresolvable imports by wrapping each in
+    # `try: … except ImportError: pass`, which made routes.py import perfectly
+    # while registering ZERO routes. Every gate passed and the app did nothing.
+    for node in tree.body:
+        if isinstance(node, (ast.Try, ast.If, ast.With)):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Import):
+                    for alias in sub.names:
+                        bound = alias.asname or alias.name.split(".")[0]
+                        facts.imported_names.setdefault(bound, alias.name)
+                        facts.guarded_imports.append(alias.name.split(".")[0])
+                elif isinstance(sub, ast.ImportFrom):
+                    if sub.level or not sub.module:
+                        continue
+                    for alias in sub.names:
+                        bound = alias.asname or alias.name
+                        facts.imported_names.setdefault(bound, sub.module)
+                        facts.guarded_imports.append(sub.module.split(".")[0])
 
     # ── module-level imports ─────────────────────────────────────────────────
     for node in tree.body:
