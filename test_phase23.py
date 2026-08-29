@@ -2861,6 +2861,154 @@ check("the prompt requires pydantic V2 and names the key that keeps shipping",
 check("…and explains why V1 keys are worse than an error — they are ignored",
       "IGNORED" in _pc_prompt and "REQUEST time" in _pc_prompt)
 
+
+
+# ---- 35. The smoke test must run the app's lifespan -------------------------
+# Starlette runs startup/lifespan ONLY when TestClient is entered as a context
+# manager. runtime_smoke did not, so an app that creates its tables in an
+# asynccontextmanager lifespan — exactly what the prompt tells the generator to
+# write — was probed against a database with no tables. Every data route
+# answered "no such table" and the failure was blamed on generated code that
+# was correct. Twelve of row 3's nineteen, twice. The debugger's earlier "fix"
+# was to create tables at module import: the one pattern the prompt forbids.
+from tools.runtime_smoke import smoke_test_app                      # noqa: E402
+
+_ls_root = "_test_lifespan_smoke"
+_ls_dir = Path(config.OUTPUT_DIR) / _ls_root
+shutil.rmtree(_ls_dir, ignore_errors=True)
+try:
+    _ls_dir.mkdir(parents=True)
+    (_ls_dir / "main.py").write_text(
+        "import os, sqlite3\n"
+        "from contextlib import asynccontextmanager\n"
+        "from fastapi import FastAPI\n"
+        "\n"
+        "DB = os.path.join(os.path.dirname(__file__), 'app.db')\n"
+        "\n"
+        "@asynccontextmanager\n"
+        "async def lifespan(app):\n"
+        "    conn = sqlite3.connect(DB)\n"
+        "    conn.execute('CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, name TEXT);')\n"
+        "    conn.commit(); conn.close()\n"
+        "    yield\n"
+        "\n"
+        "app = FastAPI(lifespan=lifespan)\n"
+        "\n"
+        "@app.get('/items')\n"
+        "def list_items():\n"
+        "    conn = sqlite3.connect(DB)\n"
+        "    rows = conn.execute('SELECT id, name FROM item').fetchall()\n"
+        "    conn.close()\n"
+        "    return [{'id': r[0], 'name': r[1]} for r in rows]\n",
+        encoding="utf-8",
+    )
+    _ls_res = smoke_test_app(_ls_root)
+    check("an app whose tables are made in lifespan is probed with them present",
+          _ls_res.passed == _ls_res.total and _ls_res.total >= 1,
+          f"{_ls_res.passed}/{_ls_res.total} "
+          + "; ".join(f"{p.path} {p.status} {p.error[:80]}" for p in _ls_res.failures))
+    check("…and no route reports the table missing",
+          not any("no such table" in (p.error or "") for p in _ls_res.probes),
+          [p.error[:90] for p in _ls_res.failures])
+finally:
+    shutil.rmtree(_ls_dir, ignore_errors=True)
+
+
+# ---- 36. SQL that reads a column the schema does not define ------------------
+# main.py and routes.py are written by separate LLM calls and drift. Row 3
+# created `contact_email` and selected `contact`; both files import perfectly
+# and five routes 500'd at request time on `no such column`. Nothing executes
+# SQL until a request arrives, so no gate saw it.
+from tools.sql_schema_check import (                                # noqa: E402
+    check_project_sql, parse_schema, _from_clause_tables,
+)
+
+_sq_schema = parse_schema(
+    "CREATE TABLE IF NOT EXISTS supplier (\n"
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "  name TEXT NOT NULL,\n"
+    "  contact_email TEXT\n"
+    ");\n"
+    "CREATE TABLE stock_movement (\n"
+    "  id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL,\n"
+    "  movement_type TEXT, quantity INTEGER,\n"
+    "  FOREIGN KEY (product_id) REFERENCES product(id)\n"
+    ");\n"
+)
+check("CREATE TABLE columns are parsed",
+      _sq_schema.get("supplier") == {"id", "name", "contact_email"}, _sq_schema)
+check("…and a table-level FOREIGN KEY is not mistaken for a column",
+      "FOREIGN" not in _sq_schema.get("stock_movement", set())
+      and "product_id" in _sq_schema.get("stock_movement", set()),
+      _sq_schema.get("stock_movement"))
+
+_sq_alias, _sq_single = _from_clause_tables("stock_movement sm JOIN product p ON p.id = sm.product_id")
+check("a join's aliases resolve to their tables",
+      _sq_alias.get("sm") == "stock_movement" and _sq_alias.get("p") == "product",
+      _sq_alias)
+check("…and a join is not treated as a single-table query",
+      _sq_single is False, _sq_single)
+
+_sq_root = "_test_sql_schema"
+_sq_dir = Path(config.OUTPUT_DIR) / _sq_root
+shutil.rmtree(_sq_dir, ignore_errors=True)
+try:
+    (_sq_dir / "backend").mkdir(parents=True)
+    (_sq_dir / "backend" / "main.py").write_text(
+        'import sqlite3\n'
+        'def init():\n'
+        '    conn = sqlite3.connect("app.db")\n'
+        '    conn.executescript("""\n'
+        '        CREATE TABLE IF NOT EXISTS supplier (\n'
+        '            id INTEGER PRIMARY KEY, name TEXT, contact_email TEXT\n'
+        '        );\n'
+        '        CREATE TABLE IF NOT EXISTS stock_movement (\n'
+        '            id INTEGER PRIMARY KEY, product_id INTEGER, movement_type TEXT\n'
+        '        );\n'
+        '    """)\n',
+        encoding="utf-8",
+    )
+    (_sq_dir / "backend" / "routes.py").write_text(
+        'def list_suppliers(db):\n'
+        '    return db.execute("SELECT id, name, contact FROM supplier").fetchall()\n'
+        'def report(db):\n'
+        '    return db.execute("SELECT sm.direction FROM stock_movement sm JOIN supplier s ON s.id = sm.id").fetchall()\n'
+        'def ok_star(db):\n'
+        '    return db.execute("SELECT * FROM supplier").fetchall()\n'
+        'def ok_real(db):\n'
+        '    return db.execute("SELECT id, name, contact_email FROM supplier").fetchall()\n'
+        'def ok_unknown_table(db):\n'
+        '    return db.execute("SELECT whatever FROM some_other_table").fetchall()\n',
+        encoding="utf-8",
+    )
+
+    _sq_files = [f"{_sq_root}/backend/main.py", f"{_sq_root}/backend/routes.py"]
+    _sq_rep = check_project_sql(_sq_root, _sq_files)
+    _sq_found = {(i.table, i.column) for i in _sq_rep.issues}
+
+    check("a bare column the table does not have is caught",
+          ("supplier", "contact") in _sq_found, _sq_found)
+    check("…and so is a join-qualified one, via its alias",
+          ("stock_movement", "direction") in _sq_found, _sq_found)
+    check("exactly the two real mismatches, nothing else",
+          len(_sq_rep.issues) == 2, [str(i)[:70] for i in _sq_rep.issues])
+    check("SELECT * is not flagged — there is no column list to check",
+          not any(i.column == "*" for i in _sq_rep.issues), _sq_found)
+    check("a correct query is not flagged",
+          ("supplier", "contact_email") not in _sq_found, _sq_found)
+    check("a table with no CREATE TABLE is left alone — the schema may be elsewhere",
+          not any(i.table == "some_other_table" for i in _sq_rep.issues), _sq_found)
+    check("the message names the real columns, so one call can fix it",
+          "contact_email" in str(next(i for i in _sq_rep.issues if i.column == "contact")),
+          str(_sq_rep.issues[0]))
+
+    # The defect has to reach the file that runs the query, not the schema.
+    check("the mismatch is blamed on the file whose SQL is wrong",
+          all(i.file.endswith("routes.py") for i in _sq_rep.issues),
+          [i.file for i in _sq_rep.issues])
+finally:
+    shutil.rmtree(_sq_dir, ignore_errors=True)
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

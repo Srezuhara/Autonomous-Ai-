@@ -324,6 +324,19 @@ Return ONLY raw SQL. No markdown, no explanation."""
                 except Exception:
                     pass
 
+        # SQL that reads a column the schema does not define. This is a
+        # project-level question, not a per-file one: the CREATE TABLE is in
+        # main.py and the SELECT is in routes.py, and neither file is wrong on
+        # its own. Both import cleanly, so nothing else catches it — five of
+        # row 3's nineteen routes 500'd on `no such column` at request time.
+        schema_defects: dict[str, list[str]] = {}
+        try:
+            from tools.sql_schema_check import check_project_sql
+            for issue in check_project_sql(root, written).issues:
+                schema_defects.setdefault(issue.file, []).append(str(issue))
+        except Exception as e:
+            logger.warning(f"⚠️  [Phase 23] SQL schema check failed: {e}")
+
         repaired, failed = 0, 0
 
         for path in written:
@@ -334,6 +347,9 @@ Return ONLY raw SQL. No markdown, no explanation."""
             except Exception as e:
                 logger.warning(f"⚠️  [Phase 22] defect scan failed for {path}: {e}")
                 continue
+            defects = defects + schema_defects.get(
+                str(path).replace("\\", "/"), []
+            )
             if not defects:
                 continue
 

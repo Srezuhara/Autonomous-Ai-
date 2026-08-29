@@ -223,7 +223,26 @@ try:
     # "500 Internal Server Error" tells the user nothing they can act on; the
     # AttributeError and the generated line that raised it tell them exactly
     # what to fix.
-    client = TestClient(app, raise_server_exceptions=True)
+    #
+    # The `with` is load-bearing. Starlette runs lifespan/startup ONLY when the
+    # TestClient is entered as a context manager. Without it, a correct app that
+    # creates its tables in an asynccontextmanager lifespan -- which is exactly
+    # what prompts/backend_developer.txt tells the generator to write -- is
+    # probed against a database with no tables, and every data route answers
+    # "no such table". Twelve of row 3's nineteen, twice, blamed on generated
+    # code that was right. Worse, the debugger then "fixed" it by creating
+    # tables at module import, the one pattern the prompt forbids.
+    client_cm = TestClient(app, raise_server_exceptions=True)
+    try:
+        client = client_cm.__enter__()
+        lifespan_ran = True
+    except BaseException as e:
+        # Startup itself failed. That is a real defect and the app is genuinely
+        # broken, but it must be reported as one error rather than as N route
+        # failures that all say the same thing.
+        result["error"] = "lifespan/startup failed: " + describe(e)
+        client = TestClient(app, raise_server_exceptions=True)
+        lifespan_ran = False
 
     for path, method in routes[:25]:
         # Fill path params with a benign value so the URL is requestable.
@@ -253,6 +272,13 @@ try:
             entry["status"] = 500
             entry["error"] = describe(e)
         result["probes"].append(entry)
+
+    # Shutdown, so anything the lifespan opened is closed before we report.
+    if lifespan_ran:
+        try:
+            client_cm.__exit__(None, None, None)
+        except BaseException:
+            pass
 
 except SystemExit:
     raise
