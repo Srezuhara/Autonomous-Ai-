@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 from agents.base_agent import BaseAgent
 from tools.file_writer import create_folder, create_file
+from tools.code_introspect import shadows_installed_package
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +312,18 @@ Return the architecture JSON object.
                 python_folders.add(folder)
 
         for folder in python_folders:
+            # A folder named after something already importable must NOT become
+            # a package: once the project root is on sys.path it wins, and the
+            # real one is unreachable. `alembic/__init__.py` did exactly that —
+            # the project's own migration script then failed with "cannot
+            # import name 'context' from 'alembic'", pointing at the project
+            # folder. The generated code was right; the __init__.py was not.
+            if shadows_installed_package(folder):
+                logger.info(
+                    f"  ⏭️  Not adding __init__.py to {folder}/ — it would shadow "
+                    f"the installed `{Path(folder).name}` package"
+                )
+                continue
             init_path  = f"{root}/{folder}/__init__.py"
             full_check = Path(config.OUTPUT_DIR) / init_path
             if not full_check.exists():

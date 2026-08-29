@@ -48,6 +48,14 @@ _HEAVY_TIMEOUT = 150
 _DEFAULT_TIMEOUT = 90
 
 
+# Directories that hold no importable project source.
+_NON_SOURCE_DIRS = {
+    "node_modules", "venv", ".venv", "dist", "build", "static", "assets",
+    "public", "frontend", "docs", "database", "__pycache__", ".git",
+    ".pytest_cache", "htmlcov",
+}
+
+
 def _detect_heavy_imports(file_path: Path) -> bool:
     """
     Return True if the source file imports any known slow/heavy package.
@@ -188,6 +196,37 @@ def run_python(file_path: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecutionResu
         package_parts.insert(0, search_root.name)
         search_root = search_root.parent
 
+    # The app's own modules import each other by bare name — main.py does
+    # `from routes import router` — which only resolves with backend/ on
+    # sys.path. That happens for backend files (run_dir IS backend/) but not
+    # for a test, so `from main import app` in tests/test_stock.py raised
+    # ModuleNotFoundError and the file was reported as failing verification
+    # when the test was written exactly as a user would write it.
+    #
+    # Add the project's other source directories, at LOWER priority than the
+    # file's own, and never one that would shadow an installed package — see
+    # shadows_installed_package(); an `alembic/` on sys.path is how the real
+    # alembic became unreachable.
+    sibling_source_dirs: list[str] = []
+    try:
+        from tools.code_introspect import shadows_installed_package
+        for sibling in sorted(run_dir.parent.iterdir()):
+            if not sibling.is_dir() or sibling == run_dir:
+                continue
+            if sibling.name.startswith((".", "__")) or sibling.name in _NON_SOURCE_DIRS:
+                continue
+            if not any(sibling.glob("*.py")):
+                continue
+            if shadows_installed_package(sibling.name):
+                continue
+            sibling_source_dirs.append(str(sibling))
+    except Exception:
+        sibling_source_dirs = []
+
+    extra_paths = "".join(
+        f"sys.path.append(r'{d}'); " for d in sibling_source_dirs
+    )
+
     if package_parts:
         dotted = ".".join(package_parts + [module_name])
         check_code = (
@@ -195,6 +234,7 @@ def run_python(file_path: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecutionResu
             f"sys.path.insert(0, r'{run_dir}'); "
             f"sys.path.insert(0, r'{run_dir.parent}'); "
             f"sys.path.insert(0, r'{search_root}'); "
+            f"{extra_paths}"
             f"import py_compile; "
             f"py_compile.compile(r'{full_path}', doraise=True); "
             f"import importlib; "
@@ -206,6 +246,7 @@ def run_python(file_path: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecutionResu
             f"import sys, os; "
             f"sys.path.insert(0, r'{run_dir}'); "
             f"sys.path.insert(0, r'{run_dir.parent}'); "
+            f"{extra_paths}"
             f"import py_compile; "
             f"py_compile.compile(r'{full_path}', doraise=True); "
             f"import importlib.util; "

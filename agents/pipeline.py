@@ -616,10 +616,17 @@ class Pipeline:
         if not phantom:
             return []
         preview = ", ".join(f"`{m}` (in {f})" for m, f in sorted(phantom.items())[:5])
+        # Say WHY the import gate missed it, without asserting a mechanism that
+        # may be wrong. Row 3's five were inside a module-level try/except that
+        # swallowed the ImportError, and this message told the reader they were
+        # inside function bodies — sending anyone who followed it to the wrong
+        # place in the file.
         return [
             f"{len(phantom)} import(s) reference modules that do not exist locally "
-            f"and are not installed: {preview}. Imports inside function bodies do "
-            f"not run during the import check, so these fail only at request time."
+            f"and are not installed: {preview}. The import check only reports what "
+            f"raises at module level, so an import inside a function body — or one "
+            f"wrapped in a try/except that swallows ImportError — passes it and "
+            f"then fails, or silently does nothing, at request time."
         ]
 
     def _audit_js_imports(self, project_dir: Path) -> list[str]:

@@ -346,6 +346,28 @@ def is_resolvable_module(name: str) -> bool:
         return False
 
 
+def shadows_installed_package(folder_name: str) -> bool:
+    """True when adding `__init__.py` here would hide a real package.
+
+    A generated project folder named after something already importable turns
+    into a package that wins on sys.path once the project root is inserted --
+    and the real one becomes unreachable. `alembic/` is the case that shipped:
+    the architect added `alembic/__init__.py`, so `from alembic import context`
+    inside the project's own migration script resolved to the project folder
+    and raised "cannot import name 'context' from 'alembic'". The generated
+    code was correct; the __init__.py was not.
+
+    A folder does not need to be a package to hold Python files, so declining
+    to create one costs nothing.
+    """
+    if not folder_name:
+        return False
+    base = str(folder_name).replace("\\", "/").split("/")[-1].strip()
+    if not base or not base.isidentifier():
+        return False
+    return is_resolvable_module(base)
+
+
 def find_phantom_imports(
     facts: ModuleFacts, local_modules: set[str]
 ) -> list[tuple[str, str | None]]:

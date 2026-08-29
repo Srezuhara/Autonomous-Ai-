@@ -3160,6 +3160,117 @@ check("the debugger is told never to silence an import",
 check("…and is shown the routes.py that served zero endpoints",
       "ZERO endpoints" in _gi_prompt and "include_router" in _gi_prompt)
 
+
+
+# ---- 39. A project folder must not shadow an installed package --------------
+# The architect adds __init__.py to every Python folder. For `alembic/` that
+# turns the migrations directory into a package which wins on sys.path once the
+# project root is inserted, so the project's own env.py failed with "cannot
+# import name 'context' from 'alembic'" — pointing at the project folder. The
+# generated code was right; the __init__.py was not.
+from tools.code_introspect import shadows_installed_package as _sip   # noqa: E402
+
+check("a folder named after an installed package is refused an __init__.py",
+      _sip("alembic") is True)
+check("…including one nested in a path",
+      _sip("backend/alembic") is True)
+check("…and a stdlib name too", _sip("json") is True and _sip("email") is True)
+check("ordinary project folders are unaffected",
+      not any(_sip(n) for n in ("backend", "tests", "routers", "services",
+                                "models", "api", "utils")))
+check("a non-identifier folder name is not treated as a module",
+      _sip("my-folder") is False and _sip("") is False)
+
+
+# ---- 39b. A script a framework runs is not an importable module -------------
+# alembic's env.py does `from alembic import context`, which is a proxy module
+# populated only while alembic is running a migration. Importing it standalone
+# raises "module 'alembic.context' has no attribute 'config'" no matter how
+# correct the file is. Row 3 spent debugger attempts on it, then reported it as
+# a failing backend file.
+from agents.debugger import _is_framework_script as _ifs             # noqa: E402
+
+check("alembic's env.py is not import-checked",
+      _ifs("proj/alembic/env.py") is True)
+check("…nor a generated migration",
+      _ifs("proj/migrations/versions/abc123_init.py") is True)
+check("a normal backend file still is",
+      _ifs("proj/backend/routes.py") is False)
+check("…and a file merely NAMED env.py elsewhere still is",
+      _ifs("proj/backend/env.py") is False)
+
+
+# ---- 39c. A test must be able to import the app the way a user writes it ----
+# main.py does `from routes import router`, which only resolves with backend/ on
+# sys.path. The import check adds the file's own directory, so backend files are
+# fine and tests are not: `from main import app` in tests/test_stock.py raised
+# ModuleNotFoundError and the file was reported as failing verification when the
+# test was written exactly as anyone would write it.
+_sp_root = "_test_sibling_syspath"
+_sp_dir = Path(config.OUTPUT_DIR) / _sp_root
+shutil.rmtree(_sp_dir, ignore_errors=True)
+try:
+    (_sp_dir / "backend").mkdir(parents=True)
+    (_sp_dir / "tests").mkdir(parents=True)
+    (_sp_dir / "backend" / "routes.py").write_text("router = 'r'\n", encoding="utf-8")
+    (_sp_dir / "backend" / "main.py").write_text(
+        "from routes import router\napp = {'router': router}\n", encoding="utf-8"
+    )
+    (_sp_dir / "tests" / "test_app.py").write_text(
+        "from main import app\ndef test_app():\n    assert app\n", encoding="utf-8"
+    )
+    from tools.code_executor import run_python as _rp39              # noqa: E402
+
+    _sp_res = _rp39(f"{_sp_root}/tests/test_app.py")
+    check("a test importing the app by bare module name now resolves",
+          _sp_res.success, _sp_res.stderr[-200:])
+    _sp_backend = _rp39(f"{_sp_root}/backend/main.py")
+    check("…and a backend file is not regressed",
+          _sp_backend.success, _sp_backend.stderr[-200:])
+
+    # The shadowing guard must apply here too: an alembic/ sibling must never
+    # be put on sys.path, or the real alembic becomes unreachable.
+    (_sp_dir / "alembic").mkdir()
+    (_sp_dir / "alembic" / "env.py").write_text("x = 1\n", encoding="utf-8")
+    (_sp_dir / "tests" / "test_alembic_ok.py").write_text(
+        "import alembic\n"
+        "assert hasattr(alembic, '__version__')\n"
+        "def test_real_alembic():\n    assert True\n",
+        encoding="utf-8",
+    )
+    _sp_shadow = _rp39(f"{_sp_root}/tests/test_alembic_ok.py")
+    check("an alembic/ sibling is never added to sys.path",
+          _sp_shadow.success, _sp_shadow.stderr[-200:])
+finally:
+    shutil.rmtree(_sp_dir, ignore_errors=True)
+
+
+# ---- 39d. The phantom-import message must not name the wrong mechanism ------
+# It said the imports were "inside function bodies". Row 3's five were inside a
+# module-level try/except that swallowed the ImportError, so anyone following
+# the message looked in the wrong part of the file.
+_pi_root = "_test_phantom_message"
+_pi_dir = Path(config.OUTPUT_DIR) / _pi_root
+shutil.rmtree(_pi_dir, ignore_errors=True)
+try:
+    _pi_dir.mkdir(parents=True)
+    (_pi_dir / "routes.py").write_text(
+        "try:\n"
+        "    from supplier_routes import router\n"
+        "except ImportError:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    _pi_msg = _P37.__new__(_P37)._audit_python_imports(_pi_dir)
+    check("the phantom import is still reported",
+          len(_pi_msg) == 1 and "supplier_routes" in _pi_msg[0], _pi_msg)
+    check("…and the message no longer asserts it is in a function body",
+          "Imports inside function bodies do" not in _pi_msg[0], _pi_msg[0])
+    check("…naming the try/except that swallows ImportError as the other way",
+          "swallows ImportError" in _pi_msg[0], _pi_msg[0])
+finally:
+    shutil.rmtree(_pi_dir, ignore_errors=True)
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

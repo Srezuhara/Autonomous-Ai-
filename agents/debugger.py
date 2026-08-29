@@ -67,6 +67,7 @@ from tools.file_writer import read_file, create_file
 from tools.code_executor import run_python
 from tools.code_patcher import locate_block, splice, file_digest
 from tools.runtime_smoke import _parse_frames
+from tools.code_introspect import shadows_installed_package
 from tools.dependency_installer import (
     pip_install, extract_missing_package,
     WINDOWS_BUILD_BLOCKLIST, HEAVY_PACKAGES_TIMEOUT_BLOCKLIST,
@@ -101,6 +102,22 @@ SKIP_DEBUG_FILES = {
     "conftest.py", "migrate.py", "seed.py",
     "celery.py", "gunicorn.conf.py",
 }
+
+# Directories whose Python files are executed BY a framework, with a context it
+# supplies, and can never be imported standalone. Alembic's env.py is the case
+# that shipped: `from alembic import context` gives a proxy module that is only
+# populated while alembic is running a migration, so importing env.py directly
+# raises "module 'alembic.context' has no attribute 'config'" no matter how
+# correct the file is. Row 3 spent debugger attempts on it and then reported it
+# as a failing backend file. Matching by directory rather than filename because
+# `env.py` is far too common a name to skip everywhere.
+FRAMEWORK_SCRIPT_DIRS = {"alembic", "migrations", "versions"}
+
+
+def _is_framework_script(file_path: str) -> bool:
+    """True for a file a framework runs for us, which no import check can load."""
+    parts = [p.lower() for p in Path(str(file_path).replace("\\", "/")).parts]
+    return any(p in FRAMEWORK_SCRIPT_DIRS for p in parts[:-1])
 
 SYSPATH_BLOCK = """\
 import sys as _sys, os as _os
@@ -260,7 +277,9 @@ class Debugger(BaseAgent):
         runtime_errors = runtime_errors or {}
         py_files = [
             f for f in file_paths
-            if f.endswith(".py") and Path(f).name not in SKIP_DEBUG_FILES
+            if f.endswith(".py")
+            and Path(f).name not in SKIP_DEBUG_FILES
+            and not _is_framework_script(f)
         ]
         skipped = len(file_paths) - len(py_files) - sum(
             1 for f in file_paths if not f.endswith(".py")
@@ -824,6 +843,11 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             if folder in seen:
                 continue
             seen.add(folder)
+            # See architect._ensure_init_files: a folder named after an
+            # installed package must not become one, or it shadows the real
+            # thing on sys.path.
+            if shadows_installed_package(folder):
+                continue
             init = f"{folder}/__init__.py"
             if not (Path(config.OUTPUT_DIR) / init).exists():
                 create_file(init, '"""Package init."""\n')
