@@ -1,15 +1,16 @@
 # Phase 23 A2 — live matrix results
 
-*Run 2026-08-28T12:39:20*
+*Run 2026-08-29T12:29:05*
 
 Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done_with_context` with a downloadable ZIP, and every build that boots reports **0 5xx** from the runtime smoke test.
 
-**Result: 2 of 2 rows pass (matrix incomplete).**
+**Result: 1 of 1 rows reach a terminal state with a valid ZIP (matrix incomplete).**
+
+> That count covers the FIRST half of the criterion only. The 0-5xx half is not in the API — the smoke-test line lives in the server log, and a row counted here can still have shipped every endpoint broken. Row 3 on 2026-08-28 did exactly that.
 
 | Row | Shape | Status | Tokens | Duration | Files | ZIP |
 |-----|-------|--------|--------|----------|-------|-----|
-| 2 | medium FastAPI + JS frontend | `done_with_context` | 171,914 | 1429s | 20 | yes |
-| 3 | complex / multi-entity | `done_with_context` | 131,848 | 1342s | 22 | yes |
+| 3 | complex / multi-entity | `done_with_context` | 87,551 | 729s | 24 | yes |
 
 The smoke-test line is not in the API — read it from the server log:
 
@@ -19,20 +20,11 @@ grep -E "Runtime smoke test|failed to boot|no FastAPI entry point" server.log
 
 ## Per-row detail
 
-### Row 2 — medium FastAPI + JS frontend
-
-- build_id: `2323e41f-1f5c-447a-80b7-db877e4f791b`
-- status: `done_with_context` — Build completed with 3 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
-- progress: 100.0%
-- tokens by model: `{"openai/gpt-oss-20b": 128100, "openai/gpt-oss-120b": 43814}`
-- download: HTTP 200, application/zip, 20,247 bytes
-- expected to boot: yes
-
 ### Row 3 — complex / multi-entity
 
-- build_id: `e9eac7be-6239-4ed3-9da9-ef1955714451`
-- status: `done_with_context` — LLM daily quota exhausted during step 8 (90% complete). Generated files packaged with SESSION_CONTEXT.md.
-- progress: 90.0%
-- tokens by model: `{"openai/gpt-oss-120b": 131848}`
-- download: HTTP 200, application/zip, 19,146 bytes
+- build_id: `e6a1da32-f018-446d-996d-c4d8c4d59402`
+- status: `done_with_context` — Build completed with 3 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
+- progress: 100.0%
+- tokens by model: `{"openai/gpt-oss-20b": 22234, "openai/gpt-oss-120b": 65317}`
+- download: HTTP 200, application/zip, 22,611 bytes
 - expected to boot: yes
