@@ -1,99 +1,132 @@
 # Session Progress — start here
 
-**Last session: 2026-08-28 (Phase 23 — the live matrix, and the ten fixes it
-produced).** Everything is **committed** on `main`, twelve commits,
-`31d36ad`..`70d707b`. Working tree clean apart from `frontend-screenshots/`.
+**Last session: 2026-08-29 (Phase 23 — two live row-3 rebuilds, and eight more
+fixes).** Committed on `main`, `eff8479`..`5c8b10c`. `test_phase23.py` is
+**394/394**, up from 312.
 
 > **Backend/pipeline work has its own state doc: `PHASE23_HANDOFF.md`.** Read it
 > first if you are touching `llm_client.py`, the agents, the pipeline or the
 > platform API — §4.x there is the per-defect detail this file summarises. This
 > file remains the frontend and general entry point.
 
-**Where things stand.** The A2 live matrix ran three of its four rows; row 4 was
-refused for want of quota. All three finished with a valid ZIP, but two shipped
-broken — row 2's app never booted and row 3 answered 7 of 19 routes. Diagnosing
-those two builds produced **ten fixes**, and **both broken builds are now
-repaired**: row 3 answers 19/19 and row 2 answers 6/6. That was done without
-rebuilding anything (§0.3), for ~14K tokens against the ~300K two rebuilds would
-have cost. Seven of the ten fixes are confirmed on live builds; the three that
-are not need a fresh generation to exercise, which is what the next rebuild is
-for. `test_phase23.py` is **312/312**, up from 182.
+**Where things stand.** Row 3 was rebuilt twice. The first rebuild was aborted
+deliberately once its log showed the pipeline burning one LLM call per generated
+file on a defect that did not exist; the second completed. Between them, eight
+fixes (§4.13-§4.21).
+
+**The headline number: a row now costs half what it did.**
+
+| | run 2 (old code) | run 3 (fixed) |
+|---|---|---|
+| tokens | 186,413 | **87,551** (−53%) |
+| duration | 1694s | **729s** (−57%) |
+
+**The headline finding is more important than the number.** Of the seven
+verification failures traced end to end this session, **six were defects in the
+pipeline's own checking, not in the code it generated.** The smoke test never
+ran the app's lifespan; the import check could not see half the imports in a
+file; a folder was made into a package that hid the real one; a test could not
+import the app the way a user would write it; an audit reported on a step that
+had not run yet. **The generated code has been better than the build reports
+said it was.** Treat a red verification result as a hypothesis about the
+pipeline first, and about the model second — that is now the cheaper bet.
 
 **Earlier frontend work is unchanged and committed:** the landing restructure
 (`FRONTEND_LANDING_PLAN.md`, fully executed — see §2.7/§2.8) and everything in
 `FRONTEND_COMPLETION_PLAN.md`. Do not re-run either plan.
 
-> **The `.gitignore` blocker described in the old §3.0 is FIXED.** The unanchored
-> `lib/` rule was anchored to `/lib/`, the UTF-16 corruption on the last line was
-> repaired, and `frontend/src/lib/` is now tracked and on the remote. Nothing to do.
-
 ---
 
 ## 0. Next session — pick up here
 
-Three things are worth doing, and only one of them needs quota.
+**Quota is the gate.** At the close of 2026-08-29 both models sat near 42-45K,
+below `run_live_matrix.py`'s 70,000 floor. It refills at ~8,333/hour/model
+(§0.4), so:
 
-| # | Work | Quota | Size | Unblocks |
-|---|---|---|---|---|
-| 1 | **Phase B1 — SQLAlchemy + Alembic** | none | fresh session | B2 auth, and everything after it |
-| 2 | **Re-run row 3** (then 2, then 4) | ~132K, ~16h of refill | half a session | A2, and Phase C behind it |
-| 3 | Row 2's remaining `done_with_context` causes | small | an hour | a build reaching plain `done` |
+| Wait | Buys |
+|---|---|
+| ~3h | the 70,000 gate — a row can start |
+| ~7h | ~100K/model — comfortable for one row 3 |
+| ~12h+ | two rows back to back |
 
-### 1. Phase B1 — the only item that can start immediately
+`run_live_matrix.py --dry-run` reports the real number and costs nothing. **Run
+it first, every time.**
 
-Fully specified in `PHASE23_PLAN.md`. Auth needs migrations to exist first, which
-is why it is B1 and not B2. The load-bearing constraint: **keep
+### The order to work in
+
+| # | Work | Quota | Why this order |
+|---|---|---|---|
+| 1 | **Row 3 again** | ~90K | Eight fixes have never run together in one build. Cheapest way to find the next pipeline defect |
+| 2 | **Row 4** (CLI) | ~60K | Never run at all. Exercises §4.15 and the non-FastAPI path the smoke test must skip cleanly |
+| 3 | **Row 2** | ~90K | Its three causes are all fixed; a plain `done` is plausible here |
+| 4 | **Phase B1** | none | Start any time quota is short — see below |
+
+### 1. Row 3, and exactly what to check
+
+**Restart the server first.** `--no-reload` is deliberate, so a running process
+holds the code it started with — three of this session's runs were affected by
+forgetting to, and each cost a rebuild's worth of quota to learn nothing.
+
+```bash
+venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+venv/Scripts/python.exe run_live_matrix.py --dry-run
+venv/Scripts/python.exe run_live_matrix.py --rows 3
+```
+
+Every one of these is a *new* assertion — none has been observed in a complete
+build, because each fix landed after the run that motivated it:
+
+| Expect | Proves | Was |
+|---|---|---|
+| `grep -c "does not parse" server.log` → **0** | §4.13 | 8 wasted calls per build |
+| `🔥 Runtime smoke test: N/N` well above 7/19 | §4.17 lifespan | 12 false 500s |
+| **no** `scaffold placeholder: README.md` | §4.19 | degraded every build with a README |
+| **no** `imports … inside a try/except that swallows` | §4.20 | shipped an app with 0 routes |
+| **no** `alembic/env.py` in the failing list | §4.21 | false failure, 2 debugger attempts |
+| **no** `No module named 'main'` from a test | §4.21 | false failure |
+| `🗄️ SQL schema check` fires **or** stays silent | §4.18 | silence is correct for an ORM project |
+| `🧬 pydantic V2 compat` silent, 0 `orm_mode` | §4.16 | the prompt rule should make the pass a no-op |
+| status `done`, not `done_with_context` | nothing left degrading it | never once observed |
+
+**Architect variance matters when reading the result.** Row 3 produced raw
+`sqlite3` on run 2 and SQLAlchemy + alembic on run 3, from the same prompt. Some
+checks only apply to one shape (the SQL schema check needs `CREATE TABLE`;
+§4.21's alembic fixes need an alembic project). A silent check is not a failed
+check — confirm which shape you got before concluding anything.
+
+### 2. What is most likely to bite next
+
+Ranked by what this session actually saw, not by guesswork:
+
+1. **The debugger repairing a file into a worse one.** Observed three times: it
+   commented out `engine = create_engine(...)` and left three uses of `engine`;
+   it wrapped five imports in `try/except: pass` and shipped an app with no
+   routes; it deleted nine top-level names and was caught only by the shrinkage
+   guard. The guards catch the crude cases. The subtle ones ship.
+2. **A1 assertion 2 — a build reaching plain `done`** — has still never been
+   observed, across every row ever run.
+3. **Phase C stays blocked.** Its premise is that build quality is limited by
+   missing precedent. **Eighteen diagnosed failures, and every one has been a
+   mechanical defect.** The premise is now substantially less likely than when
+   it was written; revisit it before spending anything on it.
+
+### 3. Phase B1 — the no-quota track
+
+Fully specified in `PHASE23_PLAN.md`. Auth needs migrations first, which is why
+it is B1 and not B2. The load-bearing constraint: **keep
 `api_platform/database.py`'s function signatures as the seam** — `get_project`,
 `list_projects`, `update_project`, `add_build_step` are called from `runner.py`,
 all five route modules and the tests, so reimplementing their bodies over
 SQLAlchemy means zero call-site changes. Alembic's first revision must be
-**stamped** against the existing DB so the 58 live builds survive.
+**stamped** against the existing DB so the live builds survive.
 
-### 2. Re-run the matrix rows
-
-The repair paths are proven against both broken projects (§0.3). A rebuild asks
-a different and larger question: does the *whole pipeline* now produce a clean
-build? That is what A2 actually measures, and it is the only way to exercise
-§4.11's two prompt rules, since a prompt rule can only be tested by generating
-code.
-
-```bash
-venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
-venv/Scripts/python.exe run_live_matrix.py --dry-run     # what is actually there
-venv/Scripts/python.exe run_live_matrix.py --rows 3
-grep -E "Targeted repair of|Rejecting LLM fix|0 chars|scaffold placeholder|Runtime smoke test" server.log
-```
-
-**Restart the server first** — `--no-reload` is deliberate, so a running process
-holds the code it started with.
-
-What to watch for, and what each line proves:
-
-| Expect | Proves | Was |
-|---|---|---|
-| `🎯 … Targeted repair of '…'` | §4.6 block repair fired | the whole file was sent |
-| `🧭 … only imports \`X\` from \`Y\`` | §4.10 re-aimed the repair | it repaired the wrong file |
-| `🧮 … on several endpoints at once` | §4.9 spotted a shared cause | one block was repaired twelve times over |
-| **no** `finish_reason=length, 0 chars` | §4.7 reasoning budget | 13 wasted calls in one matrix |
-| **no** `still contain the scaffold placeholder` | §4.3 requirements audit | degraded all three rows |
-| **no** `@router.on_event("startup")` generated | §4.11 startup rule | row 3's twelve dead endpoints |
-| `🔥 Runtime smoke test: 19/19 routes` | the whole chain | 7/19 |
-| status `done`, not `done_with_context` | nothing left degrading it | all three rows degraded |
-
-### 3. What still degrades a build that otherwise works
-
-Row 1 finished `done_with_context` over two issues, one of which (§4.3) is fixed.
-The other was a generated test failing 2/3. **A1 assertion 2 — a clean build
-reaching `done` with no `SESSION_CONTEXT.md` — has still never been observed**,
-and it is the cheapest remaining signal that the pipeline is healthy end to end.
-
-Phase C stays blocked until the matrix is complete. Its premise is that build
-quality is limited by missing precedent, and **every** failure diagnosed so far —
-ten now — has been a mechanical defect instead.
+Note the irony worth remembering while doing it: §4.21 exists because a
+generated project's `alembic/` folder was made into a package that shadowed the
+real alembic. Do not repeat that in `api_platform/`.
 
 ---
 
-## 0.1 The ten fixes, and which are proven
+## 0.1 The fixes, and which are proven
 
 `test_phase23.py` sections 22-30 cover all of them offline. "Live" means it ran
 against the real API on a real project, not that a full build was rebuilt.
@@ -116,6 +149,39 @@ against the real API on a real project, not that a full build was rebuilt.
 | 4.16 | Pydantic V1 config keys V2 ignores are renamed | ✅ | 6 `orm_mode` → `from_attributes` on the live project |
 | 4.17 | The smoke test runs the app's lifespan | ✅ | **7/19 → 14/19** on the live project, nothing else changed |
 | 4.18 | SQL that reads a column the schema lacks is caught | ✅ | found exactly the 2 real mismatches; **→ 19/19** |
+| 4.19 | An audit no longer reports on a step that has not run yet | ✅ᵒ | README was 46 lines when it was called unfilled |
+| 4.20 | An import hidden in a module-level try/except is seen | ✅ | "all clean" → **6 defects** on the file that shipped 0 routes |
+| 4.21 | Three false verification failures: package shadowing, framework scripts, test sys.path | ✅ | `alembic/env.py` and `test_stock.py` both cleared |
+
+### §4.13 — the one that was costing the most
+
+`written` and `result.backend_files` hold **OUTPUT_DIR-relative** paths, because
+that is what `create_file()` takes. `analyze_file()` used a bare `open()`, which
+honours **cwd**. Same string, two resolution rules — so every relative caller
+missed the file, and because `analyze_file` caught `FileNotFoundError` into
+`parse_error`, a file that was *not found* was reported as a file that *does not
+parse*.
+
+`_verify_and_repair` then spent **one LLM call per generated Python file** asking
+a model to fix a syntax error that did not exist, wrote the reply over the
+correct original (`create_file` resolves what `open()` could not), re-scanned,
+failed identically, and logged "defects remain after repair".
+
+| | aborted run (old code) | clean run (fixed) |
+|---|---|---|
+| phantom "does not parse" | **8** | **0** |
+| files sent to LLM repair | **8** (100% phantom) | **0** |
+| "defects remain after repair" | **7** | **0** |
+
+Eight of eight files — `main`, `models`, `routes`, `services` and all four test
+files. The tester's route-aware mock guidance (`_build_mock_examples`), which its
+own docstring calls the fix for todo_app's 1/9 test score, returned `""` on every
+build for the same reason — silently, since it checks `parse_error` and bails.
+
+Measured on the shipped row 2 project: **before**, all four backend files reported
+the phantom defect; **after**, three are clean and `routes.py` surfaces the real
+one that was masked — two unimplemented handler stubs. Phase 22 had never once
+done its actual job.
 
 ### §4.17 — row 3's 7/19 was more than half our own bug
 
@@ -159,50 +225,57 @@ repair no longer has to break the rule the prompt sets.
 
 ᵒ offline-deterministic; there is nothing a live run would add.
 
-### §4.13 — the one that was costing the most
+### §4.20 — the build that passed every gate and served nothing
 
-`written` and `result.backend_files` hold **OUTPUT_DIR-relative** paths, because
-that is what `create_file()` takes. `analyze_file()` used a bare `open()`, which
-honours **cwd**. Same string, two resolution rules — so every relative caller
-missed the file, and because `analyze_file` caught `FileNotFoundError` into
-`parse_error`, a file that was *not found* was reported as a file that *does not
-parse*.
+`routes.py` came out as *nothing but* five `try: from X import router / except
+ImportError: pass` blocks, importing modules that were never generated. The
+debugger, told to fix unresolvable imports, made them unreachable instead.
 
-`_verify_and_repair` then spent **one LLM call per generated Python file** asking
-a model to fix a syntax error that did not exist, wrote the reply over the
-correct original (`create_file` resolves what `open()` could not), re-scanned,
-failed identically, and logged "defects remain after repair".
+Nothing caught it, because `analyze_module` read imports from `tree.body` and
+deferred imports from function bodies. **An import nested in a module-level
+`try:` is in neither.** Phase 22 reported "all generated files clean"; the smoke
+test found 0 routes of 0. Meanwhile the pipeline's own `_audit_python_imports`
+*did* see them (it uses `ast.walk`) and classified them as unfixable — so the
+same defect was invisible where it was cheap to fix and unfixable where it was
+found.
 
-| | aborted run (old code) | clean run (fixed) |
-|---|---|---|
-| phantom "does not parse" | **8** | **0** |
-| files sent to LLM repair | **8** (100% phantom) | **0** |
-| "defects remain after repair" | **7** | **0** |
+A guarded import that *resolves* is still fine: guarding an optional dependency
+is legitimate and is not reported.
 
-Eight of eight files — `main`, `models`, `routes`, `services` and all four test
-files. The tester's route-aware mock guidance (`_build_mock_examples`), which its
-own docstring calls the fix for todo_app's 1/9 test score, returned `""` on every
-build for the same reason — silently, since it checks `parse_error` and bails.
+### §4.21 — three failures that were never the model's fault
 
-Measured on the shipped row 2 project: **before**, all four backend files reported
-the phantom defect; **after**, three are clean and `routes.py` surfaces the real
-one that was masked — two unimplemented handler stubs. Phase 22 had never once
-done its actual job.
+| Reported as | Actually |
+|---|---|
+| `alembic/env.py` fails import | the architect's `alembic/__init__.py` shadowed the installed `alembic`, so `from alembic import context` resolved to the project folder |
+| …and still fails once that is fixed | `alembic.context` is a proxy populated only while alembic runs a migration. `env.py` can never be imported standalone — skip it, by directory |
+| `tests/test_stock.py` fails import | `main.py` lives in `backend/`, which is not on the path for a test. `from main import app` raised `ModuleNotFoundError` for a test written exactly as a user would write it |
+
+The third is the instructive one. Fixing it turned `No module named 'main'` into
+`NameError: name 'engine' is not defined` — a **real** bug, where the debugger
+had commented out `engine = create_engine(...)` and left three uses of it. The
+false failure had been hiding the true one.
 
 ### Where the code lives
 
 | File | Change |
 |---|---|
 | `tools/code_patcher.py` | **New.** Locate one top-level block from a traceback frame, splice a replacement back, refuse anything that does not parse; read a file's imports |
-| `tools/requirements_builder.py` | Strips the scaffold placeholder once real packages are written; adds uvicorn for a FastAPI app that never imports it |
-| `tools/runtime_smoke.py` | An import-time failure reports its frame chain, so a boot failure can be blamed; interpreter pseudo-frames excluded |
-| `agents/pipeline.py` | A boot failure is repairable, not advisory; blame is re-aimed at the file that defines a bad symbol; the error trim keeps the frame chain |
-| `agents/debugger.py` | Repairs the failing block with a full-file fallback; a shared cause skips the block path; budgets sized to the code |
+| `tools/requirements_builder.py` | Strips the scaffold placeholder once real packages are written — including when there is nothing to add (§4.15); adds uvicorn for a FastAPI app that never imports it |
+| `tools/runtime_smoke.py` | An import-time failure reports its frame chain; **the TestClient is entered as a context manager so lifespan runs** (§4.17) |
+| `tools/sql_schema_check.py` | **New.** Collects every `CREATE TABLE` and checks SQL literals against it, zero tokens, precision over recall (§4.18) |
+| `tools/pydantic_compat.py` | **New.** Renames V1 config keys V2 silently ignores; leaves `.json()`, `.dict()` and `@validator` alone (§4.16) |
+| `tools/code_introspect.py` | Project-relative paths resolve; `read_error` ≠ `parse_error` (§4.13); module-level `try/if/with` imports are seen and marked guarded (§4.20); `shadows_installed_package` (§4.21) |
+| `tools/code_executor.py` | Sibling source dirs go on `sys.path`, so a test can import the app as a user would write it (§4.21) |
+| `agents/pipeline.py` | A boot failure is repairable; blame is re-aimed at the defining file; the placeholder audit skips files a later step owns (§4.19); the phantom-import message no longer names the wrong mechanism |
+| `agents/debugger.py` | Repairs the failing block with a full-file fallback; a shared cause skips the block path; budgets sized to the code; framework scripts (`alembic/`, `migrations/`) are not import-checked (§4.21) |
+| `agents/architect.py` | No `__init__.py` for a folder named after an installed package (§4.21) |
+| `agents/backend_developer.py` | `requirements.txt` is registered as written (§4.14); pydantic compat pass; SQL schema defects reach the querying file; a guarded phantom import and a router with no handlers are defects (§4.20) |
 | `llm_client.py` | `reasoning_effort` on both models; retries double the *effective* cap; the TPM ceiling is known before the first response; the budget is a refilling bucket |
-| `agents/documenter.py` | Users are no longer told to wait for a midnight reset that does not exist |
-| `prompts/backend_developer.txt` | The router startup hook that never fires, and a non-Pydantic `response_model`, are both forbidden |
+| `agents/documenter.py` | No midnight-reset advice; stale placeholder claims are re-checked against disk and narrowed; `_missing_files` treats the disk as authoritative (§4.19) |
+| `prompts/backend_developer.txt` | The router startup hook and a non-Pydantic `response_model` are forbidden; pydantic V2 is required by name (§4.16) |
+| `prompts/debugger.txt` | **Never silence an import** — the `try/except ImportError: pass` that shipped an app with zero routes (§4.20) |
 | `run_live_matrix.py` | The results file merges instead of overwriting; the headline claims only what it measured |
-| `test_phase23.py` | Sections 22-30, +130 assertions (182 → 312) |
+| `test_phase23.py` | Sections 22-39d (182 → **394**) |
 
 ---
 
@@ -287,13 +360,19 @@ not strictly need a rebuild.
 
 | Item | Cost | Notes |
 |---|---|---|
-| A2 matrix rows 3, 2, 4 re-run | ~360K total, days of refill | the only way to exercise §4.3 and §4.11 |
-| A1 assertion 2 — a build reaching plain `done` | falls out of the above | never once observed |
-| Phase B1-B5 | none | `PHASE23_PLAN.md`; B1 first |
-| Phase C — vector memory | blocked | premise is unproven while every failure is mechanical |
-| The Reviewer's 600-token budget | none | it always received 1,600 from the reasoning floor; now that `gpt-oss-20b` takes `reasoning_effort` the floor no longer applies to it, so the budget table wants re-tuning against measurement |
-| Row 3's repair uses a module-level DB connection | none | it works and the prompt now forbids the pattern that made it necessary, but the repair itself still does what the rules tell generated code not to do |
+| Row 3 once more, then rows 4 and 2 | ~90K / ~60K / ~90K | eight fixes have never run together in one build |
+| A1 assertion 2 — a build reaching plain `done` | falls out of the above | never once observed, on any row, ever |
+| Phase B1-B5 | none | `PHASE23_PLAN.md`; B1 first, and startable while quota refills |
+| Phase C — vector memory | blocked | 18 diagnosed failures, all mechanical. Re-examine the premise before spending on it |
+| **A debugger repair that makes a file worse** | unknown | the sharpest open risk — see §0's "what is most likely to bite next". Guards catch the crude cases; the subtle ones ship |
+| The Reviewer's 600-token budget | none | it always received 1,600 from the reasoning floor; now that `gpt-oss-20b` takes `reasoning_effort` the floor no longer applies, so the table wants re-tuning against measurement |
 | The ledger cannot see other processes | none | per-checkout; two servers sharing the file will under-count. One at a time |
+| Running the suite during a live build | none | fixed for the one assertion that flaked (it read wall-clock against a seeded clock); if another flakes, suspect the same shape before suspecting the code |
+
+~~Row 3's repair uses a module-level DB connection~~ — **resolved.** That was
+the debugger routing around §4.17's broken smoke test, not a model failure. With
+the lifespan actually running, the repair no longer needs the pattern the prompt
+forbids.
 
 ---
 
@@ -349,7 +428,7 @@ npm run test:e2e       # 80 Playwright + axe — needs BOTH servers up
 venv/Scripts/python.exe test_phase17.py                  # 58/58 (pinned to a fixture)
 venv/Scripts/python.exe test_phase21.py                  # 77/77
 venv/Scripts/python.exe test_phase22.py                  # 85/85
-venv/Scripts/python.exe test_phase23.py                  # 312/312
+venv/Scripts/python.exe test_phase23.py                  # 394/394
 venv/Scripts/python.exe test_groq_rate_limit_handling.py # OK
 ```
 
