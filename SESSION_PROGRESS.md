@@ -100,7 +100,7 @@ against the real API on a real project, not that a full build was rebuilt.
 
 | § | Fix | Live? | Evidence |
 |---|---|---|---|
-| 4.3 | `requirements.txt` no longer reads as a stub once filled; uvicorn added | ⬜ | deterministic; needs a fresh build to observe |
+| 4.3 | `requirements.txt` no longer reads as a stub once filled; uvicorn added | ✅ | **confirmed on the 2026-08-29 build** — no marker, uvicorn added |
 | 4.4 | A boot failure is repairable, not advisory | ✅ | row 2 aimed and repaired |
 | 4.5 | Rewrite budgets sized to the code, no ceiling of their own | ✅ | the clamp fired live, 3992 → 3462 |
 | 4.6 | Repair the failing block, not the whole file | ✅ | **fixed row 2** — replaced one class in a 4,234-char file |
@@ -108,10 +108,86 @@ against the real API on a real project, not that a full build was rebuilt.
 | 4.8 | The daily budget refills; it does not reset | ✅ | matches Groq's own 429 arithmetic to the second |
 | 4.9 | A fault shared by many endpoints is not a block-level bug | ✅ | **fixed row 3** — 7/19 → 19/19 |
 | 4.10 | A bad imported symbol is repaired where it is defined | ✅ | **fixed row 2** — dead app → 6/6 |
-| 4.11 | The startup hook and non-Pydantic `response_model` are forbidden | ⬜ | a prompt rule needs a generation to test |
+| 4.11 | The startup hook and non-Pydantic `response_model` are forbidden | ✅ | **confirmed on the 2026-08-29 build** — no `on_event`, lifespan used, every `response_model` a BaseModel |
 | 4.12 | The driver's report merges and stops overstating | ✅ᵒ | deterministic, covered offline |
+| 4.13 | A project-relative path resolves; unreadable ≠ unparseable | ✅ | **8 wasted calls per build → 0**, measured across two runs |
+| 4.14 | `requirements.txt` is registered as a file that was written | ✅ᵒ | the false "never generated" todo is gone |
+| 4.15 | A stdlib-only project can clear the scaffold marker | ✅ᵒ | row 4's shape; would have degraded it |
+| 4.16 | Pydantic V1 config keys V2 ignores are renamed | ✅ | 6 `orm_mode` → `from_attributes` on the live project |
+| 4.17 | The smoke test runs the app's lifespan | ✅ | **7/19 → 14/19** on the live project, nothing else changed |
+| 4.18 | SQL that reads a column the schema lacks is caught | ✅ | found exactly the 2 real mismatches; **→ 19/19** |
+
+### §4.17 — row 3's 7/19 was more than half our own bug
+
+Starlette runs lifespan/startup **only** when `TestClient` is entered as a
+context manager. `runtime_smoke` built the client without `with`, so an app that
+creates its tables in an `asynccontextmanager` lifespan — precisely what
+`prompts/backend_developer.txt` tells the generator to write — was probed
+against a database with no tables. Every data route answered `no such table`,
+and the blame landed on generated code that was correct.
+
+**This also explains the §0.5 item about row 3's repair.** The debugger's earlier
+"fix" was to open the database at module import, the one pattern the prompt
+forbids. It was not the model being sloppy; it was routing around a broken probe.
+
+### §4.18 — and the rest was real: the two files drift
+
+`main.py` and `routes.py` are separate LLM calls and disagree on the schema:
+
+```
+main.py    CREATE TABLE supplier (id, name, contact_email)
+routes.py  SELECT id, name, contact FROM supplier     -> no such column
+```
+
+Both import perfectly; nothing runs SQL until a request arrives, so no gate saw
+it. `tools/sql_schema_check.py` collects every `CREATE TABLE` and checks every
+SQL literal against it at zero tokens, built for **precision over recall** —
+a false positive spends a call editing correct code. `SELECT *`, f-string
+queries, subqueries, unknown tables and bare columns in multi-table queries are
+all skipped; `alias.column` IS checked, because the alias resolves the table.
+
+### The chain, proven end to end on the shipped project
+
+| Stage | Routes |
+|---|---|
+| what the pipeline reported | **7/19** |
+| §4.17 lifespan fix alone | **14/19** |
+| plus exactly what §4.18 found | **19/19** |
+
+Reached with the lifespan intact and **no module-level DB connection** — so the
+repair no longer has to break the rule the prompt sets.
 
 ᵒ offline-deterministic; there is nothing a live run would add.
+
+### §4.13 — the one that was costing the most
+
+`written` and `result.backend_files` hold **OUTPUT_DIR-relative** paths, because
+that is what `create_file()` takes. `analyze_file()` used a bare `open()`, which
+honours **cwd**. Same string, two resolution rules — so every relative caller
+missed the file, and because `analyze_file` caught `FileNotFoundError` into
+`parse_error`, a file that was *not found* was reported as a file that *does not
+parse*.
+
+`_verify_and_repair` then spent **one LLM call per generated Python file** asking
+a model to fix a syntax error that did not exist, wrote the reply over the
+correct original (`create_file` resolves what `open()` could not), re-scanned,
+failed identically, and logged "defects remain after repair".
+
+| | aborted run (old code) | clean run (fixed) |
+|---|---|---|
+| phantom "does not parse" | **8** | **0** |
+| files sent to LLM repair | **8** (100% phantom) | **0** |
+| "defects remain after repair" | **7** | **0** |
+
+Eight of eight files — `main`, `models`, `routes`, `services` and all four test
+files. The tester's route-aware mock guidance (`_build_mock_examples`), which its
+own docstring calls the fix for todo_app's 1/9 test score, returned `""` on every
+build for the same reason — silently, since it checks `parse_error` and bails.
+
+Measured on the shipped row 2 project: **before**, all four backend files reported
+the phantom defect; **after**, three are clean and `routes.py` surfaces the real
+one that was masked — two unimplemented handler stubs. Phase 22 had never once
+done its actual job.
 
 ### Where the code lives
 
