@@ -464,6 +464,27 @@ def validate_and_fix_requirements(
 
     if not to_add:
         logger.info(f"✅ requirements.txt already complete ({len(result.existing)} lines)")
+        # A project that needs nothing third-party still must not ship the
+        # architect's marker: the placeholder audit reads it as a planned file
+        # nobody filled in and degrades the build to done_with_context. This is
+        # the pure-stdlib case — row 4's bulk-rename CLI — where there is
+        # nothing to add and so the write below never ran.
+        #
+        # But "nothing to add" also describes a build whose generators produced
+        # nothing at all, and there the marker is the signal the audit exists to
+        # raise. `imports_found` separates them: real code imports something,
+        # even if only from the standard library. An empty set means there was
+        # no code to scan, so the marker stays.
+        _stripped = (
+            _strip_scaffold_placeholder(existing_text)
+            if all_imports else existing_text
+        )
+        if req_path and _stripped != existing_text:
+            try:
+                req_path.parent.mkdir(parents=True, exist_ok=True)
+                req_path.write_text(_stripped, encoding="utf-8")
+            except Exception as e:
+                result.error = f"Could not write {req_path}: {e}"
         return result
 
     try:
