@@ -35,6 +35,7 @@ import ast
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,10 @@ class ModuleFacts:
     has_router:       bool = False
     has_app:          bool = False
     parse_error:      str | None = None
+    # The file could not be opened at all. Kept separate from parse_error: a
+    # file that is not there is not a file with a syntax error, and callers
+    # that repair syntax must not be handed one. See analyze_file().
+    read_error:       str | None = None
 
     @property
     def is_fastapi(self) -> bool:
@@ -410,12 +415,51 @@ def find_dangling_js_imports(root_dir) -> list[tuple[str, str, str]]:
     return dangling
 
 
-def analyze_file(path: str) -> ModuleFacts:
-    """Read and analyze a file. Never raises."""
+def _candidate_paths(path: str):
+    """The given path, then the same path resolved inside OUTPUT_DIR.
+
+    Callers are split between two conventions and always have been. The
+    debugger and pipeline pass absolute paths; `backend_developer.written` and
+    `result.backend_files` hold OUTPUT_DIR-relative ones ("proj_ab12/backend/
+    routes.py"), because that is what `file_writer.create_file` takes. A bare
+    open() honours only the first, so every relative caller silently missed.
+    """
+    yield path
     try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-            return analyze_module(fh.read())
-    except Exception as e:
-        facts = ModuleFacts()
-        facts.parse_error = str(e)
-        return facts
+        import config
+        candidate = Path(config.OUTPUT_DIR) / path
+    except Exception:
+        return
+    if str(candidate) != str(path):
+        yield str(candidate)
+
+
+def analyze_file(path: str) -> ModuleFacts:
+    """Read and analyze a file. Never raises.
+
+    A file that cannot be READ reports `read_error`, not `parse_error`. They
+    were conflated, and the cost was not theoretical: `_verify_and_repair`
+    passed OUTPUT_DIR-relative paths, every open() raised FileNotFoundError,
+    each was reported as "the file does not parse", and one LLM call per
+    generated file was spent asking a model to fix a syntax error in a file it
+    had just written correctly — whose reply then overwrote the good original,
+    since create_file() resolves the path that open() could not. Eight of eight
+    files in the 2026-08-29 row 3 run.
+    """
+    last_error: Exception | None = None
+    for candidate in _candidate_paths(path):
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as fh:
+                return analyze_module(fh.read())
+        except OSError as e:
+            last_error = e
+            continue
+        except Exception as e:
+            # The file opened; analyze_module could not make sense of it.
+            facts = ModuleFacts()
+            facts.parse_error = str(e)
+            return facts
+
+    facts = ModuleFacts()
+    facts.read_error = str(last_error) if last_error else f"could not read {path}"
+    return facts

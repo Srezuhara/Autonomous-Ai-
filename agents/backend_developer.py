@@ -217,6 +217,14 @@ Return ONLY raw SQL. No markdown, no explanation."""
     ) -> list[str]:
         """Deterministic, zero-token defect list for one generated file."""
         facts = analyze_file(path)
+        if facts.read_error:
+            # Not a defect: nothing an LLM rewrite can do about a file that is
+            # not there, and asking it to try costs a call per file and
+            # overwrites whatever IS there with the answer.
+            logger.warning(
+                f"⚠️  [Phase 22] cannot read {path} ({facts.read_error}) — skipping"
+            )
+            return []
         if facts.parse_error:
             return [f"the file does not parse: {facts.parse_error}"]
 
@@ -558,10 +566,42 @@ Write the complete, working Python code for: {file_path}
                 logger.warning(f"⚠️  [Phase 19.1] requirements validation error: {result.error}")
             else:
                 logger.info("✅ [Phase 19.1] requirements.txt is complete")
+            self._register_requirements(result, written)
         except ImportError:
             logger.warning("⚠️  [Phase 19.1] requirements_builder not found — skipping validation")
         except Exception as e:
             logger.warning(f"⚠️  [Phase 19.1] requirements validation failed: {e}")
+
+    @staticmethod
+    def _register_requirements(result, written: list[str]) -> None:
+        """
+        Record requirements.txt as a written file.
+
+        The builder writes it directly to disk rather than through the
+        generation loop, so it never reached `written`. Everything downstream
+        that asks "was this planned file produced?" reads that list, so a
+        complete requirements.txt was still reported as never generated — the
+        documenter listed it under "Files in the plan that were never
+        generated" and emitted an "Implement requirements.txt" todo on every
+        build that had one. Row 2's handoff carried both.
+
+        `written` holds OUTPUT_DIR-relative paths with forward slashes; the
+        result carries an absolute one, so convert before appending.
+        """
+        req_file = getattr(result, "requirements_file", "")
+        if not req_file:
+            return
+        try:
+            import config
+            req_path = Path(req_file)
+            if not req_path.is_file():
+                return
+            rel = req_path.resolve().relative_to(Path(config.OUTPUT_DIR).resolve())
+        except Exception:
+            return
+        entry = str(rel).replace("\\", "/")
+        if entry not in {str(p).replace("\\", "/") for p in written}:
+            written.append(entry)
 
 
 # ── Smoke test ────────────────────────────────────────────────────────────────
