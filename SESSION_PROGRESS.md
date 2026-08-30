@@ -1,8 +1,12 @@
 # Session Progress — start here
 
-**Last session: 2026-08-30 (Phase 23 — the pipeline was reporting success it
-had not earned, and now does not).** Committed on `main`,
-`55d9121`..`94d52c4`. `test_phase23.py` is **491/491**, up from 394.
+**Last session: 2026-08-30, evening (Phase 23 — the zero-quota session).**
+Committed on `main`, `76b331d`..`e47a79a`. `test_phase23.py` is **541/541**, up
+from 491. Nothing in it spent a token; the plan for the next refill is
+`PHASE23_QUOTA_RUNBOOK.md`.
+
+*The session before it (`55d9121`..`94d52c4`) is the one described below: the
+pipeline was reporting success it had not earned, and now does not.*
 
 > **Backend/pipeline work has its own state doc: `PHASE23_HANDOFF.md`.** Read it
 > first if you are touching `llm_client.py`, the agents, the pipeline or the
@@ -50,6 +54,10 @@ pipeline first, and about the model second — that is now the cheaper bet.
 
 ## 0. Next session — pick up here
 
+**Everything about spending quota now lives in `PHASE23_QUOTA_RUNBOOK.md`** —
+when a row can start, which row to start, what to assert when it finishes, and
+the traps. Read it instead of re-deriving any of that here.
+
 **Restart the server before anything.** It runs `--no-reload` deliberately, so a
 running process holds the code it started with.
 
@@ -58,20 +66,44 @@ venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
 venv/Scripts/python.exe run_live_matrix.py --dry-run
 ```
 
-**Check the FAST model by hand.** `MIN_TOKENS_TO_START` gates on the *best*
-model (`run_live_matrix.py:183`), and the split has inverted — the tester, the
-reviewer and every remediation pass run on `gpt-oss-20b`, so it is the one that
-runs out. Row 3 spent 97.5K on 20b against 38.5K on 120b. The driver will
-happily start a row the fast model cannot finish.
+~~**Check the FAST model by hand.**~~ **Fixed 2026-08-30 (evening).** The gate
+took `max()` across models, so a row started whenever *either* was rich, while
+`gpt-oss-20b` — which carries the tester, the reviewer and every remediation
+pass — is the one that runs out. There are two floors now, 90,000 fast and
+70,000 heavy, and `--dry-run` refuses per model against its own. The start that
+went wrong on 2026-08-30 (20b at 73,286) is now refused.
 
 ### The order to work in
 
 | # | Work | Quota | Why |
 |---|---|---|---|
 | 1 | **Row 2** | ~90-170K | The static-frontend and route-contract checks have never run on a fresh build. Row 2 is the shape they were written for |
-| 2 | **Row 3** | ~90-140K | Its real score is knowable for the first time (§0.6) |
+| 2 | **Row 3** | ~90-140K | Its real score is knowable for the first time (§0.6), and `schema_attr` names three defects in the shipped one |
 | 3 | **Row 1** | ~60K | The only row that has ever met the 0-5xx half of the criterion |
 | 4 | **Phase B1** | none | `PHASE23_PLAN.md`; startable any time quota is short |
+
+Full procedure, per-row assertions and the refill arithmetic:
+**`PHASE23_QUOTA_RUNBOOK.md`**.
+
+### What changed on 2026-08-30 (evening) — the zero-quota session
+
+Seven changes, no tokens spent on any of them. The theme is the one this phase
+keeps returning to: **a signal that existed and could not be read.**
+
+| # | Change | What it removes |
+|---|---|---|
+| 1 | `tools/verify_corpus.py` + `verification_baseline.json` | Every verifier, run against all 40 saved builds on a throwaway clone, diffed against a committed baseline. A checker is a hypothesis until it has been run against a real build, and nothing made that cheap |
+| 2 | `tools/schema_attr_check.py` | A field read that no model declares. Found row 3's `sku` and `contact`, a **third** in the same build (`mv.direction`, which no runtime probe can reach), and three in `_live_verify_row2_final` — the build the probe scores 6/6 green |
+| 3 | Blame rule 4 reaches request-time failures | An `AttributeError` naming a class defined elsewhere was repaired in the file that only *reads* it, which can rename or silence and can never add a missing field |
+| 4 | `accept_rescan` in `tools/repair_guard.py` | A rewrite whose defects survived stayed on disk, with the failure in a counter that was logged and discarded |
+| 5 | `VerificationOutcome.mark_fatal` | `unusable` was decided by substring-matching finding text; rewording a finding silently stopped it firing |
+| 6 | The web probe records an outcome | The most important check in the pipeline was the only one whose result lived nowhere but the server log |
+| 7 | Two quota floors in `run_live_matrix.py` | A row starting on a fast model that cannot finish it |
+
+`test_phase23.py` **491 → 541**. All other suites unchanged and green.
+
+**What is NOT proven by any of it:** nothing here has run inside a live build.
+Items 2-6 change what a build reports about itself, and only a row does that.
 
 ### What changed on 2026-08-30, and why
 
@@ -671,6 +703,7 @@ Read this file first. Then:
 | File | Role |
 |---|---|
 | `SESSION_PROGRESS.md` (this) | Current state, what to do next, how to verify |
+| `PHASE23_QUOTA_RUNBOOK.md` | **What to do when the budget is back**: the refill arithmetic, which row to start, what to assert when it finishes, and the traps |
 | `PHASE23_HANDOFF.md` | The **backend/pipeline state** doc: what is fixed, what is proven live, what is still open, and what will bite you |
 | `PHASE23_PLAN.md` | The backend **plan**. Phase A is done bar the matrix; Phases B and C are untouched |
 | `run_live_matrix.py` | The four-build live matrix driver. `--dry-run` prints the plan and the quota without spending a token |

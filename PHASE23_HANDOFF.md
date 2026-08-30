@@ -1,11 +1,14 @@
 # Phase 23 Handoff
 
-*Updated 2026-08-30 at the end of the fifth session, which found that the
+*Updated 2026-08-30 at the end of the sixth session. The fifth found that the
 pipeline was reporting success it had not earned, built verification for every
-build shape, and reached the first plain `done` in the project's history.*
+build shape, and reached the first plain `done` in the project's history. The
+sixth spent no quota at all: it made the checkers testable against every build
+already on disk, and closed four of the open defects below.*
 
 **Read `SESSION_PROGRESS.md` §0 first** — it is the entry point and carries the
-current state. This file is the per-defect detail behind it.
+current state. This file is the per-defect detail behind it, and
+**`PHASE23_QUOTA_RUNBOOK.md`** is the procedure for spending the next refill.
 
 Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
@@ -63,7 +66,28 @@ Suite: **394 → 491**, all offline.
 Ordered by what should be looked at first. Nothing here is speculative — each
 was either verified in the code this session or is a measured gap.
 
+### The sixth session (2026-08-30, evening) — zero quota spent
+
+Seven changes, none of which cost a token, detailed in `SESSION_PROGRESS.md` §0.
+Two are worth stating here because they change what this document's other
+entries mean:
+
+- **`tools/verify_corpus.py`** runs every verifier against all 40 saved builds
+  and diffs the result against a committed `verification_baseline.json`. Every
+  claim below about what a checker says on a given fixture is now testable in
+  one command, for free.
+- **`tools/schema_attr_check.py`** reads a defect class no probe can reach. On
+  the shipped row 3 it names three undeclared field reads, one more than the
+  runtime probe found; on `_live_verify_row2_final` — a build the probe scores
+  **6/6 green** — it names three more, all real.
+
+Suite: **491 → 541**.
+
 ### Live-unproven work
+
+0. **Nothing from the sixth session has run inside a build.** Items 2-6 of that
+   list change what a build reports about itself, and only a live row exercises
+   that. `PHASE23_QUOTA_RUNBOOK.md` §4 says what to assert when one does.
 
 1. **Rows 2 and 3 have not been rebuilt.** The frontend contradiction fix, the
    persistence pinning and the forced-backend removal are prompt-and-generation
@@ -73,30 +97,44 @@ was either verified in the code this session or is a measured gap.
 
 ### Real defects, unfixed
 
-2. **`MIN_TOKENS_TO_START` gates on the best model** (`run_live_matrix.py:183`:
-   `best = max(...)`). The fast model is now the bottleneck — it carries the
-   tester, the reviewer and every remediation pass — so the driver will start a
-   row 20b cannot finish. It happened on 2026-08-30: 20b hit its daily quota
-   mid-tester and the row survived only on the dual-model fallback. Documented
-   in §0 but **not fixed**; the gate should consider the fast model specifically.
+2. ~~**`MIN_TOKENS_TO_START` gates on the best model.**~~ **Fixed 2026-08-30
+   (evening).** Two floors, `MIN_FAST_TOKENS_TO_START = 90,000` and
+   `MIN_HEAVY_TOKENS_TO_START = 70,000`, each checked against its own model.
+   The roles are read from `llm_client`, not `config` — `config` only knows a
+   single `GROQ_MODEL`, and reading it from there would leave both models
+   "unclassified" at the low floor with no symptom at all. §50.
 3. **A plain-JS frontend still gets no execution or lint.** `frontend_debugger`
    (`:122`) and the tester's Vitest path (`:478`) both require
    `frontend/package.json`, which this shape does not have, so both still skip.
    `web_asset_check` parses it statically, which is a large improvement over one
-   regex, but nothing runs the JavaScript.
-4. **`BackendDeveloper._verify_and_repair` keeps a rewrite whose defects
-   remain** (`agents/backend_developer.py:413-418`). The new guard stops it
-   writing *damage*, but when the re-scan still finds defects it increments a
-   `failed` counter that is logged and then discarded, and the rewritten file
-   stays on disk. Nothing downstream reads that counter.
-5. **The debugger still cannot repair drift that belongs in another file.**
-   §0.7 gave the repair the *definition* of the class an AttributeError names,
-   which fixed the `contact`/`contact_email` case. The `sku` case needs a field
-   *added to `schemas.py`*, and this path only ever edits the file that raised.
-   Blame rule 4 says to repair where the symbol is defined; runtime repair does
-   not yet apply it.
+   regex, but nothing runs the JavaScript. **Still open.**
+4. ~~**`BackendDeveloper._verify_and_repair` keeps a rewrite whose defects
+   remain.**~~ **Fixed 2026-08-30 (evening).** `accept_rescan` in
+   `tools/repair_guard.py` is the shared rule: strictly fewer defects and no new
+   ones, or the original goes back. Equal counts are a rejection — a rewrite
+   that swaps one defect for another is a different file with the same problem,
+   and the original is at least the file every other check in the build ran
+   against. What could not be repaired is now named with its path and reaches
+   `_diagnose`, so remediation can aim at it. §48.
+5. ~~**The debugger still cannot repair drift that belongs in another file.**~~
+   **Fixed 2026-08-30 (evening).** The 500 loop now applies blame rule 4. The
+   discriminator is the model itself: a *close* field name means a misspelling
+   and the repair stays where the read is (`contact`/`contact_email`, 0.70 —
+   the case §0.7 proved works in place), and nothing close means the field is
+   genuinely absent and the repair goes to the file that defines the class
+   (`sku`, 0.29). A first attempt used the SQL schema as the discriminator and
+   was wrong: the table has a `contact` column, so it would have redirected the
+   one case that is known to repair correctly in place. §47a.
+
+   **Unproven live.** It is asserted against the real row 3 project, but no
+   build has run through it.
 
 ### Design gaps in the new checks
+
+5b. **`schema_attr`'s rename threshold is judgment, not measurement.** A 0.6
+    difflib ratio separates "misspelt" from "missing". It is calibrated against
+    the three live cases it has to separate and asserted in §47a, so a change to
+    it has to face them — but three cases is not a corpus.
 
 6. **`feature_coverage` is a floor, not a ceiling.** It matches on ANY content
    word, so "email notifications when stock runs low" matches a project with a
@@ -105,10 +143,12 @@ was either verified in the code this session or is a measured gap.
 7. **`web_asset_check` skips what it cannot resolve confidently** — a URL built
    from an unknown base, a template literal that does not start with a base
    constant. Deliberate (precision over recall), but it is a recall gap.
-8. **`_functional_verdict` matches strings in findings**
-   (`_UNUSABLE_MARKERS`). It keeps one vocabulary rather than a parallel set of
-   predicates, but it couples the verdict to finding wording: reword a finding
-   and the verdict silently stops firing. §42d covers the zero-routes case only.
+8. ~~**`_functional_verdict` matches strings in findings.**~~ **Fixed
+   2026-08-30 (evening).** A verifier that establishes the artifact does not run
+   calls `outcome.mark_fatal(reason)`, and the verdict reads the field. The
+   string markers remain as a fallback for findings that reach `unresolved` from
+   paths with no outcome, and when they fire with nothing structured behind them
+   the log says so — that gap is how this silently stops working. §49.
 9. **`repair_guard`'s thresholds are judgment, not measurement** — a 0.6
    shrinkage ratio above 120 chars. Better than the old 0.5-above-400, still
    unvalidated against a corpus.
