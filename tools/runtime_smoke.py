@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
+from tools.build_shape import detect_shapes
 
 logger = logging.getLogger(__name__)
 
@@ -439,22 +440,71 @@ emit()
 
 
 def _find_entry(project_dir: Path) -> Path | None:
-    """Locate the module that defines the FastAPI `app`."""
-    search_dirs = [project_dir / "backend", project_dir, project_dir / "src"]
-    for directory in search_dirs:
-        if not directory.is_dir():
-            continue
-        for name in _ENTRY_CANDIDATES:
-            candidate = directory / name
-            if not candidate.is_file():
-                continue
-            try:
-                text = candidate.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                continue
-            if "FastAPI(" in text:
-                return candidate
-    return None
+    """
+    Locate the module that builds the web application.
+
+    This used to search exactly three directories -- `backend/`, the project
+    root and `src/` -- for one of four filenames containing the literal string
+    `"FastAPI("`. Matrix row 4's architect put its app in
+    `bulk_file_renamer/main.py`, so the search found nothing, the pipeline
+    logged "Runtime smoke test skipped (no FastAPI entry point)", and a web
+    application shipped without a single request ever being sent to it.
+
+    `tools.build_shape` walks the whole project and understands Flask as well as
+    FastAPI, and an app built by a `create_app()` factory as well as one bound
+    at module level. The three named directories survive only as a tie-break:
+    `backend/main.py` should still win over a helper that also constructs an app.
+    """
+    shapes = detect_shapes(project_dir, rel_to=project_dir.parent)
+    entry = shapes.primary_web_entry
+    if entry is None or not entry.path:
+        return None
+    candidate = project_dir.parent / entry.path
+    return candidate if candidate.is_file() else None
+
+
+def find_web_entry(project_dir: Path):
+    """The detected entry itself (framework, app name, factory), or None."""
+    shapes = detect_shapes(project_dir, rel_to=project_dir.parent)
+    return shapes.primary_web_entry
+
+
+_RELATIVE_IMPORT_RE = re.compile(r"^\s*from\s+\.", re.MULTILINE)
+
+
+def _module_name_for(entry: Path) -> tuple[str, Path]:
+    """
+    The dotted module name for `entry`, and the directory to import it from.
+
+    The discriminator is what the file actually does, not whether an
+    `__init__.py` happens to sit beside it. This project's generated backends
+    are flat siblings by instruction -- `prompts/backend_developer.txt` says
+    "All backend/ files are siblings: from routes import router" -- and they
+    often carry an empty `backend/__init__.py` anyway. Importing those
+    package-qualified breaks the sibling imports that were correct.
+
+    A module using an explicit relative import (`from .routes import router`) is
+    the opposite case: it can ONLY be imported package-qualified. That is row
+    4's app, and importing it bare raised "attempted relative import with no
+    known parent package" -- which looks exactly like a broken build and is not
+    one.
+
+    So: walk up to a package root only when the entry uses relative imports.
+    """
+    try:
+        text = entry.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        text = ""
+
+    if not _RELATIVE_IMPORT_RE.search(text):
+        return entry.stem, entry.parent
+
+    parts = [entry.stem]
+    directory = entry.parent
+    while (directory / "__init__.py").is_file() and directory.parent != directory:
+        parts.insert(0, directory.name)
+        directory = directory.parent
+    return ".".join(parts), directory
 
 
 def smoke_test_app(root: str, timeout: int = SMOKE_TIMEOUT) -> SmokeResult:
@@ -482,8 +532,19 @@ def smoke_test_app(root: str, timeout: int = SMOKE_TIMEOUT) -> SmokeResult:
 
     result.entry = str(entry.relative_to(project_dir)).replace("\\", "/")
 
-    probe_src  = _PROBE_SRC.replace("__ENTRY_MODULE__", entry.stem)
-    probe_path = entry.parent / "_smoke_probe.py"
+    # Import the entry the way a user would run it.
+    #
+    # The probe used to import `entry.stem` from `entry.parent`, which is right
+    # for a flat `backend/main.py` and wrong for a module inside a package. Row
+    # 4's app is `bulk_file_renamer/main.py` beside an `__init__.py`, so its
+    # `from .routes import router` is CORRECT -- a user runs
+    # `uvicorn bulk_file_renamer.main:app` -- and importing it bare raises
+    # "attempted relative import with no known parent package". That is the
+    # probe being wrong about the app, not the app being broken, and reporting
+    # it as a generated-code defect would have sent a repair at working code.
+    module_name, run_dir = _module_name_for(entry)
+    probe_src  = _PROBE_SRC.replace("__ENTRY_MODULE__", module_name)
+    probe_path = run_dir / "_smoke_probe.py"
 
     try:
         probe_path.write_text(probe_src, encoding="utf-8")
@@ -495,7 +556,7 @@ def smoke_test_app(root: str, timeout: int = SMOKE_TIMEOUT) -> SmokeResult:
         proc = subprocess.run(
             [sys.executable, str(probe_path)],
             capture_output=True, text=True, timeout=timeout,
-            cwd=str(entry.parent),
+            cwd=str(run_dir),
         )
         result.ran = True
         raw = proc.stdout or ""

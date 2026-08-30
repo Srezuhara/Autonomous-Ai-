@@ -698,6 +698,51 @@ class Pipeline:
             f"{', '.join(sorted(stubs)[:6])}"
         ]
 
+    def _detect_shapes(self, root: str):
+        """Every shape this project contains, or None if it cannot be read."""
+        try:
+            import config
+            from tools.build_shape import detect_shapes
+            project_dir = Path(config.OUTPUT_DIR) / root
+            if not project_dir.is_dir():
+                return None
+            return detect_shapes(project_dir, rel_to=config.OUTPUT_DIR)
+        except Exception as e:
+            logger.warning(f"  ⚠️  Shape detection failed: {e}")
+            return None
+
+    def _route_definition_file(self, root: str) -> str:
+        """
+        The generated file a "no routes at all" repair should be aimed at.
+
+        Prefer the file that already defines a router, since that is where the
+        handlers belong; fall back to the entry point, which is where a missing
+        `include_router` lives. Returns an OUTPUT_DIR-relative path, the way the
+        rest of the pipeline spells them, or "" when neither can be found.
+        """
+        try:
+            import config
+            project_dir = Path(config.OUTPUT_DIR) / root
+            if not project_dir.exists():
+                return ""
+        except Exception:
+            return ""
+
+        entry = ""
+        for path in sorted(project_dir.rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            rel = str(path.relative_to(Path(config.OUTPUT_DIR))).replace("\\", "/")
+            if "APIRouter(" in text:
+                return rel
+            if "FastAPI(" in text and not entry:
+                entry = rel
+        return entry
+
     # ── Phase 22: runtime smoke test (no LLM, no quota cost) ──────────────────
 
     def _smoke_test_runtime(self, result: BuildResult) -> list[str]:
@@ -737,7 +782,35 @@ class Pipeline:
             pass
 
         if not smoke.ran or not smoke.entry:
-            logger.info("  ℹ️  Runtime smoke test skipped (no FastAPI entry point)")
+            # "No web entry point" is two different answers wearing one log line.
+            #
+            # For a CLI tool or a library it is correct and complete: there is no
+            # web app, so the web probe has nothing to say. For a project that
+            # DOES contain a web app the probe could not find, it means the build
+            # went unverified — and that is what shipped on row 4, where the app
+            # sat in `bulk_file_renamer/` while the search looked in `backend/`,
+            # `src/` and the root. Both returned `[]`, which the pipeline reads
+            # as "clean".
+            #
+            # Ask the shape detector which one this is and say so.
+            shapes = self._detect_shapes(root)
+            if shapes is not None and shapes.is_web:
+                entry = shapes.primary_web_entry
+                where = entry.path if entry else "unknown"
+                logger.warning(
+                    f"  🚨 A web app was found at {where} but the probe could not "
+                    f"boot it — this build is UNVERIFIED"
+                )
+                return [
+                    f"a web application exists at {where} but could not be "
+                    f"started for verification, so none of its endpoints have "
+                    f"been checked"
+                ]
+            what = shapes.describe() if shapes is not None else "unknown"
+            logger.info(
+                f"  ℹ️  No web entry point, and none expected for this build "
+                f"({what}) — the web probe does not apply"
+            )
             return []
 
         if not smoke.app_loaded:
@@ -765,7 +838,28 @@ class Pipeline:
             ]
 
         if not smoke.probes:
-            return []
+            # An app that boots and declares NO routes used to return `[]` here
+            # — no issue, no advisory, not even the summary line below — and was
+            # therefore indistinguishable from a clean run. This is the literal
+            # empty build: §4.20 shipped exactly it, a routes.py of five
+            # try/except ImportError blocks that left the router with nothing on
+            # it, and every gate went green.
+            #
+            # A web app with no endpoints has not been verified; it has been
+            # found empty. Say so, and aim a repair at the file that should have
+            # defined them.
+            logger.warning("  🚨 App boots but declares NO routes — nothing to serve")
+            routes_file = self._route_definition_file(root)
+            if routes_file:
+                self._smoke_runtime_errors[routes_file] = (
+                    "the application starts but exposes no HTTP routes at all. "
+                    "Either no route handler is defined, or the router is never "
+                    "included on the app with app.include_router(...)."
+                )
+            return [
+                "the application starts but declares no routes, so it serves "
+                "nothing. Every requested endpoint is missing."
+            ]
 
         logger.info(f"  🔥 Runtime smoke test: {smoke.summary()}")
         for probe in smoke.probes:
