@@ -3360,6 +3360,85 @@ check("...while any other 500 still is",
       not _RP40(path="/p/", method="POST", status=500,
                 error="AttributeError: no attribute 'contact'").ok)
 
+# A NOT NULL violation is never the probe's fault: the body carries every field
+# the model declares, so a column that arrives NULL was made NULL by the handler.
+# That is exactly what a repair does when it silences an AttributeError as
+# `data.get("sku")` -- and excusing it scored such a repair 16/16 on 2026-08-30,
+# one point HIGHER than the repair that actually fixed the bug. A UNIQUE or
+# FOREIGN KEY violation stays excused: those really can be the invented row.
+_NN_APP = '''
+import os
+import sqlite3
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def db(which):
+    # One file per route: a handler that raises leaves its transaction open, and
+    # a shared file would make the next probe fail with "database is locked"
+    # instead of the constraint error under test.
+    conn = sqlite3.connect(os.path.join(HERE, which + ".sqlite"))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS product ("
+        " id INTEGER PRIMARY KEY, name TEXT NOT NULL, sku TEXT NOT NULL UNIQUE)"
+    )
+    return conn
+
+
+class ProductCreate(BaseModel):
+    name: str
+
+
+app = FastAPI()
+
+
+@app.post("/products/")
+def create(prod: ProductCreate):
+    # the silencing move: sku is not on the model, so .get() yields None
+    data = prod.model_dump()
+    conn = db("nn")
+    conn.execute(
+        "INSERT INTO product (name, sku) VALUES (?, ?)",
+        (data.get("name"), data.get("sku")),
+    )
+    conn.commit()
+    return {"ok": True}
+
+
+@app.post("/dupes/")
+def dupe(prod: ProductCreate):
+    # a genuine UNIQUE collision caused by the probe's own repeated value
+    conn = db("dupe")
+    conn.execute("INSERT INTO product (name, sku) VALUES (?, ?)", ("a", "fixed"))
+    conn.execute("INSERT INTO product (name, sku) VALUES (?, ?)", ("b", "fixed"))
+    conn.commit()
+    return {"ok": True}
+'''
+
+_nn_root = "_test_smoke_notnull"
+_nn_dir = Path(config.OUTPUT_DIR) / _nn_root
+shutil.rmtree(_nn_dir, ignore_errors=True)
+try:
+    _nn_dir.mkdir(parents=True)
+    (_nn_dir / "main.py").write_text(_NN_APP, encoding="utf-8")
+    _nn = _sta40(_nn_root)
+    _nn_by = {p_.path: p_ for p_ in _nn.probes}
+    _nn_null = _nn_by.get("/products/")
+    _nn_dupe = _nn_by.get("/dupes/")
+
+    check("a NOT NULL violation is counted against the app, not excused",
+          _nn_null is not None and not _nn_null.ok,
+          f"status={getattr(_nn_null, 'status', None)} "
+          f"constraint={getattr(_nn_null, 'constraint', None)}")
+    check("...while a UNIQUE collision from the probe's own row is still excused",
+          _nn_dupe is not None and _nn_dupe.ok,
+          f"status={getattr(_nn_dupe, 'status', None)} "
+          f"constraint={getattr(_nn_dupe, 'constraint', None)}")
+finally:
+    shutil.rmtree(_nn_dir, ignore_errors=True)
+
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run

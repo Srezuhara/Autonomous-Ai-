@@ -340,12 +340,19 @@ try:
         may already be taken. Blaming the handler for that would spend an LLM
         call editing correct code -- the false positive sql_schema_check was
         built to avoid.
+
+        A NOT NULL violation is deliberately NOT excused. The body carries every
+        field the request model declares, so a column that arrives NULL was made
+        NULL by the handler -- which is exactly what a repair does when it
+        silences an AttributeError as `data.get("sku")`. Excusing it scored that
+        corrupted code 16/16 on 2026-08-30, higher than the correct fix.
         """
         t = (text or "").lower()
+        if "not null" in t:
+            return False
         return any(s in t for s in (
-            "integrityerror", "unique constraint", "foreign key constraint",
-            "not null constraint", "check constraint", "duplicate key",
-            "unique failed", "foreign key failed",
+            "unique constraint", "foreign key constraint", "check constraint",
+            "duplicate key", "unique failed", "foreign key failed",
         ))
 
     # raise_server_exceptions=True so the real exception reaches us. A bare

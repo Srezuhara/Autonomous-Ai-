@@ -455,50 +455,81 @@ POST is executed rather than 422'd. §40a asserts the constraint tolerance.
 
 ---
 
-## 0.7 The repair that cannot repair — do this next
+## 0.7 The repair that silences what it cannot see — fixed, and what is left
 
-Finding the drift is not fixing it. Verified by §0.3's technique against a clone
-of the shipped row 3 project, driving the real debugger against the real API:
+Finding the drift is not fixing it. Verified with §0.3's technique against clones
+of the shipped row 3 project, driving the real debugger against the real API.
 
-| | routes |
-|---|---|
-| before repair | 12/16 |
-| after one real `_repair_runtime_error` pass | **13/16** |
+**First, a measurement that was wrong, and why it matters.** The initial probe of
+this reported "the debugger cannot repair it at all" — 12/16 → 13/16, with the
+one gain fake (`PUT /products/{id}` returning 404 for a nonexistent id before
+reaching the bug). That was **the harness's fault, not the debugger's.** The
+error text was formatted across two lines, so `_shared_cause()` — which splits on
+the first `": "` to find the exception type — parsed the *message* as the type,
+saw two distinct "types", and took the block path. A real build formats one line
+per failure (`agents/pipeline.py`, `_smoke_runtime_errors`), sees one
+`AttributeError` across four functions, and correctly routes to the whole-file
+prompt. **When reproducing a pipeline behaviour by hand, build the input the way
+the pipeline builds it** — §4.9's routing is invisible otherwise.
 
-And the single route it gained is not a fix. `PUT /products/{id}` now returns 404
-because the probe's id does not exist, so execution stops before reaching the
-bug. Three routes still fail with byte-identical errors.
+### What was actually wrong, and the fix
 
-**What the repair actually did**, in full:
+The repair is handed `routes.py` and never `schemas.py`. The exception names the
+class but not its fields, and the project map lists class *names* only — so the
+model cannot tell a rename from a missing field, and silencing is the only move
+left to it.
 
-```python
--        (prod.name, prod.sku, prod.supplier_id, product_id),
-+        data = prod.dict()
-+        (data.get("name"), data.get("sku"), data.get("supplier_id"), product_id),
-```
+`Debugger._definition_context()` now extracts the source of any class named in an
+`AttributeError` and appends it to the project map for runtime repairs. It
+follows base classes, which is where the fields usually are:
+`class SupplierCreate(SupplierBase): pass` declares none of its own. Both runtime
+prompts also forbid the silencing move, the way `prompts/debugger.txt` already
+forbids `try/except ImportError: pass` (§4.20).
 
-It converted a loud `AttributeError` into a silent `None` bound into a `NOT NULL
-UNIQUE` column, in one of the four broken handlers and none of the others. It
-parses, it imports, it survives every guard — **this is the "repair makes the
-file worse" risk of §0.5 in its subtle form, caught in the act for the first
-time.**
+Measured on the same clone, same error, same model — one repair call each:
 
-**Why it cannot do better.** The repair is handed `routes.py` and never
-`schemas.py`. The exception names the class (`SupplierCreate`) but not its
-fields, so the model cannot know whether the correct fix is renaming the read or
-adding the field — and silencing is the only move left. §0.2's fourth blame rule
-already says this: *a bad symbol imported from elsewhere is repaired where it is
-defined.* The rule is right and this path does not apply it.
+| | score | what it wrote |
+|---|---|---|
+| control, definitions suppressed | **15/16** | `data.get("contact")` — a silent `None` into the database |
+| with definitions | **14/16** | `sup.contact_email` — the correct field name |
 
-Two changes, both small, and §0.3 verifies them for ~5K tokens:
+### The result worth remembering: the wrong fix scored higher
 
-1. **Give the repair the defining file.** When a runtime `AttributeError` names a
-   class, include that class's source in the prompt — or aim the repair at the
-   file defining it, which is what the blame rule already prescribes.
-2. **Forbid the silencing.** `prompts/debugger.txt` already carries "never
-   silence an import" from §4.20. `.get()` on a Pydantic model to dodge an
-   AttributeError is the same move in a new place, and it is worse: an import
-   error fails loudly at boot, a `None` in a `NOT NULL` column corrupts data.
+Before the tolerance was narrowed (below), the control scored **16/16** — a
+perfect run — by writing `None` into every column it could not name. The correct
+repair scored 14/16 because it fixed what it could and left the rest failing
+honestly. **A smoke score cannot be the acceptance test for a repair.** The
+silencer wins on it, every time, by construction.
+
+The remaining 2 failures on the correct branch are real and not repairable in
+`routes.py`: `ProductBase` genuinely has no `sku` field while the table has
+`sku TEXT NOT NULL UNIQUE`. There is no attribute to rename to — the fix belongs
+in `schemas.py`, which is §0.2's fourth blame rule pointing at a file this path
+does not yet aim at.
+
+### The hole this opened in the new probe, and the rule that closes it
+
+§0.6's constraint tolerance excused `IntegrityError` wholesale. That excused
+`NOT NULL constraint failed: product.sku` — the exact signature of a silenced
+repair — and is what scored the corrupted code 16/16.
+
+Narrowed: **a NOT NULL violation is never the probe's fault.** The synthesised
+body carries every field the model declares, so a column that arrives NULL was
+made NULL by the handler. UNIQUE and FOREIGN KEY violations stay excused, because
+those genuinely can be the invented row — a duplicate `"test"`, a `supplier_id`
+that does not exist. `test_phase23.py` §40a asserts both branches against a live
+app rather than against the source text.
+
+### Still open
+
+A runtime probe cannot see a silenced write into a **nullable** column: the
+control's `data.get("contact")` writes NULL to `supplier.contact`, which accepts
+it, and nothing fails at request time. That is why the control still edges the
+correct repair 15 to 14. Catching it needs a deterministic check in the shape of
+`tools/sql_schema_check.py` — compare attribute reads on a Pydantic-typed
+parameter against the model's declared fields, at zero tokens. That is the
+natural next tool, and it would have caught both defects before a single LLM call
+was spent.
 
 ---
 

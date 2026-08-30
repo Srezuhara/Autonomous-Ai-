@@ -57,6 +57,7 @@ FIX — Issue 7: _fix_timeout_import() was the sole handler for import-check
 All other Phase 19 behaviour retained unchanged.
 """
 import logging
+import ast
 import re
 import sys
 import os
@@ -895,6 +896,93 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 return norm.split(output_dir + "/")[-1]
         return None
 
+    # ── The definition the traceback does not carry ───────────────────────────
+
+    _ATTR_ERROR_RE = re.compile(
+        r"""AttributeError:\s*['"]?(\w+)['"]?\s+object\s+has\s+no\s+attribute\s+['"](\w+)['"]""",
+        re.IGNORECASE,
+    )
+
+    def _definition_context(self, file_path: str, error_text: str) -> str:
+        """
+        The source of the class an AttributeError names, from wherever it lives.
+
+        `AttributeError: 'SupplierCreate' object has no attribute 'contact'`
+        tells the model the class and the missing attribute, and nothing about
+        what the class DOES have. The project map lists class names only. So the
+        repair cannot tell whether the fix is to rename the read or to add the
+        field — and on 2026-08-30 it did neither, rewriting `prod.sku` as
+        `data.get("sku")` and binding a silent None into a NOT NULL column.
+
+        §0.2's fourth blame rule already covers this: a bad symbol imported from
+        elsewhere is repaired where it is defined. Showing the definition is the
+        cheaper half of applying it — the repair stays aimed at the caller, but
+        it can now see what it is calling into.
+
+        Base classes are followed because that is where the fields usually are:
+        `class SupplierCreate(SupplierBase): pass` carries none of its own.
+        """
+        matches = self._ATTR_ERROR_RE.findall(error_text or "")
+        if not matches:
+            return ""
+
+        parts = Path(file_path).parts
+        if not parts:
+            return ""
+        project_dir = Path(config.OUTPUT_DIR) / parts[0]
+
+        wanted = []
+        for cls, _attr in matches:
+            if cls not in wanted:
+                wanted.append(cls)
+        wanted = wanted[:3]                      # bounded: this rides every retry
+
+        sources: dict[str, str] = {}
+        try:
+            for py_file in sorted(project_dir.rglob("*.py")):
+                if "__pycache__" in str(py_file):
+                    continue
+                try:
+                    text = py_file.read_text(encoding="utf-8", errors="ignore")
+                    tree = ast.parse(text)
+                except Exception:
+                    continue
+                rel = str(py_file.relative_to(Path(config.OUTPUT_DIR))).replace("\\", "/")
+                if rel == file_path:
+                    continue                     # the model already has this one
+                by_name = {
+                    n.name: n for n in tree.body if isinstance(n, ast.ClassDef)
+                }
+                pending, seen = list(wanted), set()
+                while pending:
+                    name = pending.pop(0)
+                    if name in seen or name in sources or name not in by_name:
+                        continue
+                    seen.add(name)
+                    node = by_name[name]
+                    try:
+                        segment = ast.get_source_segment(text, node)
+                    except Exception:
+                        segment = None
+                    if not segment:
+                        continue
+                    sources[name] = f"# from {rel}\n{segment}"
+                    # follow bases defined in this same file — the fields are
+                    # nearly always on the base, not on the named subclass.
+                    for base in node.bases:
+                        if isinstance(base, ast.Name) and base.id in by_name:
+                            pending.append(base.id)
+        except Exception:
+            return ""
+
+        if not sources:
+            return ""
+        body = "\n\n".join(sources[k] for k in sources)
+        return (
+            "DEFINITIONS THE TRACEBACK REFERS TO (read these before choosing a "
+            "fix — the correct field name is here):\n" + body
+        )
+
     def _scan_project_structure(self, file_path: str) -> str:
         parts       = Path(file_path).parts
         if not parts:
@@ -1312,6 +1400,12 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         problem      = "an import error" if import_error else "an error"
 
         if runtime:
+            # An AttributeError names a class but not its fields, and the map
+            # lists names only. Without the definition the repair cannot tell a
+            # rename from a missing field, and silences the error instead.
+            definitions = self._definition_context(file_path, error_text)
+            if definitions:
+                project_map = (project_map + "\n\n" + definitions).strip()
             targeted = self._generate_targeted_runtime_fix(
                 file_path, current_code, error_text, project_map
             )
@@ -1429,6 +1523,11 @@ RULES:
 - A FastAPI dependency that uses `yield` is a generator function. Never call it
   directly: pass the function itself to Depends(...) and let FastAPI resolve it.
   `db = get_db()` gives you a generator, not a connection or session.
+- Never silence the error instead of fixing it. Replacing `obj.field` with
+  `obj.dict().get("field")`, wrapping the access in try/except, or defaulting it
+  to None makes the exception disappear and writes a wrong value — a None bound
+  into a NOT NULL column is worse than the 500 you started with. If an attribute
+  does not exist, the definitions above have the name that does: use it.
 - Use only the imports listed above; do not add new dependencies or new files.
 - Start at column zero, exactly as the block does.
 
@@ -1492,6 +1591,11 @@ RULES:
   `db = get_db()` gives you a generator, not a connection or session.
 - Do not wrap an existing generator dependency in a second one that yields the
   result of calling it.
+- Never silence the error instead of fixing it. Replacing `obj.field` with
+  `obj.dict().get("field")`, wrapping the access in try/except, or defaulting it
+  to None makes the exception disappear and writes a wrong value — a None bound
+  into a NOT NULL column is worse than the 500 you started with. If an attribute
+  does not exist, the definition above has the name that does: use it.
 - Keep every route, every top-level name and every signature this file already
   has. Something else imports them.
 - Do not add new dependencies or new files.
