@@ -415,10 +415,18 @@ class Pipeline:
         """
         Inspect the build for deployability problems.
 
-        Returns (issues, failed_backend_paths):
-          issues              — human-readable problem descriptions
-          failed_backend_paths — backend files whose import/debug check failed,
-                                 i.e. the files worth re-repairing
+        Returns (issues, failed_backend_paths, advisory):
+          issues              — problems a repair pass can actually act on
+          failed_backend_paths — the files to aim those repairs at
+          advisory            — problems that are real but that no repair pass
+                                in this pipeline can fix
+
+        The third element exists because the split was wrong. Three of the four
+        problems this used to return as "repairable" contributed no paths, so
+        remediation announced a repair, found nothing to repair, logged "made no
+        progress", and degraded the build. Saying a thing is repairable and then
+        not repairing it is worse than calling it advisory: it costs a pass and
+        it misleads the reader.
 
         These are exactly the checks the old _assert_deployable() gate used —
         the difference is that finding a problem now starts a repair pass
@@ -426,6 +434,7 @@ class Pipeline:
         """
         issues:      list[str] = []
         failed_paths: list[str] = []
+        advisory:    list[str] = []
 
         failed_debug = [
             r for r in result.debug_results
@@ -442,15 +451,24 @@ class Pipeline:
                 f"fail import/debug verification: {preview}"
             )
 
+        # Frontend/TypeScript failures are NOT repairable here and never were.
+        # They were announced as repairable, contributed nothing to
+        # `failed_paths`, and so drove a remediation pass that found nothing to
+        # do and then degraded the build — the commonest route to
+        # done_with_context. The Python debugger cannot fix a .tsx file, and
+        # agents/frontend_debugger.py has already spent its own attempts on it.
+        # Reporting it honestly as advisory costs a user nothing and saves a
+        # wasted pass.
         frontend_failures = [
             r for r in result.frontend_debug_results
             if not getattr(r, "success", True) and not getattr(r, "skipped", False)
         ]
         if frontend_failures:
             preview = ", ".join(getattr(r, "file_path", "?") for r in frontend_failures[:5])
-            issues.append(
+            advisory.append(
                 f"Frontend/TypeScript validation failed for "
-                f"{len(frontend_failures)} file(s): {preview}"
+                f"{len(frontend_failures)} file(s), and no later pass can repair "
+                f"them: {preview}"
             )
 
         executable_tests = [
@@ -461,10 +479,19 @@ class Pipeline:
             r for r in executable_tests
             if getattr(r, "passed", 0) < getattr(r, "tests_generated", 0)
         ]
+        # Also advisory: no repair pass generates tests, so announcing this as
+        # repairable guaranteed a pass that could do nothing about it.
         if not executable_tests and result.backend_files:
-            issues.append(
-                "No executable backend tests were generated — the code is unverified."
+            advisory.append(
+                "No executable backend tests were generated, so the code is "
+                "unverified by tests."
             )
+
+        # This one IS repairable, and was the only one of the three that had a
+        # file to aim at — it just never supplied it. A failing test usually
+        # means the code under test is wrong, and `TestResult.file_path` names
+        # that file, so hand it to the debugger instead of reporting the
+        # failure and stopping.
         if failed_tests:
             preview = ", ".join(
                 f"{getattr(r, 'file_path', '?')} "
@@ -474,8 +501,12 @@ class Pipeline:
             issues.append(
                 f"Generated tests fail for {len(failed_tests)} file(s): {preview}"
             )
+            for r in failed_tests:
+                fp = getattr(r, "file_path", "")
+                if fp and fp not in failed_paths:
+                    failed_paths.append(fp)
 
-        return issues, failed_paths
+        return issues, failed_paths, advisory
 
     # ── Phase 21.1: deterministic output audit (no LLM, no quota cost) ────────
     #
@@ -1167,13 +1198,13 @@ class Pipeline:
         """
         report = RemediationReport()
 
-        issues, failed_paths = self._diagnose(result)
+        issues, failed_paths, diag_advisory = self._diagnose(result)
 
         # Static audit runs even when verification is clean: the todo_app build
         # scored debug 3/3 while shipping a function-body import of a module
         # that was never generated, placeholder files, and dangling frontend
         # imports. None of that is visible to the import/test gates.
-        advisory = self._audit_generated_output(result)
+        advisory = list(diag_advisory) + self._audit_generated_output(result)
 
         # Phase 22: actually run the app. Static analysis cannot tell a handler
         # that works from one that raises the moment a request arrives.
@@ -1356,7 +1387,7 @@ class Pipeline:
                 )
                 break
 
-            issues, failed_paths = self._diagnose(result)
+            issues, failed_paths, diag_advisory = self._diagnose(result)
 
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the
@@ -1388,7 +1419,8 @@ class Pipeline:
         # `smoke_advisory` is whatever the last run of the app said, so a repair
         # that worked is not reported as an outstanding failure.
         advisory = (
-            self._audit_generated_output(result)
+            list(diag_advisory)
+            + self._audit_generated_output(result)
             + list(smoke_advisory)
             + self._verify_other_shapes(result)
         )

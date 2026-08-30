@@ -149,11 +149,17 @@ result.backend_files = ["phase21_remediate/backend/routes.py"]
 result.debug_results = [FakeDebug("phase21_remediate/backend/routes.py", False)]
 result.test_results  = [FakeTest("phase21_remediate/backend/routes.py", 1, 3)]
 
-issues, failed = pipe._diagnose(result)
+# _diagnose now returns a third element: problems that are real but that no
+# repair pass in this pipeline can act on. Three of its four findings used to be
+# announced as repairable while contributing no paths, so remediation ran a pass
+# that could do nothing and then degraded the build.
+issues, failed, diag_advisory = pipe._diagnose(result)
 check("diagnosis finds the failing import", any("import/debug" in i for i in issues))
 check("diagnosis finds the failing tests",  any("tests fail" in i for i in issues))
 check("diagnosis returns the failed path",
       failed == ["phase21_remediate/backend/routes.py"])
+check("everything reported as repairable has a file to aim at",
+      bool(failed) if issues else True)
 
 # Quota dead ⇒ deterministic-only path, no LLM calls at all
 kill_all_quota()

@@ -4130,6 +4130,104 @@ check("...and the import version of the rule is still there",
       "NEVER SILENCE AN IMPORT" in _debug44)
 
 
+# ---- 45. "Repairable" must mean there is something to repair ----------------
+# _diagnose returned four findings as repairable. Three of them contributed
+# NOTHING to failed_paths: frontend/TypeScript failures, "no executable tests
+# were generated", and "generated tests fail". So remediation announced a repair
+# pass, set llm_used=True and passes=1 before any work, found `failed_paths`
+# empty, broke with "made no progress", and degraded the build. That was the
+# commonest route to done_with_context in the whole pipeline.
+#
+# The invariant: if _diagnose reports something as repairable, it must name a
+# file to aim the repair at.
+class _FakeDbg45:
+    def __init__(self, path, ok):
+        self.file_path, self.success = path, ok
+
+
+class _FakeTest45:
+    def __init__(self, path, passed, total, skipped=False):
+        self.file_path, self.passed = path, passed
+        self.tests_generated, self.skipped = total, skipped
+
+
+class _FakeTs45:
+    def __init__(self, path, ok, skipped=False):
+        self.file_path, self.success, self.skipped = path, ok, skipped
+
+
+from agents.pipeline import BuildResult as _BR45              # noqa: E402
+
+_d45 = Pipeline.__new__(Pipeline)
+
+
+def _diag45(**kw):
+    r = _BR45(user_prompt="x", build_id="diag45")
+    r.architecture = {"root_folder": "_diag45", "files": []}
+    r.backend_files = kw.get("backend", ["_diag45/backend/routes.py"])
+    r.debug_results = kw.get("debug", [])
+    r.test_results = kw.get("tests", [])
+    r.frontend_debug_results = kw.get("frontend", [])
+    return _d45._diagnose(r)
+
+
+# A frontend file the Python debugger cannot touch, and which
+# agents/frontend_debugger.py has already spent its attempts on.
+_i45, _f45, _a45 = _diag45(
+    debug=[_FakeDbg45("_diag45/backend/routes.py", True)],
+    tests=[_FakeTest45("_diag45/backend/routes.py", 3, 3)],
+    frontend=[_FakeTs45("frontend/App.tsx", False)],
+)
+check("a frontend failure is advisory, not a repair nobody can perform",
+      not _i45 and any("Frontend/TypeScript" in a for a in _a45),
+      f"issues={_i45} advisory={_a45}")
+check("...and it names no file for the Python debugger to aim at",
+      _f45 == [], str(_f45))
+
+# "No executable tests were generated" — no repair pass generates tests.
+_i45b, _f45b, _a45b = _diag45(
+    debug=[_FakeDbg45("_diag45/backend/routes.py", True)],
+    tests=[],
+)
+check("'no executable tests' is advisory, since no pass can generate them",
+      not _i45b and any("unverified by tests" in a for a in _a45b),
+      f"issues={_i45b} advisory={_a45b}")
+
+# A failing test IS repairable — the code under test is usually what is wrong,
+# and TestResult.file_path names it. This was the one of the three that had a
+# file to aim at all along and simply never supplied it.
+_i45c, _f45c, _a45c = _diag45(
+    debug=[_FakeDbg45("_diag45/backend/routes.py", True)],
+    tests=[_FakeTest45("_diag45/backend/routes.py", 1, 3)],
+)
+check("a failing test is still repairable",
+      any("tests fail" in i for i in _i45c), str(_i45c))
+check("...and now hands the debugger the file under test",
+      _f45c == ["_diag45/backend/routes.py"], str(_f45c))
+
+# The invariant itself, over every combination that produces an issue.
+for _label, _kw in (
+    ("import failure", {"debug": [_FakeDbg45("_diag45/backend/routes.py", False)]}),
+    ("failing tests", {"debug": [_FakeDbg45("_diag45/backend/routes.py", True)],
+                       "tests": [_FakeTest45("_diag45/backend/routes.py", 0, 3)]}),
+    ("both", {"debug": [_FakeDbg45("_diag45/backend/routes.py", False)],
+              "tests": [_FakeTest45("_diag45/backend/services.py", 0, 3)]}),
+):
+    _i, _f, _a = _diag45(**_kw)
+    check(f"repairable issues from {_label} name a file to aim at",
+          bool(_f) if _i else True, f"issues={_i} paths={_f}")
+
+# A clean build must still produce nothing at all — the reclassification must
+# not turn silence into advisory noise.
+_i45d, _f45d, _a45d = _diag45(
+    debug=[_FakeDbg45("_diag45/backend/routes.py", True)],
+    tests=[_FakeTest45("_diag45/backend/routes.py", 3, 3)],
+)
+check("a clean build reports neither an issue nor an advisory",
+      not _i45d and not _a45d and not _f45d,
+      f"issues={_i45d} advisory={_a45d}")
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
