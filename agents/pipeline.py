@@ -786,14 +786,23 @@ class Pipeline:
         try:
             from tools.cli_smoke import smoke_test_cli
             from tools.web_asset_check import check_web_assets
+            from tools.feature_coverage import check_feature_coverage
             from tools.verification import collect_findings
         except Exception as e:
             logger.warning(f"  ⚠️  Shape verifiers unavailable: {e}")
             return []
 
+        intent = getattr(result, "intent", None) or {}
+
         outcomes = []
-        for name, fn in (("cli_smoke", smoke_test_cli),
-                         ("web_assets", check_web_assets)):
+        for name, fn in (
+            ("cli_smoke", smoke_test_cli),
+            ("web_assets", check_web_assets),
+            # "It works" and "it is what you asked for" are different questions,
+            # and only the first was ever asked. intent["features"] reached
+            # exactly one place before this: the README.
+            ("feature_coverage", lambda r: check_feature_coverage(r, intent)),
+        ):
             try:
                 outcomes.append(fn(root))
             except Exception as e:

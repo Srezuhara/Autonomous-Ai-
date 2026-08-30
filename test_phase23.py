@@ -3897,6 +3897,149 @@ finally:
     shutil.rmtree(_zr_dir, ignore_errors=True)
 
 
+# ---- 43. Did it build what was asked for? -----------------------------------
+# `intent["features"]` reached exactly one place before this: the README. So a
+# build could implement two of six requested features and every gate stayed
+# green — the files import, the tests pass, the routes that DO exist answer 200.
+# "It works" and "it is what you asked for" are different questions.
+from tools.feature_coverage import (                                 # noqa: E402
+    check_feature_coverage as _fc43,
+    _content_words as _cw43,
+)
+
+_fc_root = "_test_feature_coverage"
+_fc_dir = Path(config.OUTPUT_DIR) / _fc_root
+shutil.rmtree(_fc_dir, ignore_errors=True)
+try:
+    (_fc_dir / "backend").mkdir(parents=True)
+    (_fc_dir / "backend" / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "\n"
+        "@router.get('/stock_movements/')\n"
+        "def list_stock_movements():\n"
+        "    return []\n"
+        "\n"
+        "@router.get('/low_stock/')\n"
+        "def low_stock_report():\n"
+        "    return []\n",
+        encoding="utf-8",
+    )
+    (_fc_dir / "backend" / "cli.py").write_text(
+        "import argparse\n"
+        "\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('-d', '--dry-run', action='store_true')\n"
+        "    p.parse_args()\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+
+    _fc_ok = _fc43(_fc_root, {"features": [
+        "CRUD for StockMovement",
+        "Low-stock report endpoint",
+        "dry-run flag",
+    ]})
+    check("a feature the code implements is not reported missing",
+          _fc_ok.status is _St42.VERIFIED, _fc_ok.detail + str(_fc_ok.findings))
+
+    _fc_bad = _fc43(_fc_root, {"features": [
+        "Low-stock report endpoint",
+        "CSV export of the inventory",
+        "barcode scanning support",
+    ]})
+    check("a feature nothing in the code refers to IS reported",
+          _fc_bad.status is _St42.FAILED
+          and len(_fc_bad.evidence["missing"]) == 2,
+          str(_fc_bad.evidence.get("missing")))
+    check("...and the finding quotes the request, not a code symbol",
+          any("CSV export of the inventory" in f for f in _fc_bad.findings),
+          str(_fc_bad.findings)[:200])
+
+    # A request with no features listed must never be reported as a failure —
+    # most prompts do not enumerate them.
+    check("a request that lists no features is not applicable",
+          _fc43(_fc_root, {"features": []}).status is _St42.NOT_APPLICABLE)
+
+    # A feature described only in CRUD verbs has no distinguishing content:
+    # every generated backend would match it, so checking proves nothing.
+    _fc_weak = _fc43(_fc_root, {"features": ["create and delete"]})
+    check("a feature made only of CRUD verbs is skipped, not reported missing",
+          _fc_weak.evidence.get("checked") == 0, str(_fc_weak.evidence))
+finally:
+    shutil.rmtree(_fc_dir, ignore_errors=True)
+
+
+# ---- 43a. The two ways this checker was wrong before it shipped -------------
+# Both were caught by running it against real builds and disbelieving the
+# result. Row 3 was reported as missing "CRUD for StockMovement" while serving
+# five routes for it, and row 4 as missing its "dry-run flag" while
+# implementing it. Neither was a defect in the generated code.
+
+# 1. The feature phrase was not split the way identifiers are. "StockMovement"
+#    became one token, and the artifact spells it `/stock_movements/` and
+#    `StockMovement` — split against unsplit matches nothing.
+check("a CamelCase feature name is split into its words",
+      {"stock", "movement"} <= _cw43("CRUD for StockMovement"),
+      str(_cw43("CRUD for StockMovement")))
+check("...and a hyphenated one too",
+      {"dry", "run"} <= _cw43("dry-run flag"), str(_cw43("dry-run flag")))
+check("...while generic words are still dropped",
+      not ({"the", "system", "data", "endpoint"} & _cw43(
+          "the system data endpoint")))
+
+# 2. argparse takes the short flag first, so a regex reading only the first
+#    argument of add_argument() sees "-d" and never "--dry-run" — the only one
+#    carrying meaning.
+_fc2_dir = Path(config.OUTPUT_DIR) / "_test_feature_flags"
+shutil.rmtree(_fc2_dir, ignore_errors=True)
+try:
+    _fc2_dir.mkdir(parents=True)
+    (_fc2_dir / "tool.py").write_text(
+        "import argparse\n"
+        "\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument(\n"
+        "        '-d',\n"
+        "        '--dry-run',\n"
+        "        action='store_true',\n"
+        "    )\n"
+        "    p.parse_args()\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+    _flag = _fc43("_test_feature_flags", {"features": ["a dry-run flag"]})
+    check("a long flag declared after a short one is still found",
+          _flag.status is _St42.VERIFIED, str(_flag.findings))
+finally:
+    shutil.rmtree(_fc2_dir, ignore_errors=True)
+
+# The documenter writes the requested features into the README as prose, so
+# counting prose would let a project "implement" a feature by describing it.
+_fc3_dir = Path(config.OUTPUT_DIR) / "_test_feature_prose"
+shutil.rmtree(_fc3_dir, ignore_errors=True)
+try:
+    _fc3_dir.mkdir(parents=True)
+    (_fc3_dir / "app.py").write_text(
+        '"""This module provides barcode scanning support."""\n'
+        "# barcode scanning support\n"
+        "def unrelated():\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _prose = _fc43("_test_feature_prose", {"features": ["barcode scanning support"]})
+    check("a feature only DESCRIBED in a comment does not count as built",
+          _prose.status is _St42.FAILED, _prose.detail + str(_prose.findings))
+finally:
+    shutil.rmtree(_fc3_dir, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
