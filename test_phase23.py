@@ -4228,6 +4228,84 @@ check("a clean build reports neither an issue nor an advisory",
       f"issues={_i45d} advisory={_a45d}")
 
 
+# ---- 46. A library is imported the way a user imports it --------------------
+# `run_python` imports each file individually with its own directory on
+# sys.path. A user writes `import mylib`, which runs `mylib/__init__.py` and
+# every re-export in it — and __init__.py is exactly where a renamed or missing
+# name shows up. This matters now that the architect no longer bolts a FastAPI
+# app onto every request, so a library request produces a library.
+from tools.package_smoke import smoke_test_package as _pk46           # noqa: E402
+
+
+def _mk_pkg46(root, init_src, core_src="def add(a, b):\n    return a + b\n"):
+    d = Path(config.OUTPUT_DIR) / root
+    shutil.rmtree(d, ignore_errors=True)
+    (d / "mylib").mkdir(parents=True)
+    (d / "mylib" / "__init__.py").write_text(init_src, encoding="utf-8")
+    (d / "mylib" / "core.py").write_text(core_src, encoding="utf-8")
+    return d
+
+
+_pk_good = _mk_pkg46("_test_pkg_good",
+                     'from .core import add\n__all__ = ["add"]\n')
+try:
+    _r46 = _pk46("_test_pkg_good")
+    check("a library that imports cleanly verifies",
+          _r46.status is _St42.VERIFIED, _r46.detail + str(_r46.findings))
+finally:
+    shutil.rmtree(_pk_good, ignore_errors=True)
+
+# __all__ is a promise about the public API. A name listed there that does not
+# exist is an ImportError for anyone following the README — and every
+# individual file still imports perfectly, so the per-file check sees nothing.
+_pk_bad = _mk_pkg46("_test_pkg_all",
+                    'from .core import add\n__all__ = ["add", "subtract"]\n')
+try:
+    _r46b = _pk46("_test_pkg_all")
+    check("a name promised by __all__ but never defined is caught",
+          _r46b.status is _St42.FAILED
+          and any("subtract" in f for f in _r46b.findings),
+          str(_r46b.findings)[:200])
+finally:
+    shutil.rmtree(_pk_bad, ignore_errors=True)
+
+# The re-export that names something that was never written.
+_pk_err = _mk_pkg46("_test_pkg_import", "from .core import nonexistent\n")
+try:
+    _r46c = _pk46("_test_pkg_import")
+    check("a broken re-export in __init__.py is caught",
+          _r46c.status is _St42.FAILED
+          and any("import mylib" in f for f in _r46c.findings),
+          str(_r46c.findings)[:200])
+finally:
+    shutil.rmtree(_pk_err, ignore_errors=True)
+
+# A package that imports but exposes nothing is an empty build in library form.
+_pk_empty = _mk_pkg46("_test_pkg_empty", "\n")
+try:
+    _r46d = _pk46("_test_pkg_empty")
+    check("a package that exposes no public API at all is caught",
+          _r46d.status is _St42.FAILED
+          and any("no public names" in f for f in _r46d.findings),
+          str(_r46d.findings)[:200])
+finally:
+    shutil.rmtree(_pk_empty, ignore_errors=True)
+
+# Precision: a web app or a CLI has a verifier that exercises far more than an
+# import, so this must stand down rather than double-report.
+_pk_web = Path(config.OUTPUT_DIR) / "_test_pkg_web"
+shutil.rmtree(_pk_web, ignore_errors=True)
+try:
+    (_pk_web / "mylib").mkdir(parents=True)
+    (_pk_web / "mylib" / "__init__.py").write_text("", encoding="utf-8")
+    (_pk_web / "mylib" / "main.py").write_text(
+        "from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    check("a web project is left to the web verifier",
+          _pk46("_test_pkg_web").status is _St42.NOT_APPLICABLE)
+finally:
+    shutil.rmtree(_pk_web, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

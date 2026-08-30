@@ -818,6 +818,7 @@ class Pipeline:
             from tools.cli_smoke import smoke_test_cli
             from tools.web_asset_check import check_web_assets
             from tools.feature_coverage import check_feature_coverage
+            from tools.package_smoke import smoke_test_package
             from tools.verification import collect_findings
         except Exception as e:
             logger.warning(f"  ⚠️  Shape verifiers unavailable: {e}")
@@ -839,6 +840,10 @@ class Pipeline:
         for name, fn in (
             ("cli_smoke", smoke_test_cli),
             ("web_assets", check_web_assets),
+            # Only fires for a project that is neither run nor served — the
+            # product IS the importable API. Worth having now that the architect
+            # no longer bolts a FastAPI app onto every request.
+            ("package_smoke", smoke_test_package),
             # "It works" and "it is what you asked for" are different questions,
             # and only the first was ever asked. intent["features"] reached
             # exactly one place before this: the README.
