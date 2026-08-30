@@ -3579,6 +3579,324 @@ check("...and it is reachable from every import-check success path",
       str(_dbg_src41.count("_try_runtime_repair()")))
 
 
+# ---- 42. "Not checked" is not "checked and clean" ---------------------------
+# Every verifier answered with a list of findings, and an empty list meant four
+# different things: it passed, it does not apply, it could not run, or there was
+# nothing to look at. Pipeline._smoke_test_runtime returned [] for all four, so
+# a build nobody had verified and a build that passed were the same value.
+from tools.verification import (                                     # noqa: E402
+    Status as _St42,
+    VerificationOutcome as _VO42,
+    collect_findings as _cf42,
+    worst_status as _ws42,
+)
+
+check("a check that passed is ok, and is evidence the thing works",
+      _VO42.verified("x").ok and _VO42.verified("x").is_evidence_of_working)
+check("a check that does not apply is ok, but is NOT evidence",
+      _VO42.not_applicable("x").ok
+      and not _VO42.not_applicable("x").is_evidence_of_working)
+check("a check that never ran is NOT ok — the hole is not a pass",
+      not _VO42.not_run("x", detail="no entry point").ok)
+check("a failed check is not ok",
+      not _VO42.failed("x", ["boom"]).ok)
+
+# The NOT_RUN line is the whole point: it puts "we do not know" into the same
+# list the pipeline reports, so an unverified build reads as unverified rather
+# than disappearing into silence.
+_nr42 = _cf42([_VO42.not_run("runtime_smoke", detail="no entry point found")])
+check("a check that never ran contributes an explicit finding",
+      len(_nr42) == 1 and "unverified" in _nr42[0], str(_nr42))
+check("...while one that does not apply contributes nothing",
+      _cf42([_VO42.not_applicable("cli_smoke")]) == [])
+check("worst_status ranks a hole above a pass",
+      _ws42([_VO42.verified("a"), _VO42.not_run("b")]) is _St42.NOT_RUN)
+check("...and a failure above the hole",
+      _ws42([_VO42.not_run("a"), _VO42.failed("b", ["x"])]) is _St42.FAILED)
+
+
+# ---- 42a. One shape detector, and it finds what row 4 hid -------------------
+# runtime_smoke._find_entry searched backend/, src/ and the project root for a
+# file containing the literal "FastAPI(". Row 4's architect wrote its app to
+# bulk_file_renamer/main.py, so the search found nothing, the pipeline logged
+# "Runtime smoke test skipped (no FastAPI entry point)", and a web application
+# shipped without one request ever being sent to it.
+from tools.build_shape import detect_shapes as _ds42                 # noqa: E402
+
+_bs_root = "_test_build_shape"
+_bs_dir = Path(config.OUTPUT_DIR) / _bs_root
+shutil.rmtree(_bs_dir, ignore_errors=True)
+try:
+    # A layout no directory-list would find: the app is neither in backend/ nor
+    # src/ nor the root, and the CLI sits beside it.
+    (_bs_dir / "mytool").mkdir(parents=True)
+    (_bs_dir / "mytool" / "__init__.py").write_text("", encoding="utf-8")
+    (_bs_dir / "mytool" / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n",
+        encoding="utf-8",
+    )
+    (_bs_dir / "mytool" / "cli.py").write_text(
+        "import argparse\n"
+        "def main():\n"
+        "    argparse.ArgumentParser().parse_args()\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+    (_bs_dir / "page.html").write_text("<html></html>", encoding="utf-8")
+
+    _bs = _ds42(_bs_dir, rel_to=config.OUTPUT_DIR)
+    check("a web app outside backend/, src/ and the root is still found",
+          _bs.is_web and _bs.primary_web_entry.path.endswith("mytool/main.py"),
+          str([e.path for e in _bs.web_entries]))
+    check("...and the CLI beside it is found too",
+          _bs.is_cli and _bs.cli_entries[0].path.endswith("mytool/cli.py"))
+    check("...and the page",
+          _bs.is_static_frontend)
+    check("a build is several shapes at once, not one",
+          set(_bs.names()) >= {"web_api", "cli", "static_frontend"},
+          _bs.describe())
+    check("paths are OUTPUT_DIR-relative, not absolute",
+          not _bs.primary_web_entry.path.startswith(("/", "C:", "c:")),
+          _bs.primary_web_entry.path)
+
+    # Flask, and an app built by a factory rather than bound at module level —
+    # the old probe required a module-level `app` and reported the ordinary
+    # factory pattern as "module defines no `app` object", i.e. a boot failure.
+    (_bs_dir / "flaskapp.py").write_text(
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    app = Flask(__name__)\n"
+        "    return app\n",
+        encoding="utf-8",
+    )
+    _bs2 = _ds42(_bs_dir, rel_to=config.OUTPUT_DIR)
+    _flask = [e for e in _bs2.web_entries if e.path.endswith("flaskapp.py")]
+    check("a Flask app is recognised as a web entry",
+          bool(_flask) and _flask[0].framework == "flask")
+    check("...and a create_app() factory counts as an entry point",
+          bool(_flask) and _flask[0].factory == "create_app")
+
+    # An `import argparse` with no way to invoke it is a helper, not a tool.
+    (_bs_dir / "helper.py").write_text(
+        "import argparse\n"
+        "def build_parser():\n"
+        "    return argparse.ArgumentParser()\n",
+        encoding="utf-8",
+    )
+    _bs3 = _ds42(_bs_dir, rel_to=config.OUTPUT_DIR)
+    check("a module that merely imports argparse is not called a CLI",
+          not any(e.path.endswith("helper.py") for e in _bs3.cli_entries),
+          str([e.path for e in _bs3.cli_entries]))
+finally:
+    shutil.rmtree(_bs_dir, ignore_errors=True)
+
+
+# ---- 42b. The CLI is actually run --------------------------------------------
+# Nothing had ever executed a generated command-line tool. The import check
+# imports the module, and everything under `if __name__ == "__main__"` is by
+# definition not executed by an import.
+from tools.cli_smoke import smoke_test_cli as _cli42                 # noqa: E402
+
+_cs_root = "_test_cli_smoke"
+_cs_dir = Path(config.OUTPUT_DIR) / _cs_root
+shutil.rmtree(_cs_dir, ignore_errors=True)
+try:
+    _cs_dir.mkdir(parents=True)
+    (_cs_dir / "good.py").write_text(
+        "import argparse\n"
+        "\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(description='renames things')\n"
+        "    p.add_argument('PATTERN')\n"
+        "    p.add_argument('REPLACEMENT')\n"
+        "    a = p.parse_args()\n"
+        "    print(a.PATTERN, a.REPLACEMENT)\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+    _good = _cli42(_cs_root)
+    check("a working CLI verifies, and --help really ran",
+          _good.status is _St42.VERIFIED
+          and _good.evidence["entries"][0]["help_exit"] == 0,
+          _good.detail + " " + str(_good.findings))
+    check("...and its required positionals were read from the usage line",
+          set(_good.evidence["entries"][0]["positionals"]) ==
+          {"PATTERN", "REPLACEMENT"},
+          str(_good.evidence["entries"][0]))
+finally:
+    shutil.rmtree(_cs_dir, ignore_errors=True)
+
+_cs2_dir = Path(config.OUTPUT_DIR) / "_test_cli_broken"
+shutil.rmtree(_cs2_dir, ignore_errors=True)
+try:
+    _cs2_dir.mkdir(parents=True)
+    # A parser that cannot even build its own help text: `type=` names a
+    # function that does not exist. It imports perfectly.
+    (_cs2_dir / "broken.py").write_text(
+        "import argparse\n"
+        "\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('path', type=nonexistent_validator)\n"
+        "    p.parse_args()\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+    _bad = _cli42("_test_cli_broken")
+    check("a CLI that blows up on --help is caught",
+          _bad.status is _St42.FAILED, _bad.detail)
+    check("...and the finding names the tool and the exit",
+          any("broken.py" in f and "--help" in f for f in _bad.findings),
+          str(_bad.findings)[:200])
+finally:
+    shutil.rmtree(_cs2_dir, ignore_errors=True)
+
+_cs3_dir = Path(config.OUTPUT_DIR) / "_test_cli_absent"
+shutil.rmtree(_cs3_dir, ignore_errors=True)
+try:
+    _cs3_dir.mkdir(parents=True)
+    (_cs3_dir / "lib.py").write_text("def add(a, b):\n    return a + b\n",
+                                     encoding="utf-8")
+    _none = _cli42("_test_cli_absent")
+    check("a project with no CLI reports not-applicable, never a false failure",
+          _none.status is _St42.NOT_APPLICABLE, _none.detail)
+finally:
+    shutil.rmtree(_cs3_dir, ignore_errors=True)
+
+
+# ---- 42c. The page is actually parsed ---------------------------------------
+# A plain HTML/CSS/JS frontend had exactly one check: a regex for RELATIVE
+# import specifiers pointing at files that do not exist. Row 2 shipped an app.js
+# whose first two lines are bare specifiers (`import React from "react"`), which
+# a browser cannot resolve in a module — and the regex passed it, because those
+# imports are not relative.
+from tools.web_asset_check import check_web_assets as _wac42         # noqa: E402
+
+_wa_root = "_test_web_assets"
+_wa_dir = Path(config.OUTPUT_DIR) / _wa_root
+shutil.rmtree(_wa_dir, ignore_errors=True)
+try:
+    (_wa_dir / "backend").mkdir(parents=True)
+    (_wa_dir / "frontend").mkdir(parents=True)
+    (_wa_dir / "backend" / "routes.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "\n"
+        "@router.get('/bookmarks')\n"
+        "def list_b():\n"
+        "    return []\n"
+        "\n"
+        "@router.delete('/bookmarks/{bid}')\n"
+        "def del_b(bid: int):\n"
+        "    return {}\n",
+        encoding="utf-8",
+    )
+    # The page reaches app.js through an INLINE module's import, which is how
+    # row 2 does it — checking only <script src> tags never opens the file.
+    (_wa_dir / "frontend" / "index.html").write_text(
+        '<!DOCTYPE html><html><head>\n'
+        '<link rel="stylesheet" href="./missing.css">\n'
+        '</head><body><div id="root"></div>\n'
+        '<script type="module">import App from "./app.js";</script>\n'
+        '</body></html>\n',
+        encoding="utf-8",
+    )
+    (_wa_dir / "frontend" / "app.js").write_text(
+        'import React from "react";\n'
+        'const API = "http://localhost:8000";\n'
+        'export default function App() {\n'
+        '  fetch(`${API}/bookmarks`);\n'
+        '  fetch(`${API}/bookmarks/${id}`);\n'
+        '  fetch(`${API}/api/v2/bookmarks`);\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    _wa = _wac42(_wa_root)
+    check("a bare specifier in a module reached through an inline import is caught",
+          any("`react`" in f for f in _wa.findings), str(_wa.findings)[:250])
+    check("a referenced file that does not exist is caught",
+          any("missing.css" in f for f in _wa.findings), str(_wa.findings)[:250])
+    check("a frontend call the backend does not serve is caught",
+          any("/api/v2/bookmarks" in f for f in _wa.findings),
+          str(_wa.findings)[:250])
+    # Precision: the two calls that DO line up must not be reported, including
+    # the parameterised one -- /bookmarks/${id} against /bookmarks/{bid}.
+    check("...while a call that matches a declared route is not reported",
+          not any("`/bookmarks`" in f for f in _wa.findings),
+          str(_wa.findings)[:250])
+    check("...and a parameterised route matches its path parameter",
+          not any("/bookmarks/1" in f for f in _wa.findings),
+          str(_wa.findings)[:250])
+finally:
+    shutil.rmtree(_wa_dir, ignore_errors=True)
+
+# A bundled frontend resolves bare specifiers at build time, so reporting them
+# there would be a false positive on every React project the builder produces.
+_wa2_dir = Path(config.OUTPUT_DIR) / "_test_web_bundled"
+shutil.rmtree(_wa2_dir, ignore_errors=True)
+try:
+    (_wa2_dir / "frontend" / "src").mkdir(parents=True)
+    (_wa2_dir / "frontend" / "package.json").write_text('{"name":"f"}',
+                                                        encoding="utf-8")
+    (_wa2_dir / "frontend" / "index.html").write_text(
+        '<html><body><script type="module" src="./src/main.jsx"></script>'
+        '</body></html>', encoding="utf-8",
+    )
+    (_wa2_dir / "frontend" / "src" / "main.jsx").write_text(
+        'import React from "react";\nexport default React;\n', encoding="utf-8",
+    )
+    _wa2 = _wac42("_test_web_bundled")
+    check("a bundled frontend's bare specifiers are not reported",
+          not any("react" in f for f in _wa2.findings), str(_wa2.findings)[:200])
+finally:
+    shutil.rmtree(_wa2_dir, ignore_errors=True)
+
+_wa3_dir = Path(config.OUTPUT_DIR) / "_test_web_absent"
+shutil.rmtree(_wa3_dir, ignore_errors=True)
+try:
+    _wa3_dir.mkdir(parents=True)
+    (_wa3_dir / "lib.py").write_text("x = 1\n", encoding="utf-8")
+    check("a project with no HTML reports not-applicable",
+          _wac42("_test_web_absent").status is _St42.NOT_APPLICABLE)
+finally:
+    shutil.rmtree(_wa3_dir, ignore_errors=True)
+
+
+# ---- 42d. An app that serves nothing is not a clean run ---------------------
+# `if not smoke.probes: return []` — an app that boots and declares ZERO routes
+# produced no issue, no advisory, and not even the summary log line. That is the
+# literal empty build; §4.20 shipped exactly it.
+_zr_root = "_test_zero_routes"
+_zr_dir = Path(config.OUTPUT_DIR) / _zr_root
+shutil.rmtree(_zr_dir, ignore_errors=True)
+try:
+    (_zr_dir / "backend").mkdir(parents=True)
+    (_zr_dir / "backend" / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n",
+        encoding="utf-8",
+    )
+    _zr_pipeline = Pipeline.__new__(Pipeline)
+    _zr_pipeline._smoke_runtime_errors = {}
+    _zr_result = type("R", (), {
+        "architecture": {"root_folder": _zr_root}, "smoke_summary": ""
+    })()
+    _zr_issues = _zr_pipeline._smoke_test_runtime(_zr_result)
+    check("an app that boots with no routes is reported, not passed silently",
+          bool(_zr_issues) and "no routes" in _zr_issues[0], str(_zr_issues))
+    check("...and a repair is aimed at the file that should define them",
+          bool(_zr_pipeline._smoke_runtime_errors),
+          str(_zr_pipeline._smoke_runtime_errors))
+finally:
+    shutil.rmtree(_zr_dir, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

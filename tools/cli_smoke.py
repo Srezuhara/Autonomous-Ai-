@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import re
+import os
 import shutil
 import subprocess
 import sys
@@ -58,12 +59,26 @@ _DANGEROUS = re.compile(
 )
 
 
-def _run(argv: list[str], cwd: Path, run_dir: Path) -> tuple[int, str, str]:
+def _run(argv: list[str], import_root: Path, sandbox: Path) -> tuple[int, str, str]:
+    """
+    Run the tool from inside `sandbox`, resolving imports against `import_root`.
+
+    Those must be two different directories. The tool has to run somewhere
+    disposable — a bulk renamer that walks its working directory should find an
+    empty temp dir, not the generated project — but `-m package.module` and a
+    flat script's sibling imports both need the project on the path. So cwd is
+    the sandbox and the import root goes on PYTHONPATH.
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{import_root}{os.pathsep}{existing}" if existing else str(import_root)
+    )
     try:
         proc = subprocess.run(
             argv,
             capture_output=True, text=True, timeout=CLI_TIMEOUT,
-            cwd=str(cwd),
+            cwd=str(sandbox), env=env,
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except subprocess.TimeoutExpired:
@@ -88,6 +103,7 @@ def _module_argv(entry_abs: Path, project_dir: Path) -> tuple[list[str], Path]:
 
     if len(parts) > 1:
         return [sys.executable, "-m", ".".join(parts)], directory
+    # An absolute path, because the process runs from the sandbox.
     return [sys.executable, str(entry_abs)], directory
 
 
@@ -162,7 +178,7 @@ def smoke_test_cli(root: str, timeout: int = CLI_TIMEOUT) -> VerificationOutcome
     checked = 0
 
     for entry in shapes.cli_entries:
-        entry_abs = Path(config.OUTPUT_DIR) / entry.path
+        entry_abs = (Path(config.OUTPUT_DIR) / entry.path).resolve()
         if not entry_abs.is_file():
             continue
         checked += 1
@@ -191,7 +207,13 @@ def _probe_one(
     entry: CliEntry, entry_abs: Path, project_dir: Path, findings: list[str]
 ) -> dict:
     argv, run_dir = _module_argv(entry_abs, project_dir)
-    record: dict = {"path": entry.path, "library": entry.library}
+    # Every key present from the start: a caller reading `record["positionals"]`
+    # should not have to know which early return it came back from.
+    record: dict = {
+        "path": entry.path, "library": entry.library,
+        "help_exit": None, "bare_exit": None,
+        "subcommands": [], "positionals": [], "ok": False, "note": "",
+    }
 
     sandbox = Path(tempfile.mkdtemp(prefix="cli_smoke_"))
     try:
