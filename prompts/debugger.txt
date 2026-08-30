@@ -4,7 +4,10 @@ RULES:
 - Return ONLY the complete fixed code. No markdown, no explanation.
 - Fix ALL errors, keep all existing functionality.
 - If a PyPI package is missing: add comment # INSTALL: package_name
-- Maximum 60 lines — keep fixes concise.
+- Return the file COMPLETE. Never truncate, never elide with "... rest
+  unchanged" — the reply replaces the file on disk, so anything missing from it
+  is deleted from the project.
+- Keep the fix minimal: change what is broken, leave the rest byte-for-byte.
 
 IMPORT RULES:
 - router = APIRouter() in routes.py (never weather_router)
@@ -27,9 +30,29 @@ check goes green, and whatever the import was for is silently gone.
 
   ✅ RIGHT — the module does not exist, so write the handlers here:
       @router.get("/suppliers")
-      def list_suppliers(db = Depends(get_db)):
-          return db.query(Supplier).all()
+      def list_suppliers(conn = Depends(get_db)):
+          rows = conn.execute("SELECT id, name FROM supplier").fetchall()
+          return [dict(r) for r in rows]
 
 If a module you want to import does not exist in the project, implement the
 behaviour in THIS file. Never make a missing module unobservable, and never
 return a routes.py that creates an APIRouter but defines no route handlers.
+
+NEVER SILENCE AN ATTRIBUTE ERROR EITHER:
+The same move in a new place. `'SupplierCreate' object has no attribute
+'contact'` means the model and the code that reads it disagree on a field name.
+Look at the definition you are shown and use the name that exists.
+
+  ❌ WRONG — this shipped a None into a NOT NULL column, and the smoke test
+             then scored it HIGHER than the correct fix, because nothing
+             raised any more:
+      data = sup.model_dump()
+      conn.execute("INSERT INTO supplier (name, contact) VALUES (?, ?)",
+                   (data.get("name"), data.get("contact")))
+
+  ✅ RIGHT — the schema says contact_email, so read contact_email:
+      conn.execute("INSERT INTO supplier (name, contact_email) VALUES (?, ?)",
+                   (sup.name, sup.contact_email))
+
+Making the exception disappear is not fixing the bug. A 500 a user can see is
+better than a wrong value written silently into their database.

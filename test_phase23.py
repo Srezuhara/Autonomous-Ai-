@@ -4040,6 +4040,96 @@ finally:
     shutil.rmtree(_fc3_dir, ignore_errors=True)
 
 
+# ---- 44. The prompts must not contradict each other -------------------------
+# Two contradictions were producing broken builds directly, and neither is
+# visible from inside either file — you only see it by reading both.
+_PROMPTS = Path(__file__).parent / "prompts"
+
+
+def _prompt44(name: str) -> str:
+    try:
+        return (_PROMPTS / name).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+_arch44 = _prompt44("architect.txt")
+_front44 = _prompt44("frontend_generator.txt")
+_backend44 = _prompt44("backend_developer.txt")
+_debug44 = _prompt44("debugger.txt")
+
+check("every prompt file is readable",
+      all([_arch44, _front44, _backend44, _debug44]))
+
+# 1. architect.txt said "plain HTML/CSS/JavaScript for ALL frontend code" while
+#    frontend_generator.txt said React + Tailwind + axios with a default
+#    export. The generator obeyed the second, the architect planned for the
+#    first, and row 2 shipped the hybrid: a React component in a file called
+#    app.js, loaded by a plain <script type="module">, whose bare `import React
+#    from "react"` a browser cannot resolve. The page rendered nothing.
+check("the architect still requires plain HTML/CSS/JS",
+      "plain HTML/CSS/JavaScript" in _arch44)
+# Assert the DIRECTIVE, not the string: the prompt names React in order to
+# forbid it, and a substring test would match its own prohibition.
+check("the frontend generator no longer asks for React",
+      "React/Tailwind code" not in _front44
+      and "functional components with hooks" not in _front44)
+check("...and explicitly forbids it instead",
+      "No React" in _front44)
+check("...nor Tailwind as the styling system",
+      "Use Tailwind CSS for styling" not in _front44)
+check("...and it forbids the bare specifier that broke the page",
+      "NEVER IMPORT A BARE PACKAGE NAME" in _front44)
+check("the runtime repair prompt agrees with it",
+      "Tailwind CSS classes" not in
+      inspect.getsource(__import__("agents.frontend_generator",
+                                   fromlist=["FrontendGenerator"])))
+
+# 2. backend_developer.txt forbids ORMs; debugger.txt's own ✅ example was
+#    `db.query(Supplier).all()` — SQLAlchemy. With an architect free to plan
+#    alembic/, that is the mechanism behind the persistence-shape drift that
+#    cost row 3 two remediation passes and ~48K tokens.
+check("the backend developer still forbids an ORM",
+      "Do NOT use SQLAlchemy" in _backend44)
+check("the debugger's example no longer uses an ORM",
+      "db.query(" not in _debug44, "SQLAlchemy example survives in debugger.txt")
+check("...and shows raw sqlite3 instead",
+      "conn.execute(" in _debug44)
+check("the architect is forbidden to plan an alembic layout",
+      "alembic/" in _arch44 and "alembic.ini" in _arch44)
+
+# 3. The forced backend. Its own justification was "required for the testing and
+#    debugging pipeline to function" — the product was being distorted to fit a
+#    verifier that only understood FastAPI. Row 4 shipped a FastAPI app serving
+#    one /health route beside the CLI that was actually requested.
+# Same again: the replacement text quotes the old rule to explain why it went.
+# What must be gone is the enforcing sentence, not every mention of it.
+check("the blanket always-a-backend mandate is gone",
+      "MANDATORY RULE" not in _arch44.split("BUILD WHAT WAS ASKED FOR")[0]
+      and "Every project MUST include AT MINIMUM" not in _arch44
+      and "create a minimal FastAPI backend" not in _arch44)
+check("...replaced by building the shape that was requested",
+      "BUILD WHAT WAS ASKED FOR" in _arch44)
+check("...and a CLI request is told not to add a web API",
+      "NO FastAPI" in _arch44)
+
+# 4. debugger.txt capped fixes at 60 lines while agents/debugger.py sizes the
+#    rewrite budget to the file with deliberately no ceiling. Told to cap at 60
+#    lines and to return a 300-line file complete, a model truncates — and a
+#    truncated file is a syntax error the next pass has to repair.
+check("the debugger prompt no longer caps the fix at 60 lines",
+      "Maximum 60 lines" not in _debug44)
+check("...and requires the file back complete",
+      "Never truncate" in _debug44)
+
+# 5. §0.7's lesson, written where the model will see it: silencing an
+#    AttributeError scored HIGHER on the smoke test than the correct fix.
+check("the debugger is forbidden to silence an AttributeError",
+      "NEVER SILENCE AN ATTRIBUTE ERROR" in _debug44)
+check("...and the import version of the rule is still there",
+      "NEVER SILENCE AN IMPORT" in _debug44)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

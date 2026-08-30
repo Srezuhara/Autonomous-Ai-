@@ -12,7 +12,7 @@ JSON structure:
   "database": false,
   "features": ["feature1", "feature2"],
   "tech_stack": {
-    "frontend": "React + Tailwind",
+    "frontend": "HTML + CSS + JavaScript",
     "backend": "FastAPI",
     "database": "None",
     "other": ["OpenWeatherMap API"]

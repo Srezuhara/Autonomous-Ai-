@@ -1,13 +1,15 @@
 CRITICAL STACK REQUIREMENT — NON-NEGOTIABLE:
-You MUST use Python + FastAPI for ALL backend code.
-You MUST use plain HTML/CSS/JavaScript for ALL frontend code.
+Python for ALL backend code. Where the request needs a web API, use FastAPI.
+You MUST use plain HTML/CSS/JavaScript for ALL frontend code — no React, no
+build step, no bundler. The page is opened directly in a browser.
 
 NEVER use: Node.js, Express, React, Vue, Angular, TypeScript, Next.js,
            or any JavaScript-based backend framework.
 
 Every backend file MUST have a .py extension.
-The entry point MUST be backend/main.py.
-Routes MUST be in backend/routes.py.
+For a web app the entry point MUST be backend/main.py and routes MUST be in
+backend/routes.py. A command-line tool has no such requirement — put its entry
+point where it belongs and give it a `if __name__ == "__main__":` guard.
 
 This pipeline only supports Python backends. Any other choice will
 cause the entire scoring system to return null.
@@ -24,22 +26,36 @@ FORBIDDEN FILES — NEVER generate any of these:
   celery.py    → no task queue in this pipeline
   migrate.py   → no migration tooling in this pipeline
   seed.py      → no seed scripts in this pipeline
+  alembic/     → no migration tooling in this pipeline, and nothing runs
+                 `alembic upgrade head`, so the tables would never exist
+  alembic.ini  → same
+  models.py using SQLAlchemy → the backend developer is instructed to use raw
+                 sqlite3. Planning an ORM layout it is forbidden to write is
+                 how one build ended up declaring its schema twice.
 
 If you include any of these files the build will fail during the test phase.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MANDATORY RULE — ALWAYS INCLUDE BACKEND (NO EXCEPTIONS):
+BUILD WHAT WAS ASKED FOR:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Every project MUST include AT MINIMUM:
-  backend/main.py   — FastAPI app with CORS and router include
-  backend/routes.py — APIRouter with at least 2 CRUD endpoints
+Plan the shape the request actually describes. Do not add a web API to a
+request that did not ask for one.
 
-Even if the user prompt is "frontend-only" or "React app", you MUST
-create a minimal FastAPI backend with domain-relevant CRUD endpoints.
-This is required for the testing and debugging pipeline to function.
+  A web app, dashboard or API  → backend/main.py + backend/routes.py, with
+                                 domain-relevant CRUD endpoints.
+  A command-line tool          → a CLI entry point with argparse. NO FastAPI,
+                                 no routes, no CORS. The tool IS the product.
+  A library                    → the modules and their public functions.
 
-Examples:
+This rule used to say "ALWAYS INCLUDE BACKEND (NO EXCEPTIONS)", justified as
+"required for the testing and debugging pipeline to function". That is no
+longer true: the pipeline runs CLI tools, parses pages and imports libraries.
+It was also doing real damage — a request for a bulk file renamer produced a
+FastAPI app serving one /health route beside the CLI, and the user was handed a
+web service they never asked for.
+
+Examples, for the shapes that ARE web apps:
   Task manager → GET /tasks, POST /tasks, PUT /tasks/{id}, DELETE /tasks/{id}
   Weather app  → GET /weather, GET /weather/forecast
   Blog         → GET /posts, POST /posts, GET /posts/{id}

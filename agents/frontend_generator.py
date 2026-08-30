@@ -324,13 +324,18 @@ THE FILE THAT IMPORTS IT:
 
 REQUIREMENTS:
 - Language: {lang}
-- Export the component as the DEFAULT export, named `{name}`.
-- Accept exactly the props the importing file passes to it.
+- Plain browser JavaScript. No React, no JSX, no bundler, no build step.
+- Export `{name}` with a named or default `export`, matching how the importing
+  file above refers to it.
+- Never import a bare package name: `import axios from "axios"` cannot be
+  resolved by a browser and the page silently renders nothing. Every import
+  must start with `./` or `../` and name a file that exists.
+- Plain CSS only — there is no build step, so Tailwind class names style
+  nothing.
 - Implement real, working behaviour — no TODO comments, no placeholder returns.
-- Style with Tailwind CSS classes.
 - Do not import any other component that does not already exist.
 
-Return ONLY the raw component code. No markdown, no explanation."""
+Return ONLY the raw code. No markdown, no explanation."""
         return self.think(prompt)
 
     # ── Phase 19.2: full-header multi-file context ────────────────────────────
