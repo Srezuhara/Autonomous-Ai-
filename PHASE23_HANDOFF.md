@@ -1,11 +1,141 @@
 # Phase 23 Handoff
 
-*Updated 2026-08-28 at the end of the third session, which ran matrix rows 1-3
-live, confirmed the request-time repair path fires on a real build, and fixed
-the three mechanical defects those rows exposed. Read §0.0 first.*
+*Updated 2026-08-30 at the end of the fifth session, which found that the
+pipeline was reporting success it had not earned, built verification for every
+build shape, and reached the first plain `done` in the project's history.*
 
-Full evidence and reasoning: **`PHASE23_LIVE_VALIDATION.md`**.
+**Read `SESSION_PROGRESS.md` §0 first** — it is the entry point and carries the
+current state. This file is the per-defect detail behind it.
+
+Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
+
+---
+
+## 0.-1 What changed in the fifth session (2026-08-30)
+
+**The one-line version: an empty findings list meant four different things, so a
+build nobody had verified and a build that passed verification were the same
+value.** Everything below follows from that.
+
+`Pipeline._smoke_test_runtime` returned `[]` when the check passed, when there
+was no web app to check, when there *was* one and the probe could not find it,
+and when the tester crashed so verification never ran at all.
+
+**Matrix row 4 is what that cost.** It shipped `done_with_context` with a valid
+ZIP, containing a FastAPI app at `bulk_file_renamer/main.py` that was never
+probed — entry discovery searched only `backend/`, `src/` and the project root
+for the literal string `"FastAPI("` — beside a CLI that nothing executed. The
+log line `Runtime smoke test skipped (no FastAPI entry point)` was written into
+`SESSION_PROGRESS.md` as evidence the non-web path worked. **It was a miss, not
+a skip.** Probed for the first time, that app serves exactly one route:
+`GET /health`.
+
+Worse, the product had been bent to fit the verifier: `prompts/architect.txt`
+forced a FastAPI backend into every project "NO EXCEPTIONS", justified in its
+own text as *"required for the testing and debugging pipeline to function."*
+
+### The seven new tools, all zero-token
+
+| Tool | What it does |
+|---|---|
+| `tools/verification.py` | Four answers instead of an empty list: VERIFIED / NOT_APPLICABLE / **NOT_RUN** / FAILED. NOT_RUN is never `ok` and contributes an explicit "this build is unverified" finding |
+| `tools/build_shape.py` | The one detector every verifier keys off. Finds a web app anywhere in the tree, Flask as well as FastAPI, a `create_app()` factory as well as a module-level binding |
+| `tools/cli_smoke.py` | **Runs the tool.** `--help` must exit 0 and print something; each subcommand must describe itself; a tool with required arguments must print usage rather than raise. Temp sandbox, never the project |
+| `tools/web_asset_check.py` | Parses the page: local assets resolve, no bare specifier in a module, no `import` in a classic script, and `fetch()` paths match declared routes |
+| `tools/package_smoke.py` | Imports the library as a user would, so `__init__.py` re-exports and `__all__` promises actually execute |
+| `tools/feature_coverage.py` | Compares `intent["features"]` against routes, function names and CLI flags. It reached only the README before |
+| `tools/repair_guard.py` | One acceptance rule, shared by the three agents that overwrite files — two of which had none |
+
+### The live result
+
+Row 4 rebuilt: **`done`** in 932s, 109,206 tokens. The first plain `done` on any
+row, ever. The architect produced a pure CLI — no `backend/`, no routes, zero
+FastAPI — and the record carries positive evidence (two VERIFIED checks, two
+correct not-applicables, zero NOT_RUN) rather than four blanks.
+
+Suite: **394 → 491**, all offline.
+
+---
+
+## 0.-0.5 The issues that exist right now
+
+Ordered by what should be looked at first. Nothing here is speculative — each
+was either verified in the code this session or is a measured gap.
+
+### Live-unproven work
+
+1. **Rows 2 and 3 have not been rebuilt.** The frontend contradiction fix, the
+   persistence pinning and the forced-backend removal are prompt-and-generation
+   changes, and §0.3's clone technique explicitly cannot exercise those — only a
+   rebuild can. Row 2 is the shape `web_asset_check` was written for and has
+   never run on a fresh build.
+
+### Real defects, unfixed
+
+2. **`MIN_TOKENS_TO_START` gates on the best model** (`run_live_matrix.py:183`:
+   `best = max(...)`). The fast model is now the bottleneck — it carries the
+   tester, the reviewer and every remediation pass — so the driver will start a
+   row 20b cannot finish. It happened on 2026-08-30: 20b hit its daily quota
+   mid-tester and the row survived only on the dual-model fallback. Documented
+   in §0 but **not fixed**; the gate should consider the fast model specifically.
+3. **A plain-JS frontend still gets no execution or lint.** `frontend_debugger`
+   (`:122`) and the tester's Vitest path (`:478`) both require
+   `frontend/package.json`, which this shape does not have, so both still skip.
+   `web_asset_check` parses it statically, which is a large improvement over one
+   regex, but nothing runs the JavaScript.
+4. **`BackendDeveloper._verify_and_repair` keeps a rewrite whose defects
+   remain** (`agents/backend_developer.py:413-418`). The new guard stops it
+   writing *damage*, but when the re-scan still finds defects it increments a
+   `failed` counter that is logged and then discarded, and the rewritten file
+   stays on disk. Nothing downstream reads that counter.
+5. **The debugger still cannot repair drift that belongs in another file.**
+   §0.7 gave the repair the *definition* of the class an AttributeError names,
+   which fixed the `contact`/`contact_email` case. The `sku` case needs a field
+   *added to `schemas.py`*, and this path only ever edits the file that raised.
+   Blame rule 4 says to repair where the symbol is defined; runtime repair does
+   not yet apply it.
+
+### Design gaps in the new checks
+
+6. **`feature_coverage` is a floor, not a ceiling.** It matches on ANY content
+   word, so "email notifications when stock runs low" matches a project with a
+   `/low_stock/` route and no notifications anywhere. It catches the feature
+   nobody built at all; it cannot tell you a feature was built badly.
+7. **`web_asset_check` skips what it cannot resolve confidently** — a URL built
+   from an unknown base, a template literal that does not start with a base
+   constant. Deliberate (precision over recall), but it is a recall gap.
+8. **`_functional_verdict` matches strings in findings**
+   (`_UNUSABLE_MARKERS`). It keeps one vocabulary rather than a parallel set of
+   predicates, but it couples the verdict to finding wording: reword a finding
+   and the verdict silently stops firing. §42d covers the zero-routes case only.
+9. **`repair_guard`'s thresholds are judgment, not measurement** — a 0.6
+   shrinkage ratio above 120 chars. Better than the old 0.5-above-400, still
+   unvalidated against a corpus.
+
+### Older, still open
+
+10. **The nine-condition `done` gate is reachable but unexamined.** It ANDs
+    nine things including 100% of generated tests passing and no `TODO`
+    substring in any function body. Row 4 satisfied it; whether it is the right
+    gate is a separate question nobody has asked.
+11. **Phase C's premise.** Its memory gate (`status == done`) is now
+    satisfiable for the first time, but the premise — that build quality is
+    limited by missing precedent — is contradicted by a catalogue in which
+    almost every diagnosed failure was mechanical. Re-examine before spending.
+12. **The ledger cannot see other processes.** Per-checkout; two servers sharing
+    the file will under-count. One at a time.
+13. **A step can take 30 minutes.** `STEP_TIMEOUT_SECONDS=900` with one retry.
+
+### Consequences of this session's choices, worth watching
+
+14. **Removing the forced backend changes product output.** A vague prompt that
+    used to yield an API may now yield only a CLI or a library. That is what was
+    asked for, but it is user-visible and untested across prompt shapes — only
+    row 4 has been run since.
+15. **New checks surface failures that were always shipping.** Scores will look
+    worse before they look better; row 3 going 16/16 → 12/16 was the fix
+    working, not a regression.
 
 ---
 

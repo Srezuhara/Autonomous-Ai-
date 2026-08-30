@@ -157,6 +157,24 @@ to `done_with_context`. The first two are now advisory (nothing here can fix
 them); the third supplies the file under test, which it had all along. §45
 asserts the invariant: anything called repairable must name a file.
 
+### The open issues
+
+**`PHASE23_HANDOFF.md` §0.-0.5 is the full list**, verified against the code
+rather than remembered. The four that matter most:
+
+1. **Rows 2 and 3 have not been rebuilt.** Everything in Phase 5 is a
+   prompt-and-generation change, which §0.3's clone technique cannot exercise.
+2. **`MIN_TOKENS_TO_START` still gates on the best model**
+   (`run_live_matrix.py:183`) while the *fast* model is the bottleneck. It bit
+   on 2026-08-30 — 20b hit its quota mid-tester and only the dual-model fallback
+   saved the row. Documented, not fixed.
+3. **A plain-JS frontend still gets no execution.** `frontend_debugger:122` and
+   the tester's Vitest path `:478` both require `frontend/package.json`, which
+   that shape does not have. `web_asset_check` parses it; nothing runs it.
+4. **The debugger still cannot repair drift that belongs in another file.**
+   §0.7's fix handles a renamed field; a *missing* one needs an edit to
+   `schemas.py`, and runtime repair only ever edits the file that raised.
+
 ### What to distrust next
 
 1. **A checker is a hypothesis until it has been run against a real build.**
