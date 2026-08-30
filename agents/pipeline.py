@@ -865,8 +865,12 @@ class Pipeline:
                 logger.warning(f"     🚨 {finding}")
 
         try:
-            existing = list(getattr(result, "verification_outcomes", []) or [])
-            result.verification_outcomes = existing + [o.to_dict() for o in outcomes]
+            # Replace, do not append. This runs twice — once before remediation
+            # and once in the final re-audit — and appending listed every check
+            # twice, leaving a reader unable to tell which run they were looking
+            # at or whether a repair had changed anything. The last run is the
+            # one that describes the shipped artifact.
+            result.verification_outcomes = [o.to_dict() for o in outcomes]
         except Exception:
             pass
 
@@ -985,6 +989,16 @@ class Pipeline:
                 f"  ℹ️  No web entry point, and none expected for this build "
                 f"({what}) — the web probe does not apply"
             )
+            # Say that plainly in the stored summary too. SmokeResult's own text
+            # is "smoke test did not run (no FastAPI entry point found)", which
+            # is accurate about the probe and misleading about the build: for a
+            # CLI it reads as a failure when the answer is "does not apply".
+            try:
+                result.smoke_summary = (
+                    f"not applicable — this build is {what}, with no web app to probe"
+                )
+            except Exception:
+                pass
             return []
 
         if not smoke.app_loaded:
