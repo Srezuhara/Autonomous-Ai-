@@ -73,8 +73,8 @@ venv/Scripts/python.exe run_live_matrix.py --dry-run
 
 | Model | Left | Note |
 |---|---|---|
-| `openai/gpt-oss-120b` | ~127,000 | comfortable |
-| `openai/gpt-oss-20b` | ~41,000 | **the bottleneck** |
+| `openai/gpt-oss-120b` | ~129,500 | comfortable |
+| `openai/gpt-oss-20b` | ~43,900 | **the bottleneck** — ~3.2h to the 70,000 gate |
 
 **The token split has inverted, and planning must follow it.** The fast model
 used to be the cheap one; it is now the one that runs out. Row 3 on 2026-08-29
@@ -91,7 +91,7 @@ and ~7h to be comfortable for a row.
 
 | # | Work | Quota | Why this order |
 |---|---|---|---|
-| 1 | **The repair that cannot repair** (§0.7) | small — §0.3 verifies it for ~5K | The smoke test now *finds* the drift and the debugger *cannot fix it*, so today's fix currently converts a hidden defect into a documented one. It also silences the error, which is how §4.20 shipped an app with no routes |
+| 1 | ~~The repair that cannot repair~~ | **done** (`4e5f2de`) | §0.7. What remains is the deterministic checker it points to: compare attribute reads against the Pydantic model's fields, zero tokens, in the shape of `sql_schema_check` |
 | 2 | **Row 2** | ~90-170K | Its three causes are fixed; needs 20b at 70K+. Never yet run against the fixed probe |
 | 3 | **Row 3 or row 1 again** | ~90-140K | Row 3's real score is knowable for the first time |
 | 4 | **Phase B1** | none | Start any time quota is short — see below |
