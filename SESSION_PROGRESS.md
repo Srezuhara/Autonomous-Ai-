@@ -1,13 +1,33 @@
 # Session Progress — start here
 
-**Last session: 2026-08-29 (Phase 23 — two live row-3 rebuilds, and eight more
-fixes).** Committed on `main`, `eff8479`..`5c8b10c`. `test_phase23.py` is
-**394/394**, up from 312.
+**Last session: 2026-08-30 (Phase 23 — row 3 rebuilt a third time, row 4 run for
+the first time, and the smoke test's write coverage found to be fictional).**
+Committed on `main`, `55d9121`. `test_phase23.py` is **400/400**, up from 394.
 
 > **Backend/pipeline work has its own state doc: `PHASE23_HANDOFF.md`.** Read it
 > first if you are touching `llm_client.py`, the agents, the pipeline or the
 > platform API — §4.x there is the per-defect detail this file summarises. This
 > file remains the frontend and general entry point.
+
+**The headline: `16/16` was not true, and no build score before today was.**
+The runtime smoke test sent `json={}` to every POST and PUT, so validation
+rejected the body with 422 *before the handler was entered* — and 422 counts as
+"responded without a server error". **Every write endpoint in every build ever
+run was scored green without executing a line of itself.** Row 3 was reported
+16/16 while four routes raised `AttributeError` on every call. Fixed in
+`55d9121` (§0.6); the same project now scores 12/16 and names all four.
+
+**The second finding is the one to act on next.** Given those four failures and
+the file they are in, the debugger **cannot repair them, and makes the code
+worse trying** — it rewrote `prod.sku` as `data.get("sku")` in one of the four
+handlers, turning a loud AttributeError into a silent `None` bound into a
+`NOT NULL UNIQUE` column. §0.7 has the diagnosis: the repair is shown
+`routes.py` and never `schemas.py`, so it cannot know whether to rename the read
+or add the field, and silencing is the only move left to it.
+
+**Row 4 (CLI) ran for the first time and behaved.** The smoke test skipped
+cleanly (`no FastAPI entry point`), no scaffold placeholder survived, no phantom
+parse defects. `done_with_context`, 882s, 105,999 tokens.
 
 **Where things stand.** Row 3 was rebuilt twice. The first rebuild was aborted
 deliberately once its log showed the pipeline burning one LLM call per generated
@@ -39,76 +59,85 @@ pipeline first, and about the model second — that is now the cheaper bet.
 
 ## 0. Next session — pick up here
 
-**Quota is the gate.** At the close of 2026-08-29 both models sat near 42-45K,
-below `run_live_matrix.py`'s 70,000 floor. It refills at ~8,333/hour/model
-(§0.4), so:
+**Restart the server before anything.** It runs `--no-reload` deliberately, so a
+running process holds the code it started with — and the session of 2026-08-30
+ended with a server still holding the *pre-fix* smoke probe. A row started
+against it would score write endpoints green again.
 
-| Wait | Buys |
-|---|---|
-| ~3h | the 70,000 gate — a row can start |
-| ~7h | ~100K/model — comfortable for one row 3 |
-| ~12h+ | two rows back to back |
+```bash
+venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+venv/Scripts/python.exe run_live_matrix.py --dry-run
+```
 
-`run_live_matrix.py --dry-run` reports the real number and costs nothing. **Run
-it first, every time.**
+**Quota at the close of 2026-08-30 (13:45 IST):**
+
+| Model | Left | Note |
+|---|---|---|
+| `openai/gpt-oss-120b` | ~127,000 | comfortable |
+| `openai/gpt-oss-20b` | ~41,000 | **the bottleneck** |
+
+**The token split has inverted, and planning must follow it.** The fast model
+used to be the cheap one; it is now the one that runs out. Row 3 on 2026-08-29
+spent 22K on 20b and 65K on 120b. The same row on 2026-08-30 spent **97.5K on
+20b** and 38.5K on 120b, because the tester, the reviewer and every remediation
+pass run on the fast model — and remediation is where the tokens now go.
+
+`MIN_TOKENS_TO_START` gates on the *best* model (`run_live_matrix.py:183`), so
+the driver will happily start a row the fast model cannot finish. **Check 20b by
+hand before starting one.** From ~41,000 it needs ~3.5h to reach the 70,000 gate
+and ~7h to be comfortable for a row.
 
 ### The order to work in
 
 | # | Work | Quota | Why this order |
 |---|---|---|---|
-| 1 | **Row 3 again** | ~90K | Eight fixes have never run together in one build. Cheapest way to find the next pipeline defect |
-| 2 | **Row 4** (CLI) | ~60K | Never run at all. Exercises §4.15 and the non-FastAPI path the smoke test must skip cleanly |
-| 3 | **Row 2** | ~90K | Its three causes are all fixed; a plain `done` is plausible here |
+| 1 | **The repair that cannot repair** (§0.7) | small — §0.3 verifies it for ~5K | The smoke test now *finds* the drift and the debugger *cannot fix it*, so today's fix currently converts a hidden defect into a documented one. It also silences the error, which is how §4.20 shipped an app with no routes |
+| 2 | **Row 2** | ~90-170K | Its three causes are fixed; needs 20b at 70K+. Never yet run against the fixed probe |
+| 3 | **Row 3 or row 1 again** | ~90-140K | Row 3's real score is knowable for the first time |
 | 4 | **Phase B1** | none | Start any time quota is short — see below |
 
-### 1. Row 3, and exactly what to check
+### 1. What rows 3 and 4 proved on 2026-08-30
 
-**Restart the server first.** `--no-reload` is deliberate, so a running process
-holds the code it started with — three of this session's runs were affected by
-forgetting to, and each cost a rebuild's worth of quota to learn nothing.
+Eight of the nine assertions from the previous session held, and every one is
+now *observed in a complete build* rather than inferred:
 
-```bash
-venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
-venv/Scripts/python.exe run_live_matrix.py --dry-run
-venv/Scripts/python.exe run_live_matrix.py --rows 3
-```
+| Expect | Result |
+|---|---|
+| `grep -c "does not parse" server.log` → 0 | ✅ 0, both rows |
+| smoke well above 7/19 | ✅ 16/16 reported — but see §0.6, it was really 12/16 |
+| no `scaffold placeholder: README.md` | ✅ none, both rows |
+| no `imports … inside a try/except that swallows` | ✅ none |
+| no `alembic/env.py` in the failing list | ✅ — and the architect emitted **no `alembic/__init__.py`**, so §4.21's shadowing is fixed at the source |
+| no `No module named 'main'` from a test | ✅ 0 |
+| `🗄️ SQL schema check` fires or stays silent | ✅ silent — correct for the ORM shape row 3 produced |
+| `🧬 pydantic V2 compat` silent, 0 `orm_mode` | ✅ |
+| status `done`, not `done_with_context` | ❌ **still never observed, on any row, ever** |
 
-Every one of these is a *new* assertion — none has been observed in a complete
-build, because each fix landed after the run that motivated it:
+Row 4 additionally proved the non-FastAPI path: `Runtime smoke test skipped (no
+FastAPI entry point)` — a clean skip, not a false failure. `done_with_context`,
+882s, 105,999 tokens, 2 unresolved issues (both ordinary test failures).
 
-| Expect | Proves | Was |
+### 2. Row 3 cost 56% more than the run before it, and why
+
+| | run 3 (2026-08-29) | run 4 (2026-08-30) |
 |---|---|---|
-| `grep -c "does not parse" server.log` → **0** | §4.13 | 8 wasted calls per build |
-| `🔥 Runtime smoke test: N/N` well above 7/19 | §4.17 lifespan | 12 false 500s |
-| **no** `scaffold placeholder: README.md` | §4.19 | degraded every build with a README |
-| **no** `imports … inside a try/except that swallows` | §4.20 | shipped an app with 0 routes |
-| **no** `alembic/env.py` in the failing list | §4.21 | false failure, 2 debugger attempts |
-| **no** `No module named 'main'` from a test | §4.21 | false failure |
-| `🗄️ SQL schema check` fires **or** stays silent | §4.18 | silence is correct for an ORM project |
-| `🧬 pydantic V2 compat` silent, 0 `orm_mode` | §4.16 | the prompt rule should make the pass a no-op |
-| status `done`, not `done_with_context` | nothing left degrading it | never once observed |
+| tokens | 87,551 | **136,043** |
+| duration | 729s | **1142s** |
+| first smoke | — | **0/16** |
+| remediation passes | 0 | **2** |
 
-**Architect variance matters when reading the result.** Row 3 produced raw
-`sqlite3` on run 2 and SQLAlchemy + alembic on run 3, from the same prompt. Some
-checks only apply to one shape (the SQL schema check needs `CREATE TABLE`;
-§4.21's alembic fixes need an alembic project). A silent check is not a failed
-check — confirm which shape you got before concluding anything.
+`main.py`'s lifespan created the SQLite *file* and never the *tables* — it
+assumed `alembic upgrade head`, which nothing runs. All 16 routes answered
+`OperationalError`, and two full remediation passes were spent getting back to a
+working app. **The architect chose the alembic shape and then nothing ran a
+migration.** Either the lifespan must create tables regardless, or the build must
+run the migration; today it does neither and the debugger pays for it. This is
+the largest cheap saving available.
 
-### 2. What is most likely to bite next
-
-Ranked by what this session actually saw, not by guesswork:
-
-1. **The debugger repairing a file into a worse one.** Observed three times: it
-   commented out `engine = create_engine(...)` and left three uses of `engine`;
-   it wrapped five imports in `try/except: pass` and shipped an app with no
-   routes; it deleted nine top-level names and was caught only by the shrinkage
-   guard. The guards catch the crude cases. The subtle ones ship.
-2. **A1 assertion 2 — a build reaching plain `done`** — has still never been
-   observed, across every row ever run.
-3. **Phase C stays blocked.** Its premise is that build quality is limited by
-   missing precedent. **Eighteen diagnosed failures, and every one has been a
-   mechanical defect.** The premise is now substantially less likely than when
-   it was written; revisit it before spending anything on it.
+Note what the debugger's fix was: it rewrote `routes.py` onto raw `sqlite3` with
+its own `CREATE TABLE IF NOT EXISTS`, so the shipped project declares its schema
+**twice** — in `models.py` (SQLAlchemy + alembic) and again in `routes.py`. It
+works, and it is exactly the drift §4.18 exists to catch.
 
 ### 3. Phase B1 — the no-quota track
 
@@ -120,9 +149,9 @@ all five route modules and the tests, so reimplementing their bodies over
 SQLAlchemy means zero call-site changes. Alembic's first revision must be
 **stamped** against the existing DB so the live builds survive.
 
-Note the irony worth remembering while doing it: §4.21 exists because a
-generated project's `alembic/` folder was made into a package that shadowed the
-real alembic. Do not repeat that in `api_platform/`.
+Note the irony worth remembering while doing it: §4.21 exists because a generated
+project's `alembic/` folder was made into a package that shadowed the real
+alembic. Do not repeat that in `api_platform/`.
 
 ---
 
@@ -152,6 +181,7 @@ against the real API on a real project, not that a full build was rebuilt.
 | 4.19 | An audit no longer reports on a step that has not run yet | ✅ᵒ | README was 46 lines when it was called unfilled |
 | 4.20 | An import hidden in a module-level try/except is seen | ✅ | "all clean" → **6 defects** on the file that shipped 0 routes |
 | 4.21 | Three false verification failures: package shadowing, framework scripts, test sys.path | ✅ | `alembic/env.py` and `test_stock.py` both cleared |
+| 4.22 | A write endpoint is probed with a body its model accepts, so the handler actually runs | ✅ | **16/16 → 12/16 on the shipped project**, naming 4 real defects; `POST /warehouses/` answers 201 |
 
 ### §4.13 — the one that was costing the most
 
@@ -261,7 +291,7 @@ false failure had been hiding the true one.
 |---|---|
 | `tools/code_patcher.py` | **New.** Locate one top-level block from a traceback frame, splice a replacement back, refuse anything that does not parse; read a file's imports |
 | `tools/requirements_builder.py` | Strips the scaffold placeholder once real packages are written — including when there is nothing to add (§4.15); adds uvicorn for a FastAPI app that never imports it |
-| `tools/runtime_smoke.py` | An import-time failure reports its frame chain; **the TestClient is entered as a context manager so lifespan runs** (§4.17) |
+| `tools/runtime_smoke.py` | An import-time failure reports its frame chain; **the TestClient is entered as a context manager so lifespan runs** (§4.17); **a write endpoint is probed with a body synthesised from its own request model, so the handler actually executes** (§0.6) |
 | `tools/sql_schema_check.py` | **New.** Collects every `CREATE TABLE` and checks SQL literals against it, zero tokens, precision over recall (§4.18) |
 | `tools/pydantic_compat.py` | **New.** Renames V1 config keys V2 silently ignores; leaves `.json()`, `.dict()` and `@validator` alone (§4.16) |
 | `tools/code_introspect.py` | Project-relative paths resolve; `read_error` ≠ `parse_error` (§4.13); module-level `try/if/with` imports are seen and marked guarded (§4.20); `shadows_installed_package` (§4.21) |
@@ -360,11 +390,12 @@ not strictly need a rebuild.
 
 | Item | Cost | Notes |
 |---|---|---|
-| Row 3 once more, then rows 4 and 2 | ~90K / ~60K / ~90K | eight fixes have never run together in one build |
+| Row 2, then rows 3 and 1 against the fixed probe | ~170K / ~140K / ~60K | rows 3 and 4 are done (2026-08-30); **20b must be at 70K+ first**, see §0 |
 | A1 assertion 2 — a build reaching plain `done` | falls out of the above | never once observed, on any row, ever |
+| **The lifespan that creates no tables** | ~0 to diagnose | row 3 opened at 0/16 and burned 2 remediation passes and ~48K tokens getting back. The architect picks alembic and nothing runs a migration — §0 item 2 |
 | Phase B1-B5 | none | `PHASE23_PLAN.md`; B1 first, and startable while quota refills |
 | Phase C — vector memory | blocked | 18 diagnosed failures, all mechanical. Re-examine the premise before spending on it |
-| **A debugger repair that makes a file worse** | unknown | the sharpest open risk — see §0's "what is most likely to bite next". Guards catch the crude cases; the subtle ones ship |
+| **A debugger repair that makes a file worse** | small — §0.3 verifies for ~5K | **No longer hypothetical: caught in the act 2026-08-30.** It rewrote `prod.sku` as `data.get("sku")`, silencing an AttributeError into a `None` in a NOT NULL column. Diagnosis and the two-part fix are in §0.7 |
 | The Reviewer's 600-token budget | none | it always received 1,600 from the reasoning floor; now that `gpt-oss-20b` takes `reasoning_effort` the floor no longer applies, so the table wants re-tuning against measurement |
 | The ledger cannot see other processes | none | per-checkout; two servers sharing the file will under-count. One at a time |
 | Running the suite during a live build | none | fixed for the one assertion that flaked (it read wall-clock against a seeded clock); if another flakes, suspect the same shape before suspecting the code |
@@ -373,6 +404,103 @@ not strictly need a rebuild.
 the debugger routing around §4.17's broken smoke test, not a model failure. With
 the lifespan actually running, the repair no longer needs the pattern the prompt
 forbids.
+
+## 0.6 The smoke test's write coverage was fictional
+
+`RouteProbe.ok` is `status < 500`, which is right: a 4xx is a valid answer to an
+unauthenticated, unparameterised probe. But the probe sent `json={}` to every
+POST and PUT, so **every write route failed validation with 422 and was counted
+as a pass** — the handler body never ran. There was no coverage of write paths at
+all, in any build, ever, and the score said otherwise.
+
+Row 3 on 2026-08-30 was reported `16/16` while four routes were dead:
+
+```
+routes.py   INSERT INTO supplier (name, contact) ...  reads sup.contact
+schemas.py  class SupplierBase: name, contact_email   -> AttributeError
+
+routes.py   INSERT INTO product (..., sku, ...)       reads prod.sku
+schemas.py  class ProductBase: name, description, price, supplier_id
+                                                      -> AttributeError
+```
+
+It is §4.18's two-files drift one layer up — a Pydantic attribute against a SQL
+column rather than SQL against `CREATE TABLE` — and no gate could see it, because
+nothing ever called the handlers.
+
+**The fix (`55d9121`).** The probe now synthesises a minimal body from the route's
+own request model: required fields only, resolving `Optional`, `List`, `Enum` and
+nested models, on both pydantic v1 and v2. Measured on the shipped project with
+the database deleted first:
+
+| | old probe | fixed probe |
+|---|---|---|
+| score | 16/16 | **12/16** |
+| defects named | 0 | **4**, all real, blame on `routes.py` |
+
+Precision is protected two ways, in the spirit of `sql_schema_check`:
+
+- a field that cannot be synthesised confidently falls back to `{}` and the old
+  422 — `POST /stock_movements/` does exactly this and is not reported;
+- a 5xx raised by a **database constraint rejecting the probe's invented row** (a
+  `supplier_id` that does not exist, a name already taken) is not counted against
+  the app, because that depends on data we made up.
+
+The guarantee runs the other way too: `POST /warehouses/` answers **201**, so the
+synthesised body is genuinely valid and the handler genuinely executed. A green
+write route now means something.
+
+`test_phase23.py` §40 asserts both halves — the drift is caught, *and* a correct
+POST is executed rather than 422'd. §40a asserts the constraint tolerance.
+
+---
+
+## 0.7 The repair that cannot repair — do this next
+
+Finding the drift is not fixing it. Verified by §0.3's technique against a clone
+of the shipped row 3 project, driving the real debugger against the real API:
+
+| | routes |
+|---|---|
+| before repair | 12/16 |
+| after one real `_repair_runtime_error` pass | **13/16** |
+
+And the single route it gained is not a fix. `PUT /products/{id}` now returns 404
+because the probe's id does not exist, so execution stops before reaching the
+bug. Three routes still fail with byte-identical errors.
+
+**What the repair actually did**, in full:
+
+```python
+-        (prod.name, prod.sku, prod.supplier_id, product_id),
++        data = prod.dict()
++        (data.get("name"), data.get("sku"), data.get("supplier_id"), product_id),
+```
+
+It converted a loud `AttributeError` into a silent `None` bound into a `NOT NULL
+UNIQUE` column, in one of the four broken handlers and none of the others. It
+parses, it imports, it survives every guard — **this is the "repair makes the
+file worse" risk of §0.5 in its subtle form, caught in the act for the first
+time.**
+
+**Why it cannot do better.** The repair is handed `routes.py` and never
+`schemas.py`. The exception names the class (`SupplierCreate`) but not its
+fields, so the model cannot know whether the correct fix is renaming the read or
+adding the field — and silencing is the only move left. §0.2's fourth blame rule
+already says this: *a bad symbol imported from elsewhere is repaired where it is
+defined.* The rule is right and this path does not apply it.
+
+Two changes, both small, and §0.3 verifies them for ~5K tokens:
+
+1. **Give the repair the defining file.** When a runtime `AttributeError` names a
+   class, include that class's source in the prompt — or aim the repair at the
+   file defining it, which is what the blame rule already prescribes.
+2. **Forbid the silencing.** `prompts/debugger.txt` already carries "never
+   silence an import" from §4.20. `.get()` on a Pydantic model to dodge an
+   AttributeError is the same move in a new place, and it is worse: an import
+   error fails loudly at boot, a `None` in a `NOT NULL` column corrupts data.
+
+---
 
 ---
 
