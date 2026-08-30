@@ -119,10 +119,12 @@ the verifiers already produce, so there is one vocabulary. A missing feature or
 a failing test is still `done_with_context` — that is something a user can
 finish.
 
-**Plain `done` is still unreachable** and was deliberately left alone: it ANDs
-nine conditions including 100% of generated tests passing and no `TODO`
-substring in any function body. Worth revisiting; it is a separate change from
-making failure visible.
+**Plain `done` was reached for the first time** — row 4, 2026-08-30, §0.8. The
+gate was deliberately left alone: it still ANDs nine conditions, including 100%
+of generated tests passing and no `TODO` substring in any function body. It
+turns out to be satisfiable after all, once the checks stop inventing findings
+and remediation can actually repair what it reports. Whether nine ANDed
+conditions is the *right* gate is a separate question, still open.
 
 ### Prompt contradictions that were producing the errors
 
@@ -417,7 +419,7 @@ not strictly need a rebuild.
 | Item | Cost | Notes |
 |---|---|---|
 | Row 2, then rows 3 and 1 against the new checks | ~170K / ~140K / ~60K | the static-frontend and route-contract checks have never run on a fresh build; **check 20b by hand**, see §0 |
-| A1 assertion 2 — a build reaching plain `done` | falls out of the above | never once observed, on any row, ever |
+| ~~A1 assertion 2 — a build reaching plain `done`~~ | **met** | row 4 on 2026-08-30, with positive evidence rather than silence — §0.8 |
 | ~~The lifespan that creates no tables~~ | **addressed** | the architect is now forbidden to plan an `alembic/` layout and every prompt agrees on raw sqlite3, so the shape that needed a migration nobody runs is not planned. Unproven until a row 3 rebuild |
 | Phase B1-B5 | none | `PHASE23_PLAN.md`; B1 first, and startable while quota refills |
 | Phase C — vector memory | blocked | 18 diagnosed failures, all mechanical. Re-examine the premise before spending on it |
@@ -556,6 +558,89 @@ correct repair 15 to 14. Catching it needs a deterministic check in the shape of
 parameter against the model's declared fields, at zero tokens. That is the
 natural next tool, and it would have caught both defects before a single LLM call
 was spent.
+
+---
+
+## 0.8 The live run — row 4, 2026-08-30, and the first plain `done`
+
+One row, chosen because it is the shape this work changes most and because the
+headline assertion is answered at step 3 for ~2K tokens.
+
+```
+status  done          109,206 tokens   932s   zip ok (14,283 bytes)
+shape   cli           (previous run: web_api+cli)
+```
+
+**A1 assertion 2 is met for the first time.** `SESSION_PROGRESS.md` had recorded
+plain `done` as *"still never observed, on any row, ever"*, and Phase C's memory
+gate (`status == done` + `review_score >= 7` + clean smoke) was unsatisfiable
+because of it.
+
+**It is earned, not silent** — which is the first thing to check, given that
+"silence reads as clean" is the defect this whole session was about. The stored
+record carries **positive evidence**, not four blanks:
+
+| check | verdict | why |
+|---|---|---|
+| `cli_smoke` | **verified** | ran 2 entry points; `--help` exits 0 |
+| `feature_coverage` | **verified** | 4/4 requested features have supporting code |
+| `web_assets` | not applicable | ships no HTML page |
+| `package_smoke` | not applicable | this project is run, not imported |
+
+Zero `NOT_RUN`. Two checks executed the artifact and found it sound.
+
+### What the architect produced
+
+```
+bulk_file_renamer/{cli,renamer,undo_log,logger,main}.py   requirements.txt   tests/
+```
+
+**No `backend/`, no routes, no CORS, zero FastAPI.** The previous run of the
+same prompt produced `routes.py`, `services.py`, `models.py` and a FastAPI
+`main.py`, of which the app served exactly one route — `GET /health` — beside
+the CLI that had been asked for. `feature_coverage` reports "0 route(s)", which
+is now the correct number.
+
+### The repair-reach fix, on a real build
+
+The only repairable finding was *"Generated tests fail for 3 file(s)"*, and it
+logged `🐛 Debugging 3 Python files` — the debugger aimed at the files under
+test. Before `0ffe495` that exact finding contributed no `failed_paths`, so
+remediation would have announced a repair, found nothing to repair, logged "made
+no progress", and degraded the build. Remediation fixed the tests and the build
+reached `done`.
+
+### Two things this run taught that offline work could not
+
+1. **The dual-model fallback earned its keep.** 20b hit its daily quota during
+   the tester and the run continued on 120b. Starting at 73,286 on the fast
+   model was marginal and the row survived only because the models are distinct
+   — the reason `groq-models-decommissioned` says never to set both to the same
+   model.
+2. **Reading the persisted record found two reporting defects the status line
+   hid** (fixed in `8c956e6`): `verification_outcomes` appended instead of
+   replacing, so every check appeared twice and no reader could tell which run
+   they were seeing; and `smoke_summary` stored *"smoke test did not run (no
+   FastAPI entry point found)"* for a CLI — accurate about the probe, and
+   reading as a failure when the answer is "does not apply".
+
+### Quota after
+
+| Model | Left |
+|---|---|
+| `openai/gpt-oss-120b` | ~119,400 |
+| `openai/gpt-oss-20b` | **~25,800** |
+
+The fast model needs ~5.5h to reach the 70,000 gate. **Row 2 is the next row**
+and it is the one the static-frontend and route-contract checks were written
+for; do not start it on 20b below ~90K.
+
+### Still unproven live
+
+Row 2 (the frontend contradiction fix, `web_asset_check` on a fresh build) and
+row 3 (the persistence pinning, and its real score under §0.6's probe). Both are
+prompt-and-generation changes, which §0.3's clone technique explicitly cannot
+exercise — only a rebuild can.
 
 ---
 
