@@ -1,6 +1,6 @@
 # Phase 23 A2 — live matrix results
 
-*Run 2026-08-29T12:29:05*
+*Run 2026-08-30T13:21:21*
 
 Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done_with_context` with a downloadable ZIP, and every build that boots reports **0 5xx** from the runtime smoke test.
 
@@ -10,7 +10,7 @@ Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done
 
 | Row | Shape | Status | Tokens | Duration | Files | ZIP |
 |-----|-------|--------|--------|----------|-------|-----|
-| 3 | complex / multi-entity | `done_with_context` | 87,551 | 729s | 24 | yes |
+| 3 | complex / multi-entity | `done_with_context` | 136,043 | 1142s | 25 | yes |
 
 The smoke-test line is not in the API — read it from the server log:
 
@@ -22,9 +22,9 @@ grep -E "Runtime smoke test|failed to boot|no FastAPI entry point" server.log
 
 ### Row 3 — complex / multi-entity
 
-- build_id: `e6a1da32-f018-446d-996d-c4d8c4d59402`
-- status: `done_with_context` — Build completed with 3 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
+- build_id: `90ee973f-1bf8-4855-889e-11aa35c418ce`
+- status: `done_with_context` — Build completed with 1 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
 - progress: 100.0%
-- tokens by model: `{"openai/gpt-oss-20b": 22234, "openai/gpt-oss-120b": 65317}`
-- download: HTTP 200, application/zip, 22,611 bytes
+- tokens by model: `{"openai/gpt-oss-20b": 97506, "openai/gpt-oss-120b": 38537}`
+- download: HTTP 200, application/zip, 23,787 bytes
 - expected to boot: yes

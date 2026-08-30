@@ -3271,6 +3271,96 @@ try:
 finally:
     shutil.rmtree(_pi_dir, ignore_errors=True)
 
+# ---- 40. A write endpoint must be probed with a body its model accepts -----
+# The smoke test sent `json={}` to every POST/PUT, so validation rejected it
+# with 422 before the handler ran -- and 422 counts as "responded without a
+# server error". Row 3 on 2026-08-30 was scored 16/16 while every POST and PUT
+# to /suppliers/ and /products/ raised AttributeError: routes.py read
+# `sup.contact` and `prod.sku`, and schemas.py declared `contact_email` and no
+# `sku` at all. Six write routes were green without one line of them running.
+_SB_APP = '''
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import Optional
+
+
+class SupplierCreate(BaseModel):
+    name: str
+    contact_email: Optional[str] = None
+
+
+class Ok(BaseModel):
+    name: str
+
+
+app = FastAPI()
+
+
+@app.post("/suppliers/")
+def create(sup: SupplierCreate):
+    # the drift: the model declares contact_email, the handler reads contact
+    return {"name": sup.name, "contact": sup.contact}
+
+
+@app.post("/ok/")
+def ok(item: Ok):
+    return {"name": item.name}
+
+
+@app.get("/items/")
+def items():
+    return []
+'''
+
+_sb_root = "_test_smoke_body"
+_sb_dir = Path(config.OUTPUT_DIR) / _sb_root
+shutil.rmtree(_sb_dir, ignore_errors=True)
+try:
+    _sb_dir.mkdir(parents=True)
+    (_sb_dir / "main.py").write_text(_SB_APP, encoding="utf-8")
+    from tools.runtime_smoke import smoke_test_app as _sta40         # noqa: E402
+
+    _sb = _sta40(_sb_root)
+    _sb_by = {(_p.method, _p.path): _p for _p in _sb.probes}
+    _sb_bad = _sb_by.get(("POST", "/suppliers/"))
+    _sb_good = _sb_by.get(("POST", "/ok/"))
+
+    check("a POST whose handler reads a field its model lacks is now a failure",
+          _sb_bad is not None and not _sb_bad.ok,
+          f"status={getattr(_sb_bad, 'status', None)}")
+    check("...and the error names the attribute, not just '500'",
+          _sb_bad is not None and "contact" in _sb_bad.error,
+          getattr(_sb_bad, "error", "")[:160])
+    check("...and blame is aimed at the file that raised",
+          _sb_bad is not None and _sb_bad.blame_file.endswith("main.py"),
+          getattr(_sb_bad, "blame_file", ""))
+    # The other half of the guarantee: a correct write route must really run,
+    # not merely fail validation. A 2xx proves the synthesised body was valid,
+    # so a green score now means the handler executed.
+    check("a correct POST is executed for real, not answered with 422",
+          _sb_good is not None and _sb_good.status is not None
+          and _sb_good.status < 300,
+          f"status={getattr(_sb_good, 'status', None)}")
+finally:
+    shutil.rmtree(_sb_dir, ignore_errors=True)
+
+
+# ---- 40a. A constraint rejecting the synthetic row is not a code defect -----
+# The body is invented, so a supplier_id that does not exist or a name already
+# taken can raise IntegrityError. Blaming the handler for that would spend a
+# repair call editing correct code -- the false positive sql_schema_check was
+# built to avoid. Precision over recall, as everywhere else in verification.
+from tools.runtime_smoke import RouteProbe as _RP40                  # noqa: E402
+
+check("an IntegrityError 500 from the probe's own row is not counted against the app",
+      _RP40(path="/p/", method="POST", status=500,
+            error="IntegrityError: UNIQUE constraint failed: supplier.name",
+            constraint=True).ok)
+check("...while any other 500 still is",
+      not _RP40(path="/p/", method="POST", status=500,
+                error="AttributeError: no attribute 'contact'").ok)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

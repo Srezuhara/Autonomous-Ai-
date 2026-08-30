@@ -71,11 +71,19 @@ class RouteProbe:
     method: str
     status: int | None = None
     error:  str = ""
+    constraint: bool = False
 
     @property
     def ok(self) -> bool:
         # A route that answers at all is working: 4xx is a valid answer to an
         # unauthenticated / unparameterised probe. 5xx is the app breaking.
+        #
+        # The exception is a 5xx raised by a database constraint rejecting the
+        # synthetic body the probe invented (a supplier_id that does not exist,
+        # a name already taken). That says nothing about the handler, and
+        # blaming it would spend a repair call on correct code.
+        if self.constraint:
+            return True
         return self.status is not None and self.status < 500
 
     @property
@@ -217,7 +225,128 @@ try:
         for m in methods:
             if m in ("HEAD", "OPTIONS"):
                 continue
-            routes.append((path, m))
+            routes.append((path, m, r))
+
+    # ---- Synthesised request bodies -------------------------------------
+    # Sending `json={}` makes every POST/PUT fail validation and return 422,
+    # which `RouteProbe.ok` counts as a pass -- so the handler body never runs
+    # and a write path is scored green without executing a single line of it.
+    # Row 3 on 2026-08-30 shipped `16/16` while every POST /suppliers/ raised
+    # AttributeError, because routes.py read `sup.contact` and schemas.py
+    # declared `contact_email`. Build a minimal body that satisfies the route's
+    # own request model so the handler actually executes.
+    #
+    # Precision over recall (as in tools/sql_schema_check): when a field cannot
+    # be synthesised confidently we fall back to `{}` and accept the old 422
+    # rather than invent a value that could fail validation for our reasons.
+    import datetime as _dt, enum as _enum, typing as _t, uuid as _uuid
+
+    def _example_value(ann, depth=0):
+        if ann is None or depth > 3:
+            return None
+        try:
+            origin = _t.get_origin(ann)
+            args = _t.get_args(ann)
+        except Exception:
+            origin, args = None, ()
+        if origin is not None:
+            is_union = origin is _t.Union
+            if not is_union:
+                try:
+                    import types as _types
+                    is_union = origin is getattr(_types, "UnionType", None)
+                except Exception:
+                    pass
+            if is_union:
+                for a in args:
+                    if a is type(None):
+                        continue
+                    return _example_value(a, depth + 1)
+                return None
+            if origin in (list, set, tuple, frozenset):
+                return []
+            if origin is dict:
+                return {}
+        try:
+            if isinstance(ann, type):
+                if issubclass(ann, _enum.Enum):
+                    vals = list(ann)
+                    return vals[0].value if vals else None
+                # bool before int, datetime before date: each is a subclass of
+                # the next and would otherwise be answered by the wrong branch.
+                if issubclass(ann, bool):
+                    return True
+                if issubclass(ann, int):
+                    return 1
+                if issubclass(ann, float):
+                    return 1.0
+                if issubclass(ann, _dt.datetime):
+                    return "2024-01-01T00:00:00"
+                if issubclass(ann, _dt.date):
+                    return "2024-01-01"
+                if issubclass(ann, _uuid.UUID):
+                    return "00000000-0000-0000-0000-000000000000"
+                if issubclass(ann, (str, bytes)):
+                    return "test"
+                if getattr(ann, "model_fields", None) is not None:
+                    return _example_model(ann, depth + 1)
+                if getattr(ann, "__fields__", None) is not None:
+                    return _example_model(ann, depth + 1)
+        except Exception:
+            return None
+        return None
+
+    def _example_model(model, depth=0):
+        """Required fields only -- the smallest body the model will accept."""
+        out = {}
+        mf = getattr(model, "model_fields", None)
+        if mf is not None:                                   # pydantic v2
+            for name, f in mf.items():
+                try:
+                    if not f.is_required():
+                        continue
+                except Exception:
+                    continue
+                v = _example_value(getattr(f, "annotation", None), depth)
+                if v is None:
+                    return None
+                out[getattr(f, "alias", None) or name] = v
+            return out
+        for name, f in (getattr(model, "__fields__", None) or {}).items():
+            if not getattr(f, "required", False):
+                continue
+            ann = getattr(f, "outer_type_", None) or getattr(f, "type_", None)
+            v = _example_value(ann, depth)
+            if v is None:
+                return None
+            out[getattr(f, "alias", None) or name] = v
+        return out
+
+    def _synth_body(route):
+        bf = getattr(route, "body_field", None)
+        if bf is None:
+            return {}
+        ann = getattr(bf, "type_", None)
+        if ann is None:
+            ann = getattr(getattr(bf, "field_info", None), "annotation", None)
+        v = _example_value(ann, 0)
+        return v if isinstance(v, (dict, list)) else {}
+
+    def _is_constraint(text):
+        """
+        A database constraint rejecting OUR invented row is not a code defect.
+
+        The body above is synthetic: supplier_id=1 need not exist, and "test"
+        may already be taken. Blaming the handler for that would spend an LLM
+        call editing correct code -- the false positive sql_schema_check was
+        built to avoid.
+        """
+        t = (text or "").lower()
+        return any(s in t for s in (
+            "integrityerror", "unique constraint", "foreign key constraint",
+            "not null constraint", "check constraint", "duplicate key",
+            "unique failed", "foreign key failed",
+        ))
 
     # raise_server_exceptions=True so the real exception reaches us. A bare
     # "500 Internal Server Error" tells the user nothing they can act on; the
@@ -244,7 +373,7 @@ try:
         client = TestClient(app, raise_server_exceptions=True)
         lifespan_ran = False
 
-    for path, method in routes[:25]:
+    for path, method, route_obj in routes[:25]:
         # Fill path params with a benign value so the URL is requestable.
         concrete = path
         while "{" in concrete and "}" in concrete:
@@ -254,23 +383,33 @@ try:
             filler = "1" if ("id" in name.lower() or "num" in name.lower()) else "test"
             concrete = concrete[:start] + filler + concrete[end + 1:]
 
-        entry = {"path": path, "method": method, "status": None, "error": ""}
+        entry = {"path": path, "method": method, "status": None, "error": "",
+                 "constraint": False}
         try:
             fn = getattr(client, method.lower(), None)
             if fn is None:
                 continue
-            resp = fn(concrete) if method in ("GET", "DELETE") else fn(concrete, json={})
+            if method in ("GET", "DELETE"):
+                resp = fn(concrete)
+            else:
+                try:
+                    body = _synth_body(route_obj)
+                except Exception:
+                    body = {}
+                resp = fn(concrete, json=body)
             entry["status"] = resp.status_code
             if resp.status_code >= 500:
                 try:
                     entry["error"] = resp.text[:300]
                 except Exception:
                     pass
+                entry["constraint"] = _is_constraint(entry["error"])
         except Exception as e:
             # An unhandled exception in a handler IS a 500 — record it as one,
             # with the detail the HTTP response would have thrown away.
             entry["status"] = 500
             entry["error"] = describe(e)
+            entry["constraint"] = _is_constraint(entry["error"])
         result["probes"].append(entry)
 
     # Shutdown, so anything the lifespan opened is closed before we report.
@@ -362,6 +501,7 @@ def smoke_test_app(root: str, timeout: int = SMOKE_TIMEOUT) -> SmokeResult:
                 result.probes.append(RouteProbe(
                     path=p.get("path", ""), method=p.get("method", ""),
                     status=p.get("status"), error=p.get("error", ""),
+                    constraint=bool(p.get("constraint", False)),
                 ))
         else:
             err = (proc.stderr or "").strip()
