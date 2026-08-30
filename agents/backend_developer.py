@@ -365,6 +365,19 @@ Return ONLY raw SQL. No markdown, no explanation."""
         except Exception as e:
             logger.warning(f"⚠️  [Phase 23] SQL schema check failed: {e}")
 
+        # The same drift one layer up: an attribute read on a Pydantic-typed
+        # parameter that the model does not declare. `routes.py` reads
+        # `prod.sku`; `schemas.py` never declared it. Both import; the SQL check
+        # cannot see it because the column DOES exist; and the runtime probe
+        # only reaches the handlers whose body it can synthesise — row 3's
+        # `mv.direction` is reachable by neither, and shipped.
+        try:
+            from tools.schema_attr_check import check_project_attributes
+            for issue in check_project_attributes(root).issues:
+                schema_defects.setdefault(issue.file, []).append(str(issue))
+        except Exception as e:
+            logger.warning(f"⚠️  [Phase 23] Schema attribute check failed: {e}")
+
         repaired, failed = 0, 0
 
         for path in written:

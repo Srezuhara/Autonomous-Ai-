@@ -27,6 +27,7 @@ All v2.2.0 features retained unchanged:
   Phase 17   — per-step token tracking
   Cooperative cancellation (cancel_check before each step)
 """
+import difflib
 import logging
 import os
 import re
@@ -819,6 +820,7 @@ class Pipeline:
             from tools.web_asset_check import check_web_assets
             from tools.feature_coverage import check_feature_coverage
             from tools.package_smoke import smoke_test_package
+            from tools.schema_attr_check import check_schema_attributes
             from tools.verification import collect_findings
         except Exception as e:
             logger.warning(f"  ⚠️  Shape verifiers unavailable: {e}")
@@ -848,6 +850,11 @@ class Pipeline:
             # and only the first was ever asked. intent["features"] reached
             # exactly one place before this: the README.
             ("feature_coverage", lambda r: check_feature_coverage(r, intent)),
+            # A field read that no model declares. Deterministic, and it sees
+            # the write paths the runtime probe cannot reach — the ones whose
+            # request body it could not synthesise, and the nullable column a
+            # silenced repair writes NULL into without ever raising.
+            ("schema_attr", check_schema_attributes),
         ):
             try:
                 outcomes.append(fn(root))
@@ -1066,6 +1073,11 @@ class Pipeline:
             blame = probe.blame_file
             if not blame:
                 continue
+            blame, note = self._redirect_missing_field_to_definition(
+                root, blame, probe.error
+            )
+            if note:
+                logger.info(f"  \U0001f9ed {note}")
             path = f"{root}/{blame}" if not blame.startswith(root) else blame
             existing = self._smoke_runtime_errors.get(path, "")
             entry = (
@@ -1139,6 +1151,79 @@ class Pipeline:
                     f"repairing {rel}, which defines it"
                 )
         return blame, ""
+
+    # An AttributeError names the class and the attribute, and nothing else.
+    _ATTR_ERROR = re.compile(
+        r"['\"]?(\w+)['\"]? object has no attribute ['\"](\w+)['\"]"
+    )
+
+    # How alike two field names have to be before one is read as a misspelling
+    # of the other. Judgment, not measurement — but calibrated against the three
+    # live cases it has to separate, and asserted in the suite so a change to it
+    # has to face them: contact/contact_email is 0.70, sku against ProductBase's
+    # closest field is 0.29, direction against StockMovementBase's is 0.53.
+    _RENAME_SIMILARITY = 0.6
+
+    def _redirect_missing_field_to_definition(
+        self, root: str, blame: str, error: str
+    ) -> tuple:
+        """
+        The fourth blame rule, applied to a request-time failure.
+
+        `_redirect_blame_to_definition` handles this for a boot failure. A 500
+        never reached it, so an `AttributeError` naming a class defined in
+        `schemas.py` sent the repair to `routes.py` — which can rename the read
+        or silence it, and can never add the field that is missing. That is what
+        the live measurement caught the debugger doing: `prod.sku` became
+        `data.get("sku")`, a silent None into a NOT NULL column, and it scored
+        HIGHER than the correct repair.
+
+        The two cases need opposite targets, and the model itself separates
+        them:
+
+          * `sup.contact` where the model declares `contact_email` — a
+            misspelling. Repair it where it is read; §0.7 proved the model does
+            this correctly once it can see the definition.
+          * `prod.sku` where the model declares nothing like it — the field is
+            genuinely absent, and no edit to `routes.py` can invent it. Repair
+            the file that defines the class.
+
+        Returns `(path, note)`, the blame unchanged when nothing applies — so a
+        failure that is not this shape keeps the frame-based rule.
+        """
+        try:
+            match = self._ATTR_ERROR.search(error or "")
+            if not match:
+                return blame, ""
+            class_name, attr = match.group(1), match.group(2)
+
+            from tools.schema_attr_check import find_model_definition
+            defining_file, fields = find_model_definition(root, class_name)
+            if not defining_file:
+                return blame, ""
+
+            rel = defining_file
+            if rel.startswith(f"{root}/"):
+                rel = rel[len(root) + 1:]
+            if rel == blame:
+                return blame, ""              # already aimed at the definition
+
+            if attr in fields:
+                return blame, ""              # the field exists; not this rule
+
+            close = difflib.get_close_matches(
+                attr, list(fields), n=1, cutoff=self._RENAME_SIMILARITY
+            )
+            if close:
+                return blame, ""              # a misspelling, repairable in place
+
+            return rel, (
+                f"`{class_name}` declares no `{attr}` and nothing like it "
+                f"({', '.join(fields) or 'no fields'}); repairing {rel}, which "
+                f"defines it, rather than {blame}, which only reads it"
+            )
+        except Exception:
+            return blame, ""
 
     _RUNTIME_ERROR_CHARS = 400
 

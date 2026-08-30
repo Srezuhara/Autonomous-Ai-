@@ -1,0 +1,49 @@
+{
+  "_comment": "Requested features for the corpus anchors, so tools/verify_corpus.py can exercise feature_coverage. The database stores projects.prompt but never the feature list the intent analyser produced, so without this the check answers 'not applicable' for every build and proves nothing. Feature wording is taken from the matrix prompts in run_live_matrix.py.",
+
+  "inventory_system_90ee973f": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "_live_verify_row3b": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "bulk_file_renamer_912f9b22": {
+    "features": [
+      "rename files in bulk by match pattern and replacement",
+      "a dry-run flag",
+      "an undo log",
+      "reverse a rename"
+    ]
+  },
+  "bulk_file_renamer_ab57297e": {
+    "features": [
+      "rename files in bulk by match pattern and replacement",
+      "a dry-run flag",
+      "an undo log",
+      "reverse a rename"
+    ]
+  },
+  "_live_verify_row2_final": {
+    "features": [
+      "full CRUD for bookmarks",
+      "tag filtering",
+      "a frontend that lists bookmarks",
+      "adds a bookmark through a form",
+      "filters by tag"
+    ]
+  }
+}

@@ -1,0 +1,1773 @@
+{
+  "_blame_probe": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: FastAPIError: Invalid args for response field! Hint: check that typing.List[services.BookmarkOut] is a valid Pydantic field type. If you are using a return type annotation that is not a valid Pydantic field (e.g. U (at backend/main.py:15 in <module> -> backend/routes.py:18 in <module>)",
+        "findings": [
+          "the application does not start: FastAPIError: Invalid args for response field! Hint: check that typing.List[services.BookmarkOut] is a valid Pydantic field type. If you are using a return type"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "5 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`data.created_at` is read at line 63, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `created_at` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.tags` is read at line 103, but `data` is a `BookmarkUpdate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `tags` to BookmarkUpdate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.tags` is read at line 62, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `tags` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.updated_at` is read at line 104, but `data` is a `BookmarkUpdate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `updated_at` to BookmarkUpdate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.updated_at` is read at line 64, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `updated_at` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "10 python file(s) scanned",
+        "findings": [
+          "SQL in this file reads column `tags` from table `bookmarks`, which has no such column. The table is created with: created_at, description, id, title, url. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema.",
+          "SQL in this file reads column `updated_at` from table `bookmarks`, which has no such column. The table is created with: created_at, description, id, title, url. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema."
+        ],
+        "status": "failed"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
+        "findings": [
+          "_blame_probe/frontend/app.js is loaded as a module and imports `axios`, a bare specifier a browser cannot resolve without an import map or a bundler \u2014 the page fails on load",
+          "_blame_probe/frontend/app.js is loaded as a module and imports `react`, a bare specifier a browser cannot resolve without an import map or a bundler \u2014 the page fails on load"
+        ],
+        "status": "failed"
+      }
+    },
+    "shape": "web_api+static_frontend"
+  },
+  "_live_verify_row2_final": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "5/5 requested feature(s) have supporting code (6 route(s), 17 function(s) across web_api+static_frontend)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "6/6 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "6 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`data.created_at` is read at line 55, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `created_at` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.tags` is read at line 54, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `tags` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.tags` is read at line 95, but `data` is a `BookmarkUpdate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `tags` to BookmarkUpdate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.updated_at` is read at line 56, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `updated_at` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.updated_at` is read at line 96, but `data` is a `BookmarkUpdate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `updated_at` to BookmarkUpdate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "10 python file(s) scanned",
+        "findings": [
+          "SQL in this file reads column `tags` from table `bookmarks`, which has no such column. The table is created with: created_at, description, id, title, url. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema.",
+          "SQL in this file reads column `updated_at` from table `bookmarks`, which has no such column. The table is created with: created_at, description, id, title, url. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema."
+        ],
+        "status": "failed"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
+        "findings": [
+          "_live_verify_row2_final/frontend/app.js is loaded as a module and imports `axios`, a bare specifier a browser cannot resolve without an import map or a bundler \u2014 the page fails on load",
+          "_live_verify_row2_final/frontend/app.js is loaded as a module and imports `react`, a bare specifier a browser cannot resolve without an import map or a bundler \u2014 the page fails on load"
+        ],
+        "status": "failed"
+      }
+    },
+    "shape": "web_api+static_frontend"
+  },
+  "_live_verify_row3_control": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "15/16 routes responded without a server error",
+        "findings": [
+          "POST /products/ -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "15 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "16 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "_live_verify_row3_definitions": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "14/16 routes responded without a server error",
+        "findings": [
+          "POST /products/ -> 500",
+          "PUT /products/{product_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "15 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`mv.direction` is read at line 247, but `mv` is a `StockMovementCreate`, which declares movement_type, product_id, quantity, timestamp, warehouse_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `direction` to StockMovementCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`prod.sku` is read at line 153, but `prod` is a `ProductCreate`, which declares description, name, price, supplier_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `sku` to ProductCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "16 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "_live_verify_row3b": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "6/6 requested feature(s) have supporting code (19 route(s), 23 function(s) across web_api)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "19/19 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "23 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "15 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "ai_pdf_reader": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 1 CLI entry point(s): ai_pdf_reader/cli_tool.py",
+        "findings": [
+          "the command-line tool ai_pdf_reader/cli_tool.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_pdf_reader\\cli_tool.py\", line 11, in <module>\n    from ai_pdf_reader.backend.va"
+        ],
+        "status": "failed"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ImportError: cannot import name 'router' from 'routes' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_pdf_reader\\backend\\routes\\__init__.py) (at backend/main.py:12 in <module>)",
+        "findings": [
+          "the application does not start: ImportError: cannot import name 'router' from 'routes' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_pdf_reader\\backend\\routes\\__ini"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "14 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`pdf_data.pdf_file` is read at line 23, but `pdf_data` is a `PDFData`, which declares content, id, title. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `pdf_file` to PDFData where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`search_query.pdf_file` is read at line 32, but `search_query` is a `SearchQuery`, which declares query. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `pdf_file` to SearchQuery where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`summary_request.num_sentences` is read at line 40, but `summary_request` is a `SummaryRequest`, which declares pdf_data. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `num_sentences` to SummaryRequest where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`summary_request.pdf_file` is read at line 40, but `summary_request` is a `SummaryRequest`, which declares pdf_data. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `pdf_file` to SummaryRequest where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "36 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 2 frontend call(s) checked against 4 declared route(s)",
+        "findings": [
+          "ai_pdf_reader/frontend/main.js calls `/api/data`, which the backend does not serve. Declared routes: /authenticate_biometric, /search_pdf, /summarize_pdf, /upload_pdf",
+          "ai_pdf_reader/frontend/main.js calls `/api/summarize`, which the backend does not serve. Declared routes: /authenticate_biometric, /search_pdf, /summarize_pdf, /upload_pdf",
+          "main.js uses `import`/`export` but ai_pdf_reader/frontend/index.html loads it as a classic script \u2014 add type=\"module\" or the browser raises a syntax error before any of it runs"
+        ],
+        "status": "failed"
+      }
+    },
+    "shape": "web_api+cli+static_frontend"
+  },
+  "ai_report_generator": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 2 CLI entry point(s): ai_report_generator/backend/cli.py, ai_report_generator/backend/main.py",
+        "findings": [
+          "the command-line tool ai_report_generator/backend/cli.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator\\backend\\cli.py\", line 10, in <module>\n    from data_analysis i",
+          "the command-line tool ai_report_generator/backend/main.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator\\backend\\main.py\", line 3, in <module>\n    from routes import r"
+        ],
+        "status": "failed"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: NameError: name 'List' is not defined (at backend/main.py:3 in <module> -> backend/routes.py:3 in <module> -> backend/services.py:3 in <module> -> backend/data_analysis.py:27 in <module>)",
+        "findings": [
+          "the application does not start: NameError: name 'List' is not defined (at backend/main.py:3 in <module> -> backend/routes.py:3 in <module> -> backend/services.py:3 in <module> -> backend/data_"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "5 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "35 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 0 frontend call(s) checked against 1 declared route(s)",
+        "findings": [],
+        "status": "verified"
+      }
+    },
+    "shape": "web_api+cli+static_frontend"
+  },
+  "ai_report_generator_7bb61c1e": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ModuleNotFoundError: No module named 'services.weather_api'; 'services' is not a package (at backend/main.py:6 in <module> -> backend/services.py:4 in <module>)",
+        "findings": [
+          "the application does not start: ModuleNotFoundError: No module named 'services.weather_api'; 'services' is not a package (at backend/main.py:6 in <module> -> backend/services.py:4 in <module>)"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "12 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "ai_report_generator_941887e1": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 1 CLI entry point(s): ai_report_generator_941887e1/backend/main.py",
+        "findings": [
+          "the command-line tool ai_report_generator_941887e1/backend/main.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator_941887e1\\backend\\main.py\", line 23, in <module>\n    app = Fast"
+        ],
+        "status": "failed"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: AssertionError: A title must be provided for OpenAPI, e.g.: 'My API' (at backend/main.py:23 in <module>)",
+        "findings": [
+          "the application does not start: AssertionError: A title must be provided for OpenAPI, e.g.: 'My API' (at backend/main.py:23 in <module>)"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "2 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "5 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api+cli"
+  },
+  "ai_report_generator_99c7dfed": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ModuleNotFoundError: No module named 'cors' (at backend/main.py:17 in <module>)",
+        "findings": [
+          "the application does not start: ModuleNotFoundError: No module named 'cors' (at backend/main.py:17 in <module>)"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "2 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "10 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "ai_report_generator_c60361c0": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 1 CLI entry point(s): ai_report_generator_c60361c0/ai_report_generator/backend/main.py",
+        "findings": [
+          "the command-line tool ai_report_generator_c60361c0/ai_report_generator/backend/main.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator_c60361c0\\ai_report_generator\\backend\\main.py\", line 15, in <mo"
+        ],
+        "status": "failed"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "12 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "25 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "cli"
+  },
+  "ai_report_generator_cd4eb626": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ImportError: cannot import name 'ReportConfig' from 'models' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator_cd4eb626\\backend\\models.py) (at backend/main.py:3 in <module> -> backend/routes.py:2 in <module>)",
+        "findings": [
+          "the application does not start: ImportError: cannot import name 'ReportConfig' from 'models' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator_cd4eb626"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "6 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "11 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "ai_report_generator_cf00d934": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ImportError: cannot import name 'ReportService' from partially initialized module 'services' (most likely due to a circular import) (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\_corpus_probe_ai_report_ (at backend/main.py:15 in <module> -> backend/routes.py:19 in <module> -> backend/services.py:12 in <module> -> backend/ai_summaries.py:13 in <module>)",
+        "findings": [
+          "the application does not start: ImportError: cannot import name 'ReportService' from partially initialized module 'services' (most likely due to a circular import) (C:\\programes\\comppython\\Aia"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "4 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "12 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "ai_report_generator_d715e3f9": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ModuleNotFoundError: No module named 'services.weather_api'; 'services' is not a package (at backend/main.py:6 in <module> -> backend/routes.py:5 in <module> -> backend/services.py:4 in <module> -> backend/services.py:4 in <module>)",
+        "findings": [
+          "the application does not start: ModuleNotFoundError: No module named 'services.weather_api'; 'services' is not a package (at backend/main.py:6 in <module> -> backend/routes.py:5 in <module> ->"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "5 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "bookmark_manager_2323e41f": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: FastAPIError: Invalid args for response field! Hint: check that typing.List[services.BookmarkOut] is a valid Pydantic field type. If you are using a return type annotation that is not a valid Pydantic field (e.g. U (at backend/main.py:15 in <module> -> backend/routes.py:18 in <module>)",
+        "findings": [
+          "the application does not start: FastAPIError: Invalid args for response field! Hint: check that typing.List[services.BookmarkOut] is a valid Pydantic field type. If you are using a return type"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "5 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`data.created_at` is read at line 63, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `created_at` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.tags` is read at line 103, but `data` is a `BookmarkUpdate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `tags` to BookmarkUpdate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.tags` is read at line 62, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `tags` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.updated_at` is read at line 104, but `data` is a `BookmarkUpdate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `updated_at` to BookmarkUpdate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`data.updated_at` is read at line 64, but `data` is a `BookmarkCreate`, which declares description, tag_names, title, url. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `updated_at` to BookmarkCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "10 python file(s) scanned",
+        "findings": [
+          "SQL in this file reads column `tags` from table `bookmarks`, which has no such column. The table is created with: created_at, description, id, title, url. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema.",
+          "SQL in this file reads column `updated_at` from table `bookmarks`, which has no such column. The table is created with: created_at, description, id, title, url. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema."
+        ],
+        "status": "failed"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
+        "findings": [
+          "bookmark_manager_2323e41f/frontend/app.js is loaded as a module and imports `axios`, a bare specifier a browser cannot resolve without an import map or a bundler \u2014 the page fails on load",
+          "bookmark_manager_2323e41f/frontend/app.js is loaded as a module and imports `react`, a bare specifier a browser cannot resolve without an import map or a bundler \u2014 the page fails on load"
+        ],
+        "status": "failed"
+      }
+    },
+    "shape": "web_api+static_frontend"
+  },
+  "bookmark_manager_a3ca5c18": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "imported backend",
+        "findings": [
+          "the package `backend` imports but exposes no public names at all, so there is no API to use"
+        ],
+        "status": "failed"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "5 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "12 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "package"
+  },
+  "bookmark_manager_c95501b4": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "imported backend",
+        "findings": [
+          "the package `backend` imports but exposes no public names at all, so there is no API to use"
+        ],
+        "status": "failed"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "6 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "11 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "package"
+  },
+  "bookmark_manager_de756d20": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "imported backend",
+        "findings": [
+          "the package `backend` imports but exposes no public names at all, so there is no API to use"
+        ],
+        "status": "failed"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "this project declares no pydantic models",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "sql_schema": {
+        "detail": "8 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "package"
+  },
+  "bulk_file_renamer_912f9b22": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 2 CLI entry point(s): bulk_file_renamer_912f9b22/bulk_file_renamer/cli.py, bulk_file_renamer_912f9b22/bulk_file_renamer/main.py",
+        "findings": [],
+        "status": "verified"
+      },
+      "feature_coverage": {
+        "detail": "4/4 requested feature(s) have supporting code (0 route(s), 15 function(s) across cli)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "this project declares no pydantic models",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "sql_schema": {
+        "detail": "13 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "cli"
+  },
+  "bulk_file_renamer_ab57297e": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 1 CLI entry point(s): bulk_file_renamer_ab57297e/bulk_file_renamer/cli.py",
+        "findings": [],
+        "status": "verified"
+      },
+      "feature_coverage": {
+        "detail": "4/4 requested feature(s) have supporting code (1 route(s), 26 function(s) across web_api+cli)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "1/1 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "17 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api+cli"
+  },
+  "bulk_rename_cli": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 1 CLI entry point(s): bulk_rename_cli/bulk_rename_cli/main.py",
+        "findings": [],
+        "status": "verified"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "this project declares no pydantic models",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "sql_schema": {
+        "detail": "12 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "cli"
+  },
+  "bulk_rename_tool_fa7533e1": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ModuleNotFoundError: No module named 'routes' (at bulk_rename_tool/main.py:20 in <module>)",
+        "findings": [
+          "the application does not start: ModuleNotFoundError: No module named 'routes' (at bulk_rename_tool/main.py:20 in <module>)"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "this project declares no pydantic models",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "sql_schema": {
+        "detail": "5 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "current_time_service_acde5070": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "imported backend",
+        "findings": [
+          "the package `backend` imports but exposes no public names at all, so there is no API to use"
+        ],
+        "status": "failed"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "1 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "7 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "package"
+  },
+  "inventory_system_90ee973f": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "6/6 requested feature(s) have supporting code (16 route(s), 22 function(s) across web_api)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "12/16 routes responded without a server error",
+        "findings": [
+          "POST /products/ -> 500",
+          "POST /suppliers/ -> 500",
+          "PUT /products/{product_id} -> 500",
+          "PUT /suppliers/{supplier_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "15 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`mv.direction` is read at line 247, but `mv` is a `StockMovementCreate`, which declares movement_type, product_id, quantity, timestamp, warehouse_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `direction` to StockMovementCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`prod.sku` is read at line 153, but `prod` is a `ProductCreate`, which declares description, name, price, supplier_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `sku` to ProductCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`sup.contact` is read at line 88, but `sup` is a `SupplierCreate`, which declares contact_email, name. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `contact` to SupplierCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "16 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "inventory_system_9600d11d": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: ImportError: cannot import name 'supplier_router' from 'backend.services' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\inventory_system_9600d11d\\backend\\services.py) (at backend/main.py:9 in <module> -> backend/routes.py:2 in <module>)",
+        "findings": [
+          "the application does not start: ImportError: cannot import name 'supplier_router' from 'backend.services' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\_corpus_probe_inventory_syste"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "14 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "13 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "inventory_system_e6a1da32": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app loaded but declares no routes",
+        "findings": [
+          "the application starts but declares no routes"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "18 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "16 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "inventory_system_e9eac7be": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "19/19 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "23 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "15 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "inventory_system_f3dbcc61": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "7/19 routes responded without a server error",
+        "findings": [
+          "GET /reports/low_stock -> 500",
+          "GET /stock_movements/ -> 500",
+          "GET /suppliers/ -> 500",
+          "GET /suppliers/{supplier_id} -> 500",
+          "GET /warehouses/ -> 500",
+          "GET /warehouses/{warehouse_id} -> 500",
+          "GET /warehouses/{warehouse_id}/stock -> 500",
+          "POST /stock_movements/ -> 500",
+          "POST /suppliers/ -> 500",
+          "POST /warehouses/ -> 500",
+          "PUT /suppliers/{supplier_id} -> 500",
+          "PUT /warehouses/{warehouse_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "22 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`movement.direction` is read at line 194, but `movement` is a `StockMovementCreate`, which declares movement_type, product_id, quantity, timestamp, warehouse_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `direction` to StockMovementCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`product.sku` is read at line 100, but `product` is a `ProductCreate`, which declares description, name, price, supplier_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `sku` to ProductCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.",
+          "`supplier.contact` is read at line 55, but `supplier` is a `SupplierCreate`, which declares contact_email, name. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `contact` to SupplierCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "18 python file(s) scanned",
+        "findings": [
+          "SQL in this file reads column `contact` from table `supplier`, which has no such column. The table is created with: contact_email, id, name. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema.",
+          "SQL in this file reads column `direction` from table `stock_movement`, which has no such column. The table is created with: id, movement_type, product_id, quantity, timestamp, warehouse_id. Use the real column name \u2014 the CREATE TABLE is the source of truth, so fix the query, not the schema."
+        ],
+        "status": "failed"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "llm_api_key_dashboard": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "1/6 routes responded without a server error",
+        "findings": [
+          "DELETE /api-keys/{api_key_id} -> 500",
+          "GET /alerts -> 500",
+          "GET /api-keys -> 500",
+          "GET /usage-data -> 500",
+          "POST /api-keys -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "6 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`token.get_user_id` is read at line 20, but `token` is a `Token`, which declares access_token, token_type. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `get_user_id` to Token where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "19 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "parsed 2 page(s), 6 frontend call(s) checked against 5 declared route(s)",
+        "findings": [
+          "llm_api_key_dashboard/frontend/index.html loads a script that does not exist: `index.js`",
+          "llm_api_key_dashboard/frontend/src/App.js calls `/user`, which the backend does not serve. Declared routes: /alerts, /api-keys, /api-keys/{api_key_id}, /login, /usage-data",
+          "static/script.js uses `import`/`export` but llm_api_key_dashboard/frontend/src/index.html loads it as a classic script \u2014 add type=\"module\" or the browser raises a syntax error before any of it runs"
+        ],
+        "status": "failed"
+      }
+    },
+    "shape": "web_api+static_frontend"
+  },
+  "llm_api_key_health_dashboard": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "imported backend",
+        "findings": [
+          "the package `backend` imports but exposes no public names at all, so there is no API to use"
+        ],
+        "status": "failed"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "8 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 0 frontend call(s) checked against 0 declared route(s)",
+        "findings": [],
+        "status": "verified"
+      }
+    },
+    "shape": "static_frontend+package"
+  },
+  "project": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project defines no importable package",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "this project declares no pydantic models",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "sql_schema": {
+        "detail": "0 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "unknown"
+  },
+  "simple_calculator": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 2 CLI entry point(s): simple_calculator/backend/cli.py, simple_calculator/simple_calculator/cli.py",
+        "findings": [
+          "the command-line tool simple_calculator/backend/cli.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\simple_calculator\\backend\\cli.py\", line 3, in <module>\n    from calculator import ",
+          "the command-line tool simple_calculator/simple_calculator/cli.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 189, in _run_module_as_main\n  File \"<frozen runpy>\", line 112, in _get_module_details\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\simple_calculator\\simple_calculator\\__init__.py\", line 1, in <module>\n "
+        ],
+        "status": "failed"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "1/1 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "28 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api+cli"
+  },
+  "task_manager": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "1/5 routes responded without a server error",
+        "findings": [
+          "DELETE /tasks/{task_id} -> 500",
+          "GET /tasks/{task_id} -> 500",
+          "POST /tasks/ -> 500",
+          "PUT /tasks/{task_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "2 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "11 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "parsed 4 page(s), 6 frontend call(s) checked against 2 declared route(s)",
+        "findings": [
+          "index.js uses `import`/`export` but task_manager/frontend/src/index.html loads it as a classic script \u2014 add type=\"module\" or the browser raises a syntax error before any of it runs",
+          "src/index.js uses `import`/`export` but task_manager/frontend/index.html loads it as a classic script \u2014 add type=\"module\" or the browser raises a syntax error before any of it runs",
+          "task_manager/frontend/public/index.html loads a script that does not exist: `index.js`",
+          "task_manager/public/index.html loads a script that does not exist: `./index.js`",
+          "task_manager/src/App.js calls `/boards`, which the backend does not serve. Declared routes: /tasks/, /tasks/{task_id}"
+        ],
+        "status": "failed"
+      }
+    },
+    "shape": "web_api+static_frontend+node_frontend"
+  },
+  "task_manager_3d57d0b8": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "0/5 routes responded without a server error",
+        "findings": [
+          "DELETE /tasks/{task_id} -> 500",
+          "GET /tasks/ -> 500",
+          "GET /tasks/{task_id} -> 500",
+          "POST /tasks/ -> 500",
+          "PUT /tasks/{task_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "11 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "task_manager_7167454c": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "5/5 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "5 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "13 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "test_coverage_improver": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "2/3 routes responded without a server error",
+        "findings": [
+          "GET /weather -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "14 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api+node_frontend"
+  },
+  "test_coverage_tool": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "ran 1 CLI entry point(s): test_coverage_tool/backend/cli.py",
+        "findings": [],
+        "status": "verified"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "0/2 routes responded without a server error",
+        "findings": [
+          "POST /integration-test -> 500",
+          "POST /test-coverage -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "2 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "13 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api+cli"
+  },
+  "todo_app": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project defines no importable package",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "schema_attr": {
+        "detail": "this project declares no pydantic models",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "sql_schema": {
+        "detail": "0 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "unknown"
+  },
+  "todo_app_4fe8055a": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "1/5 routes responded without a server error",
+        "findings": [
+          "GET /todos -> 500",
+          "GET /todos/{todo_id} -> 500",
+          "POST /todos -> 500",
+          "PUT /todos/{todo_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "12 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "todo_app_fb3e4b24": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "3/4 routes responded without a server error",
+        "findings": [
+          "GET /weather/ -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "3 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "9 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  }
+}
