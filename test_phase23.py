@@ -3440,6 +3440,145 @@ finally:
     shutil.rmtree(_nn_dir, ignore_errors=True)
 
 
+# ---- 41. Every agent that overwrites a file uses the same guard -------------
+# The Debugger's guards were each paid for by a live failure. The two other
+# agents that overwrite a generated file with an LLM reply had none at all --
+# `if fixed and fixed.strip()` and then straight to create_file. A three-line
+# reply could replace a three-hundred-line module, and BackendDeveloper's
+# re-scan would then call the result clean, because an empty file has no
+# defects.
+from tools.repair_guard import (                                     # noqa: E402
+    accept_generated_fix as _agf41,
+    accept_python_reply as _apr41,
+    accept_test_reply as _atr41,
+    count_test_functions as _ctf41,
+)
+
+_SRC41 = (
+    "from fastapi import APIRouter\n"
+    "\n"
+    "router = APIRouter()\n"
+    "\n"
+    "\n"
+    "@router.get('/items')\n"
+    "def list_items():\n"
+    "    return [{'id': 1, 'name': 'one'}, {'id': 2, 'name': 'two'}]\n"
+    "\n"
+    "\n"
+    "@router.get('/items/{item_id}')\n"
+    "def get_item(item_id: int):\n"
+    "    return {'id': item_id, 'name': 'one'}\n"
+)
+
+check("the shared guard accepts a genuine repair",
+      _agf41(_SRC41, _SRC41.replace("'one'", "'ONE'"))[0])
+check("...rejects a reply that drops a top-level name",
+      not _agf41(_SRC41, "from fastapi import APIRouter\n")[0])
+
+# The old floor was `len(current) > 400 and len(fixed) < len(current) * 0.5`,
+# which left two holes: a file of 400 chars or fewer could be reduced to
+# nothing, and any file could legally lose 49.9% of itself.
+_SMALL41 = (
+    "import sqlite3\n"
+    "\n"
+    "DB = 'app.db'\n"
+    "\n"
+    "\n"
+    "def connect():\n"
+    "    conn = sqlite3.connect(DB)\n"
+    "    conn.row_factory = sqlite3.Row\n"
+    "    return conn\n"
+)
+check("a file under the old 400-char floor can no longer be gutted",
+      len(_SMALL41) < 400
+      and not _agf41(_SMALL41, "import sqlite3\nDB = 'app.db'\ndef connect():\n    pass\n")[0])
+
+# accept_python_reply adds the syntax check the Debugger can skip (it re-runs
+# the import check and restores the original); BackendDeveloper and the Tester
+# have no such backstop.
+check("a reply that does not parse is refused where there is no rollback",
+      not _apr41(_SRC41, _SRC41 + "\ndef broken(:\n")[0])
+check("...and an empty reply is refused",
+      not _apr41(_SRC41, "   \n")[0])
+check("...while a valid repair still passes",
+      _apr41(_SRC41, _SRC41.replace("'one'", "'ONE'"))[0])
+
+
+# ---- 41a. A test repair may not go green by deleting the failing test -------
+# Asked to turn a red suite green, a repair can always do it by removing the
+# test. That is §0.7's failure mode in a new place -- the silencing repair
+# scored HIGHER than the correct one -- so the test count may never drop.
+# The symbol guard is deliberately NOT applied here: renaming a test is a
+# legitimate repair and every test name is a top-level symbol.
+_TESTS41 = (
+    "from main import app\n"
+    "\n"
+    "\n"
+    "def test_one():\n"
+    "    assert app is not None\n"
+    "\n"
+    "\n"
+    "def test_two():\n"
+    "    assert True\n"
+    "\n"
+    "\n"
+    "def test_three():\n"
+    "    assert 1 + 1 == 2\n"
+)
+
+check("count_test_functions counts the test functions",
+      _ctf41(_TESTS41) == 3, str(_ctf41(_TESTS41)))
+check("a test repair that deletes the failing test is refused",
+      not _atr41(_TESTS41, _TESTS41.replace(
+          "def test_three():\n    assert 1 + 1 == 2\n", ""))[0])
+check("...and the reason names the deletion",
+      "drops 1 of 3" in _atr41(_TESTS41, _TESTS41.replace(
+          "def test_three():\n    assert 1 + 1 == 2\n", ""))[1])
+check("a test repair that RENAMES a test is still accepted",
+      _atr41(_TESTS41, _TESTS41.replace("test_three", "test_three_renamed"))[0])
+check("...and one that fixes an assertion in place is accepted",
+      _atr41(_TESTS41, _TESTS41.replace("1 + 1 == 2", "2 + 2 == 4"))[0])
+check("a test reply that does not parse is refused",
+      not _atr41(_TESTS41, "def test_x(:\n")[0])
+
+
+# ---- 41b. tsc still failing is not a success --------------------------------
+# `result.success = len(result.fixes_applied) > 0` meant "we tried, therefore we
+# succeeded". Pipeline._diagnose filters on `not success and not skipped`, so a
+# frontend file whose every error survived both LLM attempts was invisible to
+# the one gate that would have surfaced it.
+import inspect                                                       # noqa: E402
+import re as _re41                                                   # noqa: E402
+from agents.frontend_debugger import FrontendDebugger as _FD41       # noqa: E402
+
+_fd_src41 = inspect.getsource(_FD41._fix_file)
+# Match the ASSIGNMENT, not the prose: the comment explaining the old bug
+# quotes the old expression, and a substring test would match its own docs.
+check("the frontend debugger no longer calls 'we tried' a success",
+      _re41.search(r"result\.success\s*=\s*len\(result\.fixes_applied\)",
+                _fd_src41) is None)
+check("...and the fall-through path reports failure",
+      "result.success      = False" in _fd_src41)
+
+
+# ---- 41c. A request-time failure is repaired on whichever attempt passes ----
+# The runtime repair was gated on `attempt == 1` INSIDE the branch where the
+# import check had just passed. A file that failed its import check, was
+# repaired, and passed on attempt 2 never had its 500 looked at at all -- the
+# smoke test found a real failure and the only pass that could act on it was
+# skipped.
+from agents.debugger import Debugger as _DBG41                       # noqa: E402
+
+_dbg_src41 = inspect.getsource(_DBG41._debug_file)
+check("the runtime repair is no longer gated on attempt == 1",
+      "runtime_error and attempt == 1" not in _dbg_src41)
+check("...it is gated on whether it has already been tried",
+      "runtime_repair_tried" in _dbg_src41)
+check("...and it is reachable from every import-check success path",
+      _dbg_src41.count("_try_runtime_repair()") >= 4,
+      str(_dbg_src41.count("_try_runtime_repair()")))
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

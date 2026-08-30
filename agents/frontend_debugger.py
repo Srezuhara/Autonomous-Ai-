@@ -312,9 +312,21 @@ RULES:
             # Still errors — update error list for next attempt
             errors = remaining[rel_path]
 
-        # We tried but errors remain — still return the best version we have
-        result.success      = len(result.fixes_applied) > 0
-        result.errors_fixed = len(errors) if result.success else 0
+        # Reaching here means every early return above was missed, and those are
+        # the only paths where tsc stopped reporting this file. So errors REMAIN.
+        #
+        # This used to read `success = len(result.fixes_applied) > 0`, i.e. "we
+        # tried, therefore we succeeded". A file whose every error survived two
+        # LLM attempts was reported success=True, and `Pipeline._diagnose` filters
+        # on `not success and not skipped` — so the one gate that would have
+        # surfaced a broken frontend never saw it. Success is what tsc says, not
+        # whether an attempt was made.
+        result.success      = False
+        result.errors_fixed = 0
+        logger.warning(
+            f"  ⚠️  {rel_path}: {len(errors)} error(s) remain after "
+            f"{len(result.fixes_applied)} attempt(s)"
+        )
         return result
 
     def _ask_llm_to_fix(

@@ -26,6 +26,7 @@ from pathlib import Path
 from agents.base_agent import BaseAgent
 from tools.file_writer import create_file, read_file
 from tools.code_introspect import analyze_file, find_phantom_imports
+from tools.repair_guard import accept_python_reply
 
 logger = logging.getLogger(__name__)
 
@@ -385,13 +386,25 @@ Return ONLY raw SQL. No markdown, no explanation."""
                 logger.info(f"     • {d}")
 
             try:
+                before = read_file(path)
+            except Exception:
+                before = ""
+
+            try:
                 fixed = self._repair_file(intent, architecture, path, defects)
             except Exception as e:
                 logger.warning(f"⚠️  [Phase 22] repair call failed for {path}: {e}")
                 failed += 1
                 continue
 
-            if not fixed or not fixed.strip():
+            # Until now the only check here was "is the reply non-blank", so a
+            # three-line answer could replace a three-hundred-line module — and
+            # the re-scan below would then call the result clean, because an
+            # empty file has no defects. There is no import re-check and no
+            # rollback on this path, so the parse check is not optional either.
+            accepted, why = accept_python_reply(before, fixed)
+            if not accepted:
+                logger.warning(f"⚠️  [Phase 22] {path}: rejecting repair — {why}")
                 failed += 1
                 continue
 

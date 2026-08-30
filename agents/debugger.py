@@ -69,6 +69,11 @@ from tools.code_executor import run_python
 from tools.code_patcher import locate_block, splice, file_digest
 from tools.runtime_smoke import _parse_frames
 from tools.code_introspect import shadows_installed_package
+from tools.repair_guard import (
+    accept_generated_fix,
+    top_level_symbols,
+    _top_level_symbols_by_regex as _rg_symbols_by_regex,
+)
 from tools.dependency_installer import (
     pip_install, extract_missing_package,
     WINDOWS_BUILD_BLOCKLIST, HEAVY_PACKAGES_TIMEOUT_BLOCKLIST,
@@ -1025,6 +1030,20 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
+        # The request-time repair used to be gated on `attempt == 1`, inside the
+        # branch where the import check had just passed. So a file that failed
+        # its import check first, was repaired, and passed on attempt 2 never had
+        # its 500 looked at — the smoke test found a real request-time failure
+        # and the one pass that could act on it was skipped. Gate on "have we
+        # tried yet" instead of on which attempt it is.
+        def _try_runtime_repair() -> None:
+            nonlocal runtime_repair_tried
+            if runtime_error and not runtime_repair_tried:
+                runtime_repair_tried = True
+                self._repair_runtime_error(file_path, runtime_error, result)
+
+        runtime_repair_tried = False
+
         for attempt in range(1, MAX_ATTEMPTS + 1):
             result.attempts = attempt
             logger.info(f"  🔁 [{file_path}] Attempt {attempt}/{MAX_ATTEMPTS}")
@@ -1034,8 +1053,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             if execution.success:
                 result.success = True
                 logger.info(f"  ✅ [{file_path}] Passed on attempt {attempt}")
-                if runtime_error and attempt == 1:
-                    self._repair_runtime_error(file_path, runtime_error, result)
+                _try_runtime_repair()
                 return result
 
             error_text = execution.stderr
@@ -1044,11 +1062,13 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             if any(p in error_text for p in IGNORE_ERRORS):
                 result.success = True
                 logger.info(f"  ✅ [{file_path}] Import-check passed (runtime error ignored)")
+                _try_runtime_repair()
                 return result
 
             if "sqlalchemy" in error_text.lower() and "OperationalError" in error_text:
                 result.success = True
                 logger.info(f"  ✅ [{file_path}] Import-check passed (DB connection ignored)")
+                _try_runtime_repair()
                 return result
 
             # ── Phase 20 Issue 7: timeout handling ────────────────────────────
@@ -1161,151 +1181,38 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         result.final_error = error_text
         return result
 
-    # Top-level definitions, found by pattern rather than by `ast`. The file
-    # being repaired is usually a *syntax error* — that is why it is here — so
-    # anything that needs to parse it first cannot run when it matters most.
-    _TOP_LEVEL_SYMBOL_RE = re.compile(
-        r"^(?:async\s+def\s+(?P<afn>\w+)"
-        r"|def\s+(?P<fn>\w+)"
-        r"|class\s+(?P<cls>\w+)"
-        r"|(?P<var>[A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=))",
-        re.MULTILINE,
-    )
-
-    _TOP_LEVEL_IMPORT_RE = re.compile(
-        r"^(?:from\s+[\w.]+\s+import|import)\s+(?P<names>[^\n#]+)",
-        re.MULTILINE,
-    )
+    # The guards below live in tools/repair_guard.py so the two other agents
+    # that overwrite a generated file with an LLM reply — BackendDeveloper's
+    # self-verification pass and the Tester — use the same ones instead of
+    # having none. These remain as the Debugger's entry points.
 
     @classmethod
     def _top_level_symbols(cls, source: str, defined_only: bool = False) -> set[str]:
-        """
-        Names a sibling module could import from this file.
-
-        An import binds a module-level name just as a `def` does: after
-        `from crud import get_db`, `from routes import get_db` still resolves.
-        Counting only definitions made the guard reject the *correct* repair for
-        a duplicated dependency — the fix is to delete the local copy and import
-        the real one, which looked to the guard like deleting `get_db`.
-
-        Parsed properly where the source parses; the regex remains for the case
-        it does not, which is common here because these are broken files.
-        """
-        try:
-            import ast
-            tree = ast.parse(source)
-        except (SyntaxError, ValueError):
-            return cls._top_level_symbols_by_regex(source, defined_only)
-
-        names: set[str] = set()
-
-        def add(name: str) -> None:
-            # Private/underscore-prefixed helpers and the sys.path preamble the
-            # architect injects are noise here, not API.
-            if name and not name.startswith("_"):
-                names.add(name)
-
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                add(node.name)
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        add(target.id)
-            elif isinstance(node, ast.AnnAssign):
-                if isinstance(node.target, ast.Name):
-                    add(node.target.id)
-            elif isinstance(node, (ast.Import, ast.ImportFrom)) and not defined_only:
-                for alias in node.names:
-                    if alias.name == "*":
-                        continue
-                    add(alias.asname or alias.name.split(".")[0])
-        return names
+        return top_level_symbols(source, defined_only=defined_only)
 
     @classmethod
     def _top_level_symbols_by_regex(
         cls, source: str, defined_only: bool = False
     ) -> set[str]:
-        """The pre-AST fallback, for source that will not parse."""
-        names: set[str] = set()
-        for m in cls._TOP_LEVEL_SYMBOL_RE.finditer(source):
-            name = m.group("afn") or m.group("fn") or m.group("cls") or m.group("var")
-            if name and not name.startswith("_"):
-                names.add(name)
-        if defined_only:
-            return names
-        for m in cls._TOP_LEVEL_IMPORT_RE.finditer(source):
-            for part in m.group("names").split(","):
-                part = part.strip().strip("()").strip()
-                if not part:
-                    continue
-                bound = part.split(" as ")[-1].strip().split(".")[0]
-                if bound and bound != "*" and not bound.startswith("_"):
-                    names.add(bound)
-        return names
+        return _rg_symbols_by_regex(source, defined_only=defined_only)
 
     def _accept_generated_fix(self, file_path: str, fixed: str) -> bool:
         """
         Reject LLM "fixes" that damage the file instead of repairing it.
 
-        Two failure modes, and for a long time only the first was checked:
-
-        1. Pasting several files into one module (an oversized rewrite).
-        2. **Deleting the file's contents.** An empty module imports perfectly,
-           so "the import check passes" is a target the LLM can hit by removing
-           code — and it does. Live, a truncated routes.py was "repaired" into
-           413 chars of imports with no `router` left; it compiled, the repair
-           was recorded as a success, and the application no longer existed.
-           Nothing looked for shrinkage, so nothing noticed.
+        The rules are in tools/repair_guard.accept_generated_fix; this resolves
+        the OUTPUT_DIR-relative path the rest of the debugger speaks in and logs
+        the refusal.
         """
         try:
             current = read_file(file_path)
         except Exception:
             current = ""
 
-        file_header_count = len(
-            re.findall(r"^\s*#\s*(?:[\w_\-]+/)*backend/[^/\s]+\.py\s*$", fixed, re.MULTILINE)
-        )
-        too_large = bool(current) and len(fixed) > max(len(current) * 1.6, len(current) + 1800)
-        if file_header_count >= 2 or too_large:
-            logger.warning(
-                f"  Rejecting LLM fix for {file_path}: appears to contain "
-                "multiple files or an oversized rewrite."
-            )
-            return False
-
-        if current.strip():
-            # A repair that drops a top-level name is removing something another
-            # module may import. `router` disappearing is exactly how a working
-            # app became unimportable while every check still passed.
-            # What the file *defines* must still be reachable from it — but an
-            # import satisfies that as well as a `def` does. The correct repair
-            # for a duplicated dependency is to delete the local copy and import
-            # the real one, and comparing definitions to definitions rejected
-            # exactly that, leaving the endpoint broken.
-            lost = (
-                self._top_level_symbols(current, defined_only=True)
-                - self._top_level_symbols(fixed)
-            )
-            if lost:
-                logger.warning(
-                    f"  Rejecting LLM fix for {file_path}: it removes top-level "
-                    f"{', '.join(sorted(lost))} — a repair must not delete the "
-                    "definitions other modules import."
-                )
-                return False
-
-            # Belt and braces for the case where the deletion takes the symbols
-            # with it in a file too broken to pattern-match reliably.
-            if len(current) > 400 and len(fixed) < len(current) * 0.5:
-                logger.warning(
-                    f"  Rejecting LLM fix for {file_path}: shrinks the file from "
-                    f"{len(current)} to {len(fixed)} chars. Deleting code is not "
-                    "a repair, even though an empty module imports cleanly."
-                )
-                return False
-
-        return True
+        ok, reason = accept_generated_fix(current, fixed)
+        if not ok:
+            logger.warning(f"  Rejecting LLM fix for {file_path}: {reason}.")
+        return ok
 
     # A traceback's useful end is its last few frames plus the exception line;
     # the head is mostly interpreter machinery and absolute Windows paths, which

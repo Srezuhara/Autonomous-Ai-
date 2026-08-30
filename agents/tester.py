@@ -34,6 +34,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file, create_file
+from tools.repair_guard import accept_test_reply
 from tools.code_executor import run_command, run_python
 from tools.code_introspect import analyze_file
 import config
@@ -765,8 +766,14 @@ Rules:
                         test_path, test_code, full_error, routes_context, main_context
                     )
                     if fixed:
-                        create_file(test_path, fixed)
-                        test_code = fixed
+                        ok, why = accept_test_reply(test_code, fixed)
+                        if ok:
+                            create_file(test_path, fixed)
+                            test_code = fixed
+                        else:
+                            logger.warning(
+                                f"  ⚠️  rejecting collection-error fix: {why}"
+                            )
                     continue
                 else:
                     result.errors.append("collection error — " + full_error[-300:])
@@ -798,7 +805,15 @@ Rules:
                     routes_context, main_context, passing_names,
                 )
                 if fixed:
-                    create_file(test_path, fixed)
+                    # A repair asked to turn a red suite green can always do it
+                    # by deleting the failing test. That is the §0.7 failure mode
+                    # in a new place, so the count may never go down.
+                    ok, why = accept_test_reply(current, fixed)
+                    if ok:
+                        create_file(test_path, fixed)
+                    else:
+                        logger.warning(f"  ⚠️  rejecting test fix: {why}")
+                        break
             else:
                 break
 
