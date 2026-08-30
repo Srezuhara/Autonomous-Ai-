@@ -2480,13 +2480,20 @@ _report = Path(config.OUTPUT_DIR) / "_phase23_report.md"
 _report.unlink(missing_ok=True)
 
 
-def _row_result(row, tokens, ok=True):
+def _row_result(row, tokens, ok=True, verification=None):
     return {"row": row, "shape": f"shape {row}", "status": "done_with_context",
             "total_tokens": tokens, "duration_seconds": 100.0, "file_count": 20,
             "zip": {"ok": ok, "status": 200, "content_type": "application/zip",
                     "bytes": 1000},
             "build_id": f"b{row}", "completion_reason": "", "progress_percent": 100,
-            "tokens_by_model": None, "expect_boot": True}
+            "tokens_by_model": None, "expect_boot": True,
+            "verification": verification if verification is not None else [
+                {"check": "runtime_smoke", "status": "verified",
+                 "detail": "5/5 routes responded without a server error",
+                 "findings": [], "evidence": {}},
+            ],
+            "smoke_summary": "5/5 routes responded without a server error",
+            "build_shape": "web_api"}
 
 
 try:
@@ -2508,12 +2515,33 @@ try:
     check("only the row this run produced gets a detail section",
           _text.count("### Row") == 1, _text)
 
-    # The count used to read as the whole criterion. It is half of it: row 3 was
-    # counted as passing on 2026-08-28 while shipping twelve dead endpoints.
-    check("the result line claims only what it actually measured",
-          "reach a terminal state with a valid ZIP" in _text, _text[:600])
-    check("…and says so explicitly, because a counted row can still be broken",
-          "FIRST half of the criterion" in _text and "0-5xx" in _text, _text[:900])
+    # The count used to read as the whole criterion, then as explicitly half of
+    # it — row 3 was counted as passing on 2026-08-28 while shipping twelve dead
+    # endpoints. Now BOTH halves are read from the API, so the report states the
+    # count against both and no longer sends the reader to the server log.
+    check("the result line counts rows that meet BOTH halves",
+          "meet BOTH halves" in _text, _text[:700])
+    check("…and still says how many merely shipped a ZIP",
+          "shipped a valid ZIP" in _text, _text[:700])
+    check("the table carries the verification verdict per row",
+          "| Verified |" in _text, _text[:900])
+
+    # A row whose artifact was never executed must not be counted as passing,
+    # however healthy its status and ZIP look.
+    _unver = Path(config.OUTPUT_DIR) / "_phase23_report_unverified.md"
+    try:
+        _M.write_report([_row_result(1, 94_576, verification=[
+            {"check": "runtime_smoke", "status": "not_run",
+             "detail": "a web app was found and the probe could not boot it",
+             "findings": ["…so this build is unverified"], "evidence": {}}])],
+            _unver)
+        _utext = _unver.read_text(encoding="utf-8")
+        check("a shipped-but-unverified row is not counted as passing",
+              "**Result: 0 of 1 rows meet BOTH halves" in _utext, _utext[:700])
+        check("…and the report names the check that never ran",
+              "never ran: runtime_smoke" in _utext, _utext[:1500])
+    finally:
+        _unver.unlink(missing_ok=True)
 
     _re_run = _M.merge_previous([_row_result(3, 999)], _report)
     check("a row that is re-run wins over the record of it",
@@ -4305,6 +4333,376 @@ try:
 finally:
     shutil.rmtree(_pk_web, ignore_errors=True)
 
+
+
+# ---- 47. A field the model never declared -----------------------------------
+# The drift a runtime probe structurally cannot see. Two-sided throughout: the
+# checker must catch the read that raises AND stay silent on the code that is
+# right, because four of the six checkers written on 2026-08-30 reported a
+# defect that did not exist and each was caught only by running it against a
+# real build.
+from tools.schema_attr_check import (                                  # noqa: E402
+    check_project_attributes as _attr47,
+    check_schema_attributes as _attr47o,
+    find_model_definition as _attrdef47,
+)
+
+_ATTR_SCHEMAS = '''from pydantic import BaseModel, ConfigDict
+from typing import Optional
+
+
+class SupplierBase(BaseModel):
+    name: str
+    contact_email: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupplierCreate(SupplierBase):
+    pass
+
+
+class ProductBase(BaseModel):
+    name: str
+    price: float
+
+
+class ProductCreate(ProductBase):
+    pass
+'''
+
+
+def _mk_attr47(root: str, routes_src: str, schemas_src: str = _ATTR_SCHEMAS):
+    d = Path(config.OUTPUT_DIR) / root
+    shutil.rmtree(d, ignore_errors=True)
+    (d / "backend").mkdir(parents=True)
+    (d / "backend" / "schemas.py").write_text(schemas_src, encoding="utf-8")
+    (d / "backend" / "routes.py").write_text(routes_src, encoding="utf-8")
+    return root
+
+
+_bad47 = _mk_attr47("_test_attr_bad", '''import schemas
+
+
+def create_supplier(sup: schemas.SupplierCreate):
+    return (sup.name, sup.contact)
+
+
+def create_product(prod: schemas.ProductCreate):
+    return (prod.name, prod.sku)
+''')
+try:
+    _r47 = _attr47(_bad47)
+    _names47 = {f"{i.model}.{i.attr}" for i in _r47.issues}
+    check("a field the model does not declare is caught",
+          _names47 == {"SupplierCreate.contact", "ProductCreate.sku"},
+          str(_names47))
+    check("the message names the fields that DO exist, so the repair can choose",
+          any("contact_email" in str(i) for i in _r47.issues))
+    check("the message forbids the silencing move that scored 15/16",
+          all(".get()" in str(i) for i in _r47.issues))
+    check("model_config is not offered to the repair as a field",
+          all("model_config" not in ", ".join(i.declared) for i in _r47.issues))
+finally:
+    shutil.rmtree(Path(config.OUTPUT_DIR) / _bad47, ignore_errors=True)
+
+# The other half: correct code must stay silent, including every read this
+# checker deliberately cannot resolve. A checker that finds nothing has proved
+# nothing, but one that fires on working code costs an LLM call and tells a
+# user their build is broken.
+_good47 = _mk_attr47("_test_attr_good", '''import schemas
+from typing import Optional, List
+
+
+def create_supplier(sup: schemas.SupplierCreate):
+    return (sup.name, sup.contact_email, sup.model_dump(), sup.dict())
+
+
+def optional_ok(sup: Optional[schemas.SupplierCreate]):
+    return sup.contact_email
+
+
+def a_list_is_not_a_model(sups: List[schemas.SupplierCreate]):
+    return sups.count
+
+
+def rebound_is_not_checked(sup: schemas.SupplierCreate):
+    sup = object()
+    return sup.anything_at_all
+''')
+try:
+    _r47g = _attr47(_good47)
+    check("correct field reads produce nothing",
+          _r47g.issues == [], str([str(i)[:60] for i in _r47g.issues]))
+    check("the outcome is VERIFIED, not silence",
+          _attr47o(_good47).status.value == "verified")
+finally:
+    shutil.rmtree(Path(config.OUTPUT_DIR) / _good47, ignore_errors=True)
+
+# A model whose base chain leaves the project cannot be checked: the base may
+# declare the very field about to be called missing.
+_open47 = _mk_attr47("_test_attr_open", '''import schemas
+
+
+def handler(sup: schemas.SupplierCreate):
+    return sup.whatever
+''', '''from pydantic import BaseModel
+from somewhere_external import ExternalBase
+
+
+class SupplierBase(ExternalBase):
+    name: str
+
+
+class SupplierCreate(SupplierBase):
+    pass
+''')
+try:
+    check("a model with an unresolved base is not checked",
+          _attr47("_test_attr_open").issues == [])
+finally:
+    shutil.rmtree(Path(config.OUTPUT_DIR) / _open47, ignore_errors=True)
+
+_extra47 = _mk_attr47("_test_attr_extra", '''import schemas
+
+
+def handler(sup: schemas.SupplierCreate):
+    return sup.anything
+''', '''from pydantic import BaseModel, ConfigDict
+
+
+class SupplierBase(BaseModel):
+    name: str
+    model_config = ConfigDict(extra="allow")
+
+
+class SupplierCreate(SupplierBase):
+    pass
+''')
+try:
+    check("a model that accepts extra fields is not checked",
+          _attr47("_test_attr_extra").issues == [])
+finally:
+    shutil.rmtree(Path(config.OUTPUT_DIR) / _extra47, ignore_errors=True)
+
+_nomodels47 = _mk_attr47("_test_attr_none", "def f(x):\n    return x.anything\n",
+                         "VALUE = 1\n")
+try:
+    check("a project with no pydantic models is NOT_APPLICABLE, not verified",
+          _attr47o(_nomodels47).status.value == "not_applicable")
+finally:
+    shutil.rmtree(Path(config.OUTPUT_DIR) / _nomodels47, ignore_errors=True)
+
+
+# ---- 47a. The fourth blame rule reaches request-time failures ---------------
+# It only ever covered boot failures, so an AttributeError naming a class
+# defined in schemas.py sent the repair to routes.py -- which can rename the
+# read or silence it, and can never add a field that is missing. Measured live:
+# the repair wrote `data.get("sku")`, a None into a NOT NULL column, and scored
+# HIGHER than the correct fix.
+_blame47 = _mk_attr47("_test_attr_blame", '''import schemas
+
+
+def create_supplier(sup: schemas.SupplierCreate):
+    return sup.contact
+
+
+def create_product(prod: schemas.ProductCreate):
+    return prod.sku
+''')
+try:
+    _pl47 = Pipeline.__new__(Pipeline)
+    _rename = _pl47._redirect_missing_field_to_definition(
+        _blame47, "backend/routes.py",
+        "AttributeError: 'SupplierCreate' object has no attribute 'contact' "
+        "(at backend/routes.py:5 in create_supplier)")
+    _missing = _pl47._redirect_missing_field_to_definition(
+        _blame47, "backend/routes.py",
+        "AttributeError: 'ProductCreate' object has no attribute 'sku' "
+        "(at backend/routes.py:9 in create_product)")
+    check("a misspelt field is still repaired where it is READ",
+          _rename[0] == "backend/routes.py", str(_rename))
+    check("a missing field is repaired where the model is DEFINED",
+          _missing[0] == "backend/schemas.py", str(_missing))
+    check("the redirect explains itself in the log",
+          "declares no `sku`" in _missing[1], _missing[1])
+
+    # Precision: everything that is not this shape keeps the frame-based rule.
+    check("a non-AttributeError keeps the frame rule",
+          _pl47._redirect_missing_field_to_definition(
+              _blame47, "backend/routes.py",
+              "OperationalError: no such table: supplier "
+              "(at backend/routes.py:5 in create_supplier)"
+          )[0] == "backend/routes.py")
+    check("an attribute that EXISTS keeps the frame rule",
+          _pl47._redirect_missing_field_to_definition(
+              _blame47, "backend/routes.py",
+              "AttributeError: 'SupplierCreate' object has no attribute 'name'"
+          )[0] == "backend/routes.py")
+    check("a class this project does not define keeps the frame rule",
+          _pl47._redirect_missing_field_to_definition(
+              _blame47, "backend/routes.py",
+              "AttributeError: 'Connection' object has no attribute 'execute'"
+          )[0] == "backend/routes.py")
+    check("find_model_definition names the file and the fields",
+          _attrdef47(_blame47, "ProductCreate")
+          == ("_test_attr_blame/backend/schemas.py", ("name", "price")),
+          str(_attrdef47(_blame47, "ProductCreate")))
+finally:
+    shutil.rmtree(Path(config.OUTPUT_DIR) / _blame47, ignore_errors=True)
+
+
+# ---- 48. A rewrite that fixes nothing does not get to stay ------------------
+# BackendDeveloper re-scanned after its repair, found the defects still there,
+# incremented a counter that was logged and discarded, and left the rewrite on
+# disk. So a repair that changed the file without improving it shipped, and
+# nothing downstream could see it.
+from tools.repair_guard import accept_rescan as _rescan48                # noqa: E402
+
+check("a repair that removes a defect is kept",
+      _rescan48(["a", "b"], ["a"])[0] is True)
+check("a repair that removes every defect is kept",
+      _rescan48(["a", "b"], [])[0] is True)
+check("a repair that changes nothing is rolled back",
+      _rescan48(["a", "b"], ["a", "b"])[0] is False)
+check("a repair that swaps one defect for another is rolled back",
+      _rescan48(["a"], ["b"])[0] is False)
+check("a rewrite that introduces a NEW defect is rolled back",
+      _rescan48([], ["a"])[0] is False)
+check("the rejection says which defects survived",
+      "leaves 2 of 2" in _rescan48(["a", "b"], ["a", "b"])[1])
+check("a file with nothing to fix is not rejected",
+      _rescan48([], [])[0] is True)
+
+# And the counter is no longer discarded: what could not be repaired is named,
+# with the file to aim at, so `_diagnose` can hand it to remediation.
+_bd48 = BackendDeveloper.__new__(BackendDeveloper)
+_bd48.unrepaired_defects = {"proj/backend/routes.py": ["two stub handlers"]}
+_pl48 = Pipeline.__new__(Pipeline)
+_pl48.backend_developer = _bd48
+_res48 = type("R", (), {})()
+_res48.debug_results = []
+_res48.frontend_debug_results = []
+_res48.test_results = []
+_res48.backend_files = ["proj/backend/routes.py"]
+_res48.frontend_files = []
+_res48.architecture = {"root_folder": "proj"}
+_res48.intent = {}
+_issues48, _paths48, _adv48 = _pl48._diagnose(_res48)
+check("an unrepaired defect becomes a reported issue",
+      any("self-verification could not repair" in i for i in _issues48),
+      str(_issues48))
+check("and it names a file to aim the repair at - repairable must mean that",
+      "proj/backend/routes.py" in _paths48, str(_paths48))
+
+
+# ---- 49. `unusable` is decided by a field, not by wording -------------------
+# The verdict matched substrings against finding text, so rewording a finding
+# silently stopped it firing -- the same class of defect as an empty list
+# meaning four things.
+from tools.verification import VerificationOutcome as _VO49              # noqa: E402
+
+
+def _verdict49(outcomes, unresolved=()):
+    r = type("R", (), {})()
+    r.verification_outcomes = [o.to_dict() for o in outcomes]
+    r.backend_files = ["x.py"]
+    r.frontend_files = []
+    r.remediation = type("Rep", (), {"unresolved": list(unresolved)})()
+    return Pipeline._functional_verdict(Pipeline.__new__(Pipeline), r)
+
+
+_fatal49 = _VO49.failed("cli_smoke", ["a finding worded however you like"],
+                        detail="ran it").mark_fatal("--help fails")
+_plain49 = _VO49.failed("feature_coverage", ["a requested feature is missing"])
+check("a fatal outcome makes the build unusable whatever the finding says",
+      _verdict49([_fatal49])[0] is False)
+check("a non-fatal failure does not - that is still a build a user can finish",
+      _verdict49([_plain49])[0] is True)
+check("the reason given is the finding, not the flag",
+      "worded however you like" in _verdict49([_fatal49])[1][0])
+check("a verified outcome is usable",
+      _verdict49([_VO49.verified("cli_smoke", detail="ran 1 entry point")])[0]
+      is True)
+check("is_fatal is False until a verifier says otherwise",
+      _plain49.is_fatal is False and _fatal49.is_fatal is True)
+check("the flag survives the round trip through the database",
+      _VO49.failed("x", ["f"]).mark_fatal("why").to_dict()["evidence"]["fatal"]
+      is True)
+# The old string path still works, for findings that reach `unresolved` from a
+# path with no outcome -- it is a fallback now, not the mechanism.
+check("the finding-text fallback still fires when nothing structured did",
+      _verdict49([], unresolved=["the application does not start: boom"])[0]
+      is False)
+
+
+# ---- 49a. The web probe says what it did ------------------------------------
+# It was the most important check in the pipeline and the only one that never
+# produced an outcome: its result lived in the server log and nowhere else,
+# which is why run_live_matrix.py had to tell an operator to grep for it.
+_src49 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("every exit of the web probe records an outcome",
+      _src49.count("self._smoke_outcome = ") >= 6,
+      f"{_src49.count('self._smoke_outcome = ')} assignments")
+check("the recorded list is the one the API stores",
+      "result.verification_outcomes = [o.to_dict() for o in recorded]" in _src49)
+check("the web probe's findings are recorded but not collected twice",
+      "recorded.insert(0, smoke_outcome)" in _src49)
+
+
+# ---- 50. The quota gate reads the model that actually runs out --------------
+# It took max() across models, so a row started whenever EITHER model was rich.
+# The fast model carries the tester, the reviewer and every remediation pass;
+# on 2026-08-30 a row started with it at 73,286, ran it dry mid-tester, and
+# survived only on the dual-model fallback.
+import run_live_matrix as _m50                                          # noqa: E402
+
+_fast50, _heavy50 = _m50.model_roles()
+check("the fast and heavy models are identified, not left blank",
+      bool(_fast50) and bool(_heavy50) and _fast50 != _heavy50,
+      f"{_fast50!r} / {_heavy50!r}")
+check("the start that ran out on 2026-08-30 is now refused",
+      "fast" in _m50.budget_blocks_start(
+          {_fast50: {"tokens_remaining": 73_286},
+           _heavy50: {"tokens_remaining": 176_721}}))
+check("a rich heavy model no longer covers for an empty fast one",
+      _m50.budget_blocks_start(
+          {_fast50: {"tokens_remaining": 20_000},
+           _heavy50: {"tokens_remaining": 190_000}}) != "")
+check("both models above their floors starts",
+      _m50.budget_blocks_start(
+          {_fast50: {"tokens_remaining": 150_000},
+           _heavy50: {"tokens_remaining": 150_000}}) == "")
+check("the fast floor is the higher of the two",
+      _m50.MIN_FAST_TOKENS_TO_START > _m50.MIN_HEAVY_TOKENS_TO_START)
+check("no figures is not evidence of no budget",
+      _m50.budget_blocks_start({}) == "")
+
+
+# ---- 50a. The driver evaluates BOTH halves of its own criterion -------------
+# The 0-5xx half existed only in the server log, so the report stated the first
+# half and told the reader to grep for the rest. Row 3 passed the stated
+# criterion on 2026-08-28 while shipping twelve endpoints that returned 500.
+def _v50(*outcomes):
+    return _m50.verification_verdict({"verification": list(outcomes)})
+
+
+check("row 4's shipped record passes: two checks executed the artifact",
+      _v50({"check": "runtime_smoke", "status": "not_applicable"},
+           {"check": "cli_smoke", "status": "verified"},
+           {"check": "feature_coverage", "status": "verified"})[0] is True)
+check("a failed check fails the row",
+      _v50({"check": "runtime_smoke", "status": "failed"})[0] is False)
+check("a check that never ran fails the row - a hole is not a pass",
+      _v50({"check": "runtime_smoke", "status": "not_run"},
+           {"check": "cli_smoke", "status": "verified"})[0] is False)
+check("all-not-applicable fails: nothing executed the artifact",
+      _v50({"check": "runtime_smoke", "status": "not_applicable"},
+           {"check": "cli_smoke", "status": "not_applicable"})[0] is False)
+check("no record at all is unverified, not clean",
+      _v50()[0] is False)
+check("the report no longer sends the reader to the server log",
+      "Runtime smoke test|failed to boot" not in
+      Path("run_live_matrix.py").read_text(encoding="utf-8"))
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run

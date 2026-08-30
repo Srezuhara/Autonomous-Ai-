@@ -16,10 +16,16 @@ Run:
     venv/Scripts/python.exe run_live_matrix.py --rows 1,2     # just those
     venv/Scripts/python.exe run_live_matrix.py --dry-run      # no tokens spent
 
-Budget reality: a build costs roughly 85-98K tokens against 200K per model per
+Budget reality: a build costs roughly 85-110K tokens against 200K per model per
 day, so the whole matrix needs close to a full day's quota on both models. The
 driver reads `/health` before each row and stops rather than starting a build it
-cannot finish — a half-spent build teaches nothing and costs the same.
+cannot finish — a half-spent build teaches nothing and costs the same. The
+floors are per model and the FAST one is the binding constraint; see
+MIN_FAST_TOKENS_TO_START.
+
+Both halves of the criterion are read from the API. The second — did the thing
+that was built actually run — used to exist only in the server log, so this
+driver could not evaluate its own criterion and said so in its report.
 """
 
 import argparse
@@ -42,7 +48,24 @@ BASE = "http://localhost:8000"
 
 # Enough headroom for one build. Below this, starting a row buys a quota wall
 # rather than a result.
-MIN_TOKENS_TO_START = 70_000
+#
+# There are two floors because there are two budgets, and the gate used to read
+# the wrong one: it took `max()` across models, so a row started whenever EITHER
+# model was rich. The split has since inverted — the tester, the reviewer and
+# every remediation pass run on the fast model, and row 3 spent 97.5K on 20b
+# against 38.5K on 120b. On 2026-08-30 a row started with the fast model at
+# 73,286, ran it dry during the tester, and finished only because the dual-model
+# fallback carried it to the heavy model. That is the safety net working, not
+# the plan working.
+#
+# 90,000 is that measurement rounded up: the row cost 109,206 tokens in total
+# and the fast model was the half that ran out.
+MIN_FAST_TOKENS_TO_START  = 90_000
+MIN_HEAVY_TOKENS_TO_START = 70_000
+
+# Kept as the name older docs cite, and as the floor for a model the config does
+# not identify as fast or heavy.
+MIN_TOKENS_TO_START = MIN_HEAVY_TOKENS_TO_START
 
 POLL_SECONDS = 15
 BUILD_TIMEOUT_SECONDS = 45 * 60
@@ -175,17 +198,51 @@ def print_quota(label: str) -> dict:
     return models
 
 
+def model_roles() -> tuple:
+    """
+    `(fast model id, heavy model id)` as this checkout is configured.
+
+    Read from `llm_client`, which is where the split actually lives — `config`
+    only knows a single `GROQ_MODEL`. Getting this wrong is silent and costs the
+    whole point of the two floors: every model falls through to "unclassified"
+    and the fast one is gated at the heavy floor again.
+    """
+    try:
+        import llm_client
+        return llm_client._FAST_MODEL, llm_client._HEAVY_MODEL
+    except Exception:
+        import os
+        return (os.getenv("GROQ_MODEL_FAST", "openai/gpt-oss-20b"),
+                os.getenv("GROQ_MODEL_HEAVY", "openai/gpt-oss-120b"))
+
+
 def budget_blocks_start(models: dict) -> str:
-    """The reason not to start a build, or an empty string."""
+    """
+    The reason not to start a build, or an empty string.
+
+    Both models are checked against their own floor. Taking the best across
+    models answers "is there budget somewhere", which is not the question — a
+    row needs the FAST model most, and it is the one that runs out.
+    """
     if not models:
         return ""          # no figures is not evidence of no budget
-    best = max((r.get("tokens_remaining", 0) for r in models.values()), default=0)
-    if best < MIN_TOKENS_TO_START:
-        return (
-            f"no model has {MIN_TOKENS_TO_START:,} tokens left "
-            f"(best is {best:,})"
-        )
-    return ""
+
+    fast, heavy = model_roles()
+    blocked = []
+    for model, rec in sorted(models.items()):
+        left = rec.get("tokens_remaining", 0)
+        if model == fast:
+            floor, role = MIN_FAST_TOKENS_TO_START, "fast"
+        elif model == heavy:
+            floor, role = MIN_HEAVY_TOKENS_TO_START, "heavy"
+        else:
+            floor, role = MIN_TOKENS_TO_START, "unclassified"
+        if left < floor:
+            blocked.append(
+                f"the {role} model {model} has {left:,} left, under its "
+                f"{floor:,} floor"
+            )
+    return "; ".join(blocked)
 
 
 # ── One row ───────────────────────────────────────────────────────────────────
@@ -225,6 +282,19 @@ def run_row(entry: dict) -> dict:
     # The database is the record, not the poll response.
     project = _get(f"/projects/{build_id}")
     zip_result = check_zip(build_id)
+
+    # Whether the thing that was built actually runs. This half of the criterion
+    # used to live only in the server log, so the driver could not evaluate it
+    # and the report had to send the operator to `grep`. /jobs/{id}/status
+    # parses the stored VerificationOutcome list.
+    verification, smoke_summary, build_shape = [], "", ""
+    try:
+        detail = _get(f"/jobs/{build_id}/status")
+        verification  = detail.get("verification") or []
+        smoke_summary = detail.get("smoke_summary") or ""
+        build_shape   = detail.get("build_shape") or ""
+    except Exception as e:
+        print(f"  ! verification record unreadable: {e}")
     result = {
         "row": entry["row"],
         "shape": entry["shape"],
@@ -238,6 +308,9 @@ def run_row(entry: dict) -> dict:
         "file_count": project.get("file_count"),
         "zip": zip_result,
         "expect_boot": entry["expect_boot"],
+        "verification": verification,
+        "smoke_summary": smoke_summary,
+        "build_shape": build_shape,
     }
     print(
         f"  -> {result['status']}  "
@@ -248,7 +321,44 @@ def run_row(entry: dict) -> dict:
     )
     if result["completion_reason"]:
         print(f"     reason: {result['completion_reason']}")
+    verdict, why = verification_verdict(result)
+    print(f"     verified: {'yes' if verdict else 'NO'} — {why}")
     return result
+
+
+# ── The second half of the criterion ──────────────────────────────────────────
+
+def verification_verdict(row: dict) -> tuple:
+    """
+    `(passes, why)` for "does the thing this row built actually run".
+
+    The first half of the criterion — a terminal state and a valid ZIP — was
+    always measurable and was always the only half measured. Row 3 passed it on
+    2026-08-28 while shipping twelve endpoints that returned 500.
+
+    A row passes here when every check that ran either verified the artifact or
+    correctly did not apply, AND at least one check actually executed it. The
+    second clause is the point: four not-applicables are not evidence of
+    anything, and NOT_RUN is a hole, never a pass.
+    """
+    outcomes = row.get("verification") or []
+    if not outcomes:
+        return False, ("no verification record — this build is unverified, or "
+                       "it predates the record")
+
+    failed  = [o for o in outcomes if o.get("status") == "failed"]
+    not_run = [o for o in outcomes if o.get("status") == "not_run"]
+    ran     = [o for o in outcomes if o.get("status") == "verified"]
+
+    if failed:
+        return False, "failed: " + ", ".join(o.get("check", "?") for o in failed)
+    if not_run:
+        return False, "never ran: " + ", ".join(
+            o.get("check", "?") for o in not_run)
+    if not ran:
+        return False, ("nothing executed the artifact — every check answered "
+                       "'not applicable'")
+    return True, "verified by " + ", ".join(o.get("check", "?") for o in ran)
 
 
 # ── Report ────────────────────────────────────────────────────────────────────
@@ -269,20 +379,27 @@ def merge_previous(results: list, path: Path) -> list:
     kept = []
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^\| (\d+) \| ([^|]+)\| `([^`]+)` \| ([\d,]+) \|"
+            # The table gained a Verified column, so the parser has to as
+            # well. A carried row keeps its verdict as text and NOT as a
+            # verification record: it was earned by a run this one did not
+            # watch, and inventing outcomes for it would let a carried row
+            # claim evidence nobody has.
+            m = re.match(r"^\| (\d+) \| ([^|]+)\| `([^`]+)` \| (\w+) \| ([\d,]+) \|"
                          r" ([\d.]+)s \| ([^|]+)\| (\w+) \|$", line.strip())
             if not m or int(m.group(1)) in fresh:
                 continue
             kept.append({
                 "row": int(m.group(1)), "shape": m.group(2).strip(),
-                "status": m.group(3), "total_tokens": int(m.group(4).replace(",", "")),
-                "duration_seconds": float(m.group(5)),
-                "file_count": m.group(6).strip(),
-                "zip": {"ok": m.group(7) == "yes", "status": "—",
+                "status": m.group(3), "total_tokens": int(m.group(5).replace(",", "")),
+                "duration_seconds": float(m.group(6)),
+                "file_count": m.group(7).strip(),
+                "zip": {"ok": m.group(8) == "yes", "status": "—",
                         "content_type": None, "bytes": 0},
                 "build_id": "(from an earlier run)", "completion_reason": "",
                 "progress_percent": None, "tokens_by_model": None,
                 "expect_boot": True, "carried": True,
+                "verification": [], "smoke_summary": "", "build_shape": "",
+                "carried_verified": m.group(4) == "yes",
             })
     except Exception as e:
         print(f"  (could not merge previous report: {e})")
@@ -295,10 +412,19 @@ def merge_previous(results: list, path: Path) -> list:
 
 def write_report(results: list, path: Path) -> None:
     ok_states = {"done", "done_with_context"}
-    passing = [
+    shipped = [
         r for r in results
         if r["status"] in ok_states and r["zip"]["ok"]
     ]
+    verdicts = {}
+    for r in results:
+        if r.get("carried"):
+            ok = bool(r.get("carried_verified"))
+            verdicts[r["row"]] = (
+                ok, "as recorded by the run that produced it")
+        else:
+            verdicts[r["row"]] = verification_verdict(r)
+    passing = [r for r in shipped if verdicts[r["row"]][0]]
     lines = [
         "# Phase 23 A2 — live matrix results",
         "",
@@ -308,33 +434,32 @@ def write_report(results: list, path: Path) -> None:
         "or `done_with_context` with a downloadable ZIP, and every build that "
         "boots reports **0 5xx** from the runtime smoke test.",
         "",
-        f"**Result: {len(passing)} of {len(results)} rows reach a terminal state "
-        f"with a valid ZIP"
-        f"{' (matrix incomplete)' if len(results) < len(MATRIX) else ''}.**",
+        f"**Result: {len(passing)} of {len(results)} rows meet BOTH halves"
+        f"{' (matrix incomplete)' if len(results) < len(MATRIX) else ''}.** "
+        f"{len(shipped)} shipped a valid ZIP.",
         "",
-        "> That count covers the FIRST half of the criterion only. The 0-5xx half "
-        "is not in the API — the smoke-test line lives in the server log, and a "
-        "row counted here can still have shipped every endpoint broken. Row 3 on "
-        "2026-08-28 did exactly that.",
+        "> Both halves are now read from the API. The second one — did the "
+        "artifact actually run — used to exist only as a line in the server "
+        "log, so this file reported the first half and told the reader to grep "
+        "for the rest. A row passes it when every check either verified the "
+        "artifact or correctly did not apply, and at least one check executed "
+        "it: four not-applicables are not evidence, and a check that never ran "
+        "is a hole, not a pass.",
         "",
-        "| Row | Shape | Status | Tokens | Duration | Files | ZIP |",
-        "|-----|-------|--------|--------|----------|-------|-----|",
+        "| Row | Shape | Status | Verified | Tokens | Duration | Files | ZIP |",
+        "|-----|-------|--------|----------|--------|----------|-------|-----|",
     ]
     for r in results:
+        ok, why = verdicts[r["row"]]
         lines.append(
             f"| {r['row']} | {r['shape']} | `{r['status']}` | "
+            f"{'yes' if ok else 'NO'} | "
             f"{(r['total_tokens'] or 0):,} | "
             f"{(r['duration_seconds'] or 0):.0f}s | {r.get('file_count', '—')} | "
             f"{'yes' if r['zip']['ok'] else 'NO'}"
             f"{' *(earlier run)*' if r.get('carried') else ''} |"
         )
     lines += [
-        "",
-        "The smoke-test line is not in the API — read it from the server log:",
-        "",
-        "```bash",
-        'grep -E "Runtime smoke test|failed to boot|no FastAPI entry point" server.log',
-        "```",
         "",
         "## Per-row detail",
         "",
@@ -353,8 +478,26 @@ def write_report(results: list, path: Path) -> None:
             f"- download: HTTP {r['zip']['status']}, "
             f"{r['zip']['content_type'] or '—'}, {r['zip']['bytes']:,} bytes",
             f"- expected to boot: {'yes' if r['expect_boot'] else 'no (smoke test must skip cleanly)'}",
+            f"- build shape: {r.get('build_shape') or '—'}",
+            f"- smoke: {r.get('smoke_summary') or '—'}",
+            f"- verified: **{'yes' if verdicts[r['row']][0] else 'NO'}** — "
+            f"{verdicts[r['row']][1]}",
             "",
         ]
+        outcomes = r.get("verification") or []
+        if outcomes:
+            lines += ["| Check | Status | What it did |",
+                      "|---|---|---|"]
+            for o in outcomes:
+                lines.append(
+                    f"| `{o.get('check', '?')}` | {o.get('status', '?')} | "
+                    f"{(o.get('detail') or '—').replace('|', '/')} |"
+                )
+            lines.append("")
+            for o in outcomes:
+                for finding in (o.get("findings") or [])[:5]:
+                    lines.append(f"- 🚨 {finding}")
+            lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n  Report written to {path}")
 
@@ -416,6 +559,7 @@ def main() -> int:
                 "total_tokens": 0, "tokens_by_model": None, "file_count": 0,
                 "zip": {"ok": False, "status": 0, "content_type": "", "bytes": 0},
                 "expect_boot": entry["expect_boot"],
+                "verification": [], "smoke_summary": "", "build_shape": "",
             })
 
     print_quota("quota after")

@@ -452,6 +452,26 @@ class Pipeline:
                 f"fail import/debug verification: {preview}"
             )
 
+        # What self-verification tried to repair and could not. It named the
+        # file, held the defect list, and threw both away into a counter — so
+        # the build shipped defects that a pass had already identified, and
+        # remediation never heard about them. This IS repairable: the file is
+        # right there.
+        unrepaired = dict(
+            getattr(getattr(self, "backend_developer", None),
+                    "unrepaired_defects", {}) or {}
+        )
+        if unrepaired:
+            failed_paths.extend(p for p in unrepaired if p not in failed_paths)
+            preview = "; ".join(
+                f"{path} ({defects[0][:80]})" if defects else path
+                for path, defects in list(unrepaired.items())[:3]
+            )
+            issues.append(
+                f"self-verification could not repair {len(unrepaired)} "
+                f"file(s): {preview}"
+            )
+
         # Frontend/TypeScript failures are NOT repairable here and never were.
         # They were announced as repairable, contributed nothing to
         # `failed_paths`, and so drove a remediation pass that found nothing to
@@ -772,12 +792,45 @@ class Pipeline:
         report = getattr(result, "remediation", None)
         unresolved = list(getattr(report, "unresolved", []) or [])
 
+        # First, what the verifiers *said in a field*. A check that establishes
+        # the artifact does not run marks its outcome fatal, so the verdict does
+        # not depend on the wording of a sentence.
+        structured: list[str] = []
+        for outcome in (getattr(result, "verification_outcomes", None) or []):
+            try:
+                evidence = outcome.get("evidence") or {}
+                if not evidence.get("fatal"):
+                    continue
+                structured.extend(
+                    outcome.get("findings")
+                    or evidence.get("fatal_reasons")
+                    or [f"{outcome.get('check', 'a check')} found the artifact "
+                        f"does not run"]
+                )
+            except Exception:
+                continue
+        reasons.extend(structured)
+
+        # Then the wording, as a fallback — some findings reach `unresolved`
+        # from paths that produce no outcome. When the strings fire and nothing
+        # structured did, say so: that gap is how this decision silently stops
+        # working, and it should be visible rather than inferred.
+        matched_text: list[str] = []
         for finding in unresolved:
             low = finding.lower()
             for marker in self._UNUSABLE_MARKERS:
                 if marker in low:
-                    reasons.append(finding)
+                    matched_text.append(finding)
                     break
+        if matched_text and not structured:
+            logger.info(
+                "  🧾 `unusable` decided on finding text alone — no verifier "
+                "marked its outcome fatal. If that is a check's omission rather "
+                "than a path with no outcome, the flag is the thing to fix."
+            )
+        for finding in matched_text:
+            if finding not in reasons:
+                reasons.append(finding)
 
         # Nothing was generated at all. `_diagnose`'s test check is guarded by
         # `and result.backend_files`, so an empty backend produced no issue
@@ -871,13 +924,23 @@ class Pipeline:
             for finding in outcome.findings:
                 logger.warning(f"     🚨 {finding}")
 
+        # The web probe ran before this and reported its findings itself, so it
+        # is recorded but NOT re-collected — the same defect must not be filed
+        # twice under two check names. Recording it here rather than appending
+        # from there preserves the replace-not-append rule: this list describes
+        # the last run, and a reader can tell which run they are looking at.
+        recorded = list(outcomes)
+        smoke_outcome = getattr(self, "_smoke_outcome", None)
+        if smoke_outcome is not None:
+            recorded.insert(0, smoke_outcome)
+
         try:
             # Replace, do not append. This runs twice — once before remediation
             # and once in the final re-audit — and appending listed every check
             # twice, leaving a reader unable to tell which run they were looking
             # at or whether a repair had changed anything. The last run is the
             # one that describes the shipped artifact.
-            result.verification_outcomes = [o.to_dict() for o in outcomes]
+            result.verification_outcomes = [o.to_dict() for o in recorded]
         except Exception:
             pass
 
@@ -948,7 +1011,16 @@ class Pipeline:
 
         Never raises.
         """
+        from tools.verification import VerificationOutcome
+
         self._smoke_runtime_errors = {}
+        # The web probe is the most important check in the pipeline and the only
+        # one that never said what it did. It returned a bare list, so its
+        # result lived in the server log and nowhere else — which is why
+        # run_live_matrix.py has to tell an operator to grep for it, and why the
+        # matrix has never been able to evaluate the second half of its own pass
+        # criterion. `_verify_other_shapes` records this alongside the rest.
+        self._smoke_outcome = None
         root = result.architecture.get("root_folder", "")
         if not root:
             return []
@@ -958,6 +1030,10 @@ class Pipeline:
             smoke = smoke_test_app(root)
         except Exception as e:
             logger.warning(f"  ⚠️  Runtime smoke test failed to run: {e}")
+            self._smoke_outcome = VerificationOutcome.not_run(
+                "runtime_smoke",
+                detail=f"the probe itself raised {type(e).__name__}: {e}",
+            )
             return []
 
         # Record it on the build so the documenter and API can report it.
@@ -986,11 +1062,18 @@ class Pipeline:
                     f"  🚨 A web app was found at {where} but the probe could not "
                     f"boot it — this build is UNVERIFIED"
                 )
-                return [
+                finding = (
                     f"a web application exists at {where} but could not be "
                     f"started for verification, so none of its endpoints have "
                     f"been checked"
-                ]
+                )
+                self._smoke_outcome = VerificationOutcome.not_run(
+                    "runtime_smoke", shape=shapes.describe(),
+                    detail=f"a web app was found at {where} and the probe "
+                           f"could not boot it",
+                    findings=[finding],
+                ).mark_fatal("the web app could not be started at all")
+                return [finding]
             what = shapes.describe() if shapes is not None else "unknown"
             logger.info(
                 f"  ℹ️  No web entry point, and none expected for this build "
@@ -1006,6 +1089,10 @@ class Pipeline:
                 )
             except Exception:
                 pass
+            self._smoke_outcome = VerificationOutcome.not_applicable(
+                "runtime_smoke", shape=what,
+                detail="this build ships no web application to probe",
+            )
             return []
 
         if not smoke.app_loaded:
@@ -1027,10 +1114,16 @@ class Pipeline:
                     f"the app does not start — importing it raises: "
                     f"{self._trim_keeping_frames(smoke.error)}"
                 )
-            return [
+            finding = (
                 f"the application does not start: {smoke.error[:200]}. "
                 f"Every endpoint is unreachable."
-            ]
+            )
+            self._smoke_outcome = VerificationOutcome.failed(
+                "runtime_smoke", [finding], shape="web_api",
+                detail=f"the app at {smoke.entry} raises while being imported",
+                evidence={"entry": smoke.entry},
+            ).mark_fatal("the application does not start")
+            return [finding]
 
         if not smoke.probes:
             # An app that boots and declares NO routes used to return `[]` here
@@ -1051,10 +1144,16 @@ class Pipeline:
                     "Either no route handler is defined, or the router is never "
                     "included on the app with app.include_router(...)."
                 )
-            return [
+            finding = (
                 "the application starts but declares no routes, so it serves "
                 "nothing. Every requested endpoint is missing."
-            ]
+            )
+            self._smoke_outcome = VerificationOutcome.failed(
+                "runtime_smoke", [finding], shape="web_api",
+                detail=f"the app at {smoke.entry} boots and declares 0 routes",
+                evidence={"entry": smoke.entry, "routes_total": 0},
+            ).mark_fatal("the application declares no routes")
+            return [finding]
 
         logger.info(f"  🔥 Runtime smoke test: {smoke.summary()}")
         for probe in smoke.probes:
@@ -1062,7 +1161,19 @@ class Pipeline:
             logger.info(f"     {mark} {probe.method:6} {probe.path} → {probe.status}")
 
         failures = smoke.failures
+        evidence = {
+            "entry": smoke.entry,
+            "routes_ok": smoke.passed,
+            "routes_total": smoke.total,
+        }
         if not failures:
+            # Positive evidence, and the first time it has been recorded
+            # anywhere but the log: this app was booted and every route it
+            # declares answered without a server error.
+            self._smoke_outcome = VerificationOutcome.verified(
+                "runtime_smoke", shape="web_api",
+                detail=smoke.summary(), evidence=evidence,
+            )
             return []
 
         # Aim a repair: the outermost project frame is the handler that was
@@ -1091,11 +1202,21 @@ class Pipeline:
         detail = ", ".join(
             f"{p.method} {p.path} → {p.status or 'no response'}" for p in failures[:5]
         )
-        return [
+        finding = (
             f"{len(failures)} of {smoke.total} endpoint(s) return a server error when "
             f"called: {detail}. These fail at request time, which the import check "
             f"cannot see."
-        ]
+        )
+        outcome = VerificationOutcome.failed(
+            "runtime_smoke", [finding], shape="web_api",
+            detail=smoke.summary(), evidence=evidence,
+        )
+        # Some routes answering is a build with broken endpoints; none answering
+        # is a build that does not work. Only the second is `unusable`.
+        if smoke.passed == 0:
+            outcome.mark_fatal("every endpoint returns a server error")
+        self._smoke_outcome = outcome
+        return [finding]
 
     def _redirect_blame_to_definition(
         self, root: str, blame: str, error: str

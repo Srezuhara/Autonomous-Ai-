@@ -26,7 +26,7 @@ from pathlib import Path
 from agents.base_agent import BaseAgent
 from tools.file_writer import create_file, read_file
 from tools.code_introspect import analyze_file, find_phantom_imports
-from tools.repair_guard import accept_python_reply
+from tools.repair_guard import accept_python_reply, accept_rescan
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,10 @@ class BackendDeveloper(BaseAgent):
     def __init__(self):
         system_prompt = PROMPT_FILE.read_text(encoding="utf-8")
         super().__init__("BackendDeveloper", system_prompt)
+        # What self-verification could not fix, per file. This used to be a
+        # `failed` counter that was logged and discarded, so a build shipped
+        # known defects with nothing downstream able to see them.
+        self.unrepaired_defects: dict[str, list[str]] = {}
 
     def run(self, intent: dict, architecture: dict) -> list[str]:
         """
@@ -341,6 +345,7 @@ Return ONLY raw SQL. No markdown, no explanation."""
         the todo_app build shipped all three.
         """
         planned = self._planned_modules(architecture)
+        self.unrepaired_defects = {}
 
         # Collect @contextmanager definitions across the whole project first —
         # a dependency is typically defined in main.py and consumed in routes.py.
@@ -423,12 +428,35 @@ Return ONLY raw SQL. No markdown, no explanation."""
 
             create_file(path, fixed)
 
+            # Re-scan with the SAME inputs the first scan used, or the
+            # comparison is not one. The project-level findings are not
+            # per-file rescannable, so they stay in the picture as they were.
             remaining = self._scan_defects(path, planned, ctx_managers)
+            remaining = remaining + schema_defects.get(
+                str(path).replace("\\", "/"), []
+            )
             if remaining:
+                # The rewrite used to stay on disk here, with the failure
+                # recorded in a counter that was logged and then discarded.
+                # A rewrite that did not fix what it was called for is not
+                # better than the file every other check in this build already
+                # ran against — put the original back.
+                keep, why = accept_rescan(defects, remaining)
                 failed += 1
-                logger.warning(
-                    f"⚠️  [Phase 22] {path}: {len(remaining)} defect(s) remain after repair"
-                )
+                if keep:
+                    logger.warning(
+                        f"⚠️  [Phase 22] {path}: {len(remaining)} of "
+                        f"{len(defects)} defect(s) remain, keeping the partial "
+                        f"repair"
+                    )
+                else:
+                    if before:
+                        create_file(path, before)
+                    logger.warning(
+                        f"⚠️  [Phase 22] {path}: rolling the repair back — {why}"
+                    )
+                    remaining = defects
+                self.unrepaired_defects[path] = list(remaining)
             else:
                 repaired += 1
                 logger.info(f"✅ [Phase 22] {path}: clean after repair")

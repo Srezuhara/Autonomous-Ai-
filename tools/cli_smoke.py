@@ -195,9 +195,16 @@ def smoke_test_cli(root: str, timeout: int = CLI_TIMEOUT) -> VerificationOutcome
         e["path"] for e in evidence["entries"]
     )
     if findings:
-        return VerificationOutcome.failed(
+        outcome = VerificationOutcome.failed(
             "cli_smoke", findings, shape="cli", detail=detail, evidence=evidence
         )
+        # A tool whose --help does not work is not a tool with a problem; it is
+        # a tool nobody can run. Say so in a field rather than leaving the
+        # terminal status to recognise the wording.
+        for record in evidence["entries"]:
+            if record.get("fatal"):
+                outcome.mark_fatal(record["fatal"])
+        return outcome
     return VerificationOutcome.verified(
         "cli_smoke", shape="cli", detail=detail, evidence=evidence
     )
@@ -228,6 +235,7 @@ def _probe_one(
                 f"(exit {code}): {(err or out).strip()[:300]}"
             )
             record["ok"] = False
+            record["fatal"] = f"{entry.path} fails on --help"
             return record
 
         if not combined:
@@ -236,6 +244,7 @@ def _probe_one(
                 f"`--help`, so it offers the user no way to discover its usage"
             )
             record["ok"] = False
+            record["fatal"] = f"{entry.path} prints nothing for --help"
             return record
 
         # ── 2. a real invocation, when we can build one safely ────────────────

@@ -249,6 +249,7 @@ def check_web_assets(root: str) -> VerificationOutcome:
         )
 
     findings: list[str] = []
+    empty_pages: list[str] = []
     evidence: dict = {"pages": [], "checked_routes": 0}
     bundled = shapes.has_node_frontend
 
@@ -257,6 +258,7 @@ def check_web_assets(root: str) -> VerificationOutcome:
         html = _read(page)
         if not html.strip():
             findings.append(f"{rel_page} is empty — the page has no content")
+            empty_pages.append(rel_page)
             continue
 
         parser = _Assets()
@@ -396,10 +398,16 @@ def check_web_assets(root: str) -> VerificationOutcome:
         f"{len(declared)} declared route(s)"
     )
     if findings:
-        return VerificationOutcome.failed(
+        outcome = VerificationOutcome.failed(
             "web_assets", findings, shape="static_frontend",
             detail=detail, evidence=evidence,
         )
+        # A page with no content is not a page with a problem. A broken asset
+        # reference is bad and still leaves something to look at; an empty file
+        # is the artifact not existing.
+        for page in empty_pages:
+            outcome.mark_fatal(f"{page} is an empty page")
+        return outcome
     return VerificationOutcome.verified(
         "web_assets", shape="static_frontend", detail=detail, evidence=evidence
     )

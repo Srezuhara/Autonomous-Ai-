@@ -205,6 +205,37 @@ def accept_python_reply(current: str, fixed: str) -> tuple[bool, str]:
     return True, ""
 
 
+def accept_rescan(before: list, after: list) -> tuple[bool, str]:
+    """
+    The rule for what a re-scan has to show before a rewrite is kept.
+
+    `accept_python_reply` asks whether the reply is a plausible file. This asks
+    the question after it: did the repair actually help? BackendDeveloper's
+    self-verification pass re-scanned, found the defects still there, incremented
+    a counter that was logged and discarded, and **left the rewrite on disk**.
+    So a repair that changed the file without improving it shipped, and the only
+    trace was a line in a log nobody reads after the build.
+
+    Strictly fewer defects, and no defect the original did not have. Equal
+    counts are a rejection: a rewrite that swaps one defect for another is a
+    different file with the same problem, and the original at least is the code
+    every other check in this build was run against.
+    """
+    before_set, after_set = set(before or []), set(after or [])
+    new = after_set - before_set
+    if new:
+        return False, (
+            f"introduces {len(new)} defect(s) the original did not have: "
+            + "; ".join(sorted(new)[:2])
+        )
+    if len(after_set) >= len(before_set) and before_set:
+        return False, (
+            f"leaves {len(after_set)} of {len(before_set)} defect(s) in place — "
+            "a rewrite that fixes nothing is not an improvement on the original"
+        )
+    return True, ""
+
+
 def count_test_functions(source: str) -> int:
     """How many `test_*` functions this file defines, at any nesting level."""
     try:

@@ -121,6 +121,26 @@ class VerificationOutcome:
         """
         return self.status is Status.VERIFIED
 
+    @property
+    def is_fatal(self) -> bool:
+        """
+        Did this check find that the artifact does not run at all?
+
+        The `unusable` verdict used to be decided by substring-matching finding
+        text — "declares no routes", "fails on `--help`". Reword a finding and
+        the verdict silently stops firing, which is the same class of defect as
+        an empty list meaning four things: the signal lives in prose that
+        nothing guarantees. A verifier that knows the artifact is dead says so
+        here, in a field.
+        """
+        return bool(self.evidence.get("fatal"))
+
+    def mark_fatal(self, reason: str) -> "VerificationOutcome":
+        """Record that this finding means the artifact does not run."""
+        self.evidence["fatal"] = True
+        self.evidence.setdefault("fatal_reasons", []).append(reason)
+        return self
+
     def summary(self) -> str:
         head = f"{self.check}: {self.status.value}"
         if self.shape:
