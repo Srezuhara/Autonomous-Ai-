@@ -135,6 +135,19 @@ class BuildResult:
     # ── Phase 22: runtime verification ────────────────────────────────────────
     smoke_summary:            str   = ""   # "N/M routes responded without a 5xx"
 
+    # What every shape verifier actually did, as VerificationOutcome dicts.
+    # `smoke_summary` was set here and read only by main.py's CLI table — it
+    # never reached the database or any API route, which is why the matrix
+    # driver has to grep server.log and has never been able to evaluate the
+    # second half of its own pass criterion ("0 5xx from the smoke test").
+    verification_outcomes:    list  = field(default_factory=list)
+    build_shape:              str   = ""   # "web_api+cli", from tools/build_shape
+
+    # The artifact does not run at all — see Pipeline._functional_verdict.
+    # Distinct from `degraded`, which means "usable, but read the notes".
+    unusable:                 bool  = False
+    unusable_reasons:         list  = field(default_factory=list)
+
     @property
     def all_files(self):
         return self.backend_files + self.frontend_files
@@ -698,6 +711,112 @@ class Pipeline:
             f"{', '.join(sorted(stubs)[:6])}"
         ]
 
+    # Phrases that mean "this artifact does not function", as opposed to "this
+    # artifact has a problem". The difference is the whole point of the
+    # `unusable` verdict: one flaky generated test and an app that serves
+    # nothing were both `done_with_context`, which made the status useless as a
+    # signal. Matched against the findings the verifiers already produce, so
+    # there is one vocabulary rather than a parallel set of predicates.
+    _UNUSABLE_MARKERS = (
+        "the application does not start",
+        "declares no routes",
+        "could not be started for verification",
+        "fails on `--help`",
+        "prints nothing for `--help`",
+        "the page has no content",
+    )
+
+    def _functional_verdict(self, result: "BuildResult") -> tuple[bool, list[str]]:
+        """
+        (is_usable, reasons). False means the thing does not run at all.
+
+        Deliberately narrow. This is not "is the build good" — degraded already
+        covers that, and a build with a failing test or a missing feature is
+        still something a user can open and finish. This is "did we ship
+        something that cannot work", which until now was reported with exactly
+        the same status as a cosmetic problem.
+        """
+        reasons: list[str] = []
+        report = getattr(result, "remediation", None)
+        unresolved = list(getattr(report, "unresolved", []) or [])
+
+        for finding in unresolved:
+            low = finding.lower()
+            for marker in self._UNUSABLE_MARKERS:
+                if marker in low:
+                    reasons.append(finding)
+                    break
+
+        # Nothing was generated at all. `_diagnose`'s test check is guarded by
+        # `and result.backend_files`, so an empty backend produced no issue
+        # whatsoever — the emptiest build possible scored clean.
+        if not result.backend_files and not result.frontend_files:
+            reasons.append("no source files were generated")
+
+        return (not reasons), reasons
+
+    def _verify_other_shapes(self, result: "BuildResult") -> list[str]:
+        """
+        Run the verifiers for every shape that is not a web API.
+
+        Each returns a VerificationOutcome rather than a bare list, so a check
+        that could not run says so instead of looking identical to one that
+        passed. `collect_findings` turns a NOT_RUN into an explicit
+        "this build is unverified" line.
+
+        Outcomes are recorded on the build so the terminal status, the API and
+        SESSION_CONTEXT.md can all state what was actually checked. Never raises.
+        """
+        root = result.architecture.get("root_folder", "")
+        if not root:
+            return []
+
+        # A project directory that does not exist is a build-level problem, and
+        # `_functional_verdict` reports it once. Asking each shape verifier
+        # about it would file the same fact twice under two different check
+        # names, which is how a clean build acquires phantom findings — the
+        # other static audits skip a missing directory for the same reason.
+        try:
+            import config
+            if not (Path(config.OUTPUT_DIR) / root).is_dir():
+                return []
+        except Exception:
+            return []
+
+        try:
+            from tools.cli_smoke import smoke_test_cli
+            from tools.web_asset_check import check_web_assets
+            from tools.verification import collect_findings
+        except Exception as e:
+            logger.warning(f"  ⚠️  Shape verifiers unavailable: {e}")
+            return []
+
+        outcomes = []
+        for name, fn in (("cli_smoke", smoke_test_cli),
+                         ("web_assets", check_web_assets)):
+            try:
+                outcomes.append(fn(root))
+            except Exception as e:
+                # A verifier that crashes must not be read as a pass.
+                from tools.verification import VerificationOutcome
+                logger.warning(f"  ⚠️  {name} raised: {e}")
+                outcomes.append(VerificationOutcome.not_run(
+                    name, detail=f"the check itself raised {type(e).__name__}: {e}"
+                ))
+
+        for outcome in outcomes:
+            logger.info(f"  🧾 {outcome.summary()}")
+            for finding in outcome.findings:
+                logger.warning(f"     🚨 {finding}")
+
+        try:
+            existing = list(getattr(result, "verification_outcomes", []) or [])
+            result.verification_outcomes = existing + [o.to_dict() for o in outcomes]
+        except Exception:
+            pass
+
+        return collect_findings(outcomes)
+
     def _detect_shapes(self, root: str):
         """Every shape this project contains, or None if it cannot be read."""
         try:
@@ -1052,6 +1171,13 @@ class Pipeline:
         smoke_advisory = self._smoke_test_runtime(result)
         advisory = advisory + smoke_advisory
 
+        # …and run every OTHER shape this project contains. The web probe was
+        # the only executing check in the pipeline, so a CLI tool was verified
+        # by "the files import" — which by definition never runs what is under
+        # `if __name__ == "__main__"` — and a static page by one regex.
+        shape_advisory = self._verify_other_shapes(result)
+        advisory = advisory + shape_advisory
+
         # Phase 23: a 5xx whose traceback names a generated file is repairable,
         # and used to be filed under "cannot be fixed" purely because the smoke
         # test ran after the diagnosis that decides what gets repaired. A build
@@ -1252,7 +1378,11 @@ class Pipeline:
         # phantom imports, and the report must describe the FINAL state on disk.
         # `smoke_advisory` is whatever the last run of the app said, so a repair
         # that worked is not reported as an outstanding failure.
-        advisory = self._audit_generated_output(result) + list(smoke_advisory)
+        advisory = (
+            self._audit_generated_output(result)
+            + list(smoke_advisory)
+            + self._verify_other_shapes(result)
+        )
 
         # The request-time failures are already stated by `smoke_advisory`, in
         # the form that names the endpoints. Keeping the synthetic issue
@@ -1261,6 +1391,19 @@ class Pipeline:
 
         report.unresolved = list(issues) + list(advisory)
         report.degraded   = bool(report.unresolved)
+
+        # Separate "has problems" from "does not run". Both were
+        # done_with_context, so the status could not distinguish a flaky test
+        # from an application that serves nothing.
+        result.remediation = report
+        usable, why_not = self._functional_verdict(result)
+        result.unusable  = not usable
+        result.unusable_reasons = why_not
+        if not usable:
+            logger.error(
+                "  ⛔ This build does not function: "
+                + "; ".join(w[:120] for w in why_not[:3])
+            )
 
         if report.unresolved:
             logger.warning(

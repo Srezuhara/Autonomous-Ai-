@@ -175,7 +175,7 @@ async def download_project_zip(build_id: str):
         # crashed before it could — the user still gets an explanation instead
         # of a silently incomplete ZIP.
         context_arcname = root_folder + "SESSION_CONTEXT.md"
-        if project["status"] == "done_with_context" and context_arcname not in added_arcs:
+        if project["status"] in ("done_with_context", "unusable")                 and context_arcname not in added_arcs:
             zf.writestr(context_arcname, _minimal_context_fallback(project))
             file_count += 1
 

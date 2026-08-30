@@ -54,12 +54,20 @@ logger = logging.getLogger(__name__)
 # ── Phase 21: build status vocabulary ─────────────────────────────────────────
 # done               — every verification gate clean
 # done_with_context  — usable code exists but the build was degraded or paused
+# unusable           — the build finished and the code is downloadable, but the
+#                      artifact does not run at all (no routes, CLI dies on
+#                      --help, nothing generated). Distinct from `failed`,
+#                      which means the pipeline itself crashed.
 #                      by quota; SESSION_CONTEXT.md explains what to do next.
 #                      Downloadable, exactly like `done`.
 # failed             — crashed before producing any usable code
 # cancelled          — user cancelled
-DOWNLOADABLE_STATUSES = ("done", "done_with_context")
-TERMINAL_STATUSES     = ("done", "done_with_context", "failed", "cancelled")
+# `unusable` is downloadable on purpose. The contract has always been that no
+# generated code is discarded — the verdict tells the user the thing does not
+# run, it does not withhold the code they can fix.
+DOWNLOADABLE_STATUSES = ("done", "done_with_context", "unusable")
+TERMINAL_STATUSES     = ("done", "done_with_context", "unusable",
+                         "failed", "cancelled")
 
 
 # ── Safe score helpers ────────────────────────────────────────────────────────
@@ -608,14 +616,37 @@ class JobRunner:
                     )
                 )
 
+                # `unusable` is a floor beneath done_with_context, not a
+                # replacement for `failed`. `failed` means the pipeline crashed
+                # and there may be nothing to download; `unusable` means the
+                # pipeline finished, the code is here and downloadable, and the
+                # thing it built does not run — an app that serves no routes, a
+                # CLI that dies on --help, a page with no content.
+                #
+                # Before this, those shipped as done_with_context, the same
+                # status as one flaky generated test, which made the status
+                # useless as a signal. Row 4 finished done_with_context with a
+                # valid ZIP while its web app served a single /health route and
+                # its CLI had never been executed by anything.
+                is_unusable = bool(result and getattr(result, "unusable", False))
+
                 if is_cancelled:
                     final_status = "cancelled"
+                elif is_unusable:
+                    final_status = "unusable"
                 elif is_degraded:
                     final_status = "done_with_context"
                 elif result and result.success:
                     final_status = "done"
                 else:
                     final_status = "failed"
+
+                if is_unusable:
+                    reasons = list(getattr(result, "unusable_reasons", []) or [])
+                    completion_reason = (
+                        "The build completed and the code is downloadable, but it "
+                        "does not run: " + "; ".join(reasons[:3])
+                    ) or completion_reason
 
                 # A quota error that escaped the pipeline entirely (result is
                 # None or unmarked) still counts as a context handoff when the
