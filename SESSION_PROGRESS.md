@@ -1,33 +1,24 @@
 # Session Progress — start here
 
-**Last session: 2026-08-30 (Phase 23 — row 3 rebuilt a third time, row 4 run for
-the first time, and the smoke test's write coverage found to be fictional).**
-Committed on `main`, `55d9121`. `test_phase23.py` is **400/400**, up from 394.
+**Last session: 2026-08-30 (Phase 23 — the pipeline was reporting success it
+had not earned, and now does not).** Committed on `main`,
+`55d9121`..`94d52c4`. `test_phase23.py` is **491/491**, up from 394.
 
 > **Backend/pipeline work has its own state doc: `PHASE23_HANDOFF.md`.** Read it
 > first if you are touching `llm_client.py`, the agents, the pipeline or the
-> platform API — §4.x there is the per-defect detail this file summarises. This
-> file remains the frontend and general entry point.
+> platform API. This file remains the frontend and general entry point.
 
-**The headline: `16/16` was not true, and no build score before today was.**
-The runtime smoke test sent `json={}` to every POST and PUT, so validation
-rejected the body with 422 *before the handler was entered* — and 422 counts as
-"responded without a server error". **Every write endpoint in every build ever
-run was scored green without executing a line of itself.** Row 3 was reported
-16/16 while four routes raised `AttributeError` on every call. Fixed in
-`55d9121` (§0.6); the same project now scores 12/16 and names all four.
+**The one-line version.** An empty list meant four different things — it passed,
+it does not apply, it could not run, and there was nothing to look at — so a
+build nobody had verified and a build that passed verification were the same
+value. Every other defect this session hangs off that.
 
-**The second finding is the one to act on next.** Given those four failures and
-the file they are in, the debugger **cannot repair them, and makes the code
-worse trying** — it rewrote `prod.sku` as `data.get("sku")` in one of the four
-handlers, turning a loud AttributeError into a silent `None` bound into a
-`NOT NULL UNIQUE` column. §0.7 has the diagnosis: the repair is shown
-`routes.py` and never `schemas.py`, so it cannot know whether to rename the read
-or add the field, and silencing is the only move left to it.
-
-**Row 4 (CLI) ran for the first time and behaved.** The smoke test skipped
-cleanly (`no FastAPI entry point`), no scaffold placeholder survived, no phantom
-parse defects. `done_with_context`, 882s, 105,999 tokens.
+**A correction to what this file said yesterday.** Row 4's
+`Runtime smoke test skipped (no FastAPI entry point)` was recorded here as proof
+the non-web path worked. It was a **miss**: the architect had put a FastAPI app
+in `bulk_file_renamer/main.py` and entry discovery only searched `backend/`,
+`src/` and the project root. Row 4 shipped an unprobed web app *and* a CLI that
+nothing executed, and passed the matrix criterion doing it.
 
 **Where things stand.** Row 3 was rebuilt twice. The first rebuild was aborted
 deliberately once its log showed the pipeline burning one LLM call per generated
@@ -60,98 +51,122 @@ pipeline first, and about the model second — that is now the cheaper bet.
 ## 0. Next session — pick up here
 
 **Restart the server before anything.** It runs `--no-reload` deliberately, so a
-running process holds the code it started with — and the session of 2026-08-30
-ended with a server still holding the *pre-fix* smoke probe. A row started
-against it would score write endpoints green again.
+running process holds the code it started with.
 
 ```bash
 venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
 venv/Scripts/python.exe run_live_matrix.py --dry-run
 ```
 
-**Quota at the close of 2026-08-30 (13:45 IST):**
-
-| Model | Left | Note |
-|---|---|---|
-| `openai/gpt-oss-120b` | ~129,500 | comfortable |
-| `openai/gpt-oss-20b` | ~43,900 | **the bottleneck** — ~3.2h to the 70,000 gate |
-
-**The token split has inverted, and planning must follow it.** The fast model
-used to be the cheap one; it is now the one that runs out. Row 3 on 2026-08-29
-spent 22K on 20b and 65K on 120b. The same row on 2026-08-30 spent **97.5K on
-20b** and 38.5K on 120b, because the tester, the reviewer and every remediation
-pass run on the fast model — and remediation is where the tokens now go.
-
-`MIN_TOKENS_TO_START` gates on the *best* model (`run_live_matrix.py:183`), so
-the driver will happily start a row the fast model cannot finish. **Check 20b by
-hand before starting one.** From ~41,000 it needs ~3.5h to reach the 70,000 gate
-and ~7h to be comfortable for a row.
+**Check the FAST model by hand.** `MIN_TOKENS_TO_START` gates on the *best*
+model (`run_live_matrix.py:183`), and the split has inverted — the tester, the
+reviewer and every remediation pass run on `gpt-oss-20b`, so it is the one that
+runs out. Row 3 spent 97.5K on 20b against 38.5K on 120b. The driver will
+happily start a row the fast model cannot finish.
 
 ### The order to work in
 
-| # | Work | Quota | Why this order |
+| # | Work | Quota | Why |
 |---|---|---|---|
-| 1 | ~~The repair that cannot repair~~ | **done** (`4e5f2de`) | §0.7. What remains is the deterministic checker it points to: compare attribute reads against the Pydantic model's fields, zero tokens, in the shape of `sql_schema_check` |
-| 2 | **Row 2** | ~90-170K | Its three causes are fixed; needs 20b at 70K+. Never yet run against the fixed probe |
-| 3 | **Row 3 or row 1 again** | ~90-140K | Row 3's real score is knowable for the first time |
-| 4 | **Phase B1** | none | Start any time quota is short — see below |
+| 1 | **Row 2** | ~90-170K | The static-frontend and route-contract checks have never run on a fresh build. Row 2 is the shape they were written for |
+| 2 | **Row 3** | ~90-140K | Its real score is knowable for the first time (§0.6) |
+| 3 | **Row 1** | ~60K | The only row that has ever met the 0-5xx half of the criterion |
+| 4 | **Phase B1** | none | `PHASE23_PLAN.md`; startable any time quota is short |
 
-### 1. What rows 3 and 4 proved on 2026-08-30
+### What changed on 2026-08-30, and why
 
-Eight of the nine assertions from the previous session held, and every one is
-now *observed in a complete build* rather than inferred:
+The pipeline reported success it had not earned. Three defects compounded:
 
-| Expect | Result |
-|---|---|
-| `grep -c "does not parse" server.log` → 0 | ✅ 0, both rows |
-| smoke well above 7/19 | ✅ 16/16 reported — but see §0.6, it was really 12/16 |
-| no `scaffold placeholder: README.md` | ✅ none, both rows |
-| no `imports … inside a try/except that swallows` | ✅ none |
-| no `alembic/env.py` in the failing list | ✅ — and the architect emitted **no `alembic/__init__.py`**, so §4.21's shadowing is fixed at the source |
-| no `No module named 'main'` from a test | ✅ 0 |
-| `🗄️ SQL schema check` fires or stays silent | ✅ silent — correct for the ORM shape row 3 produced |
-| `🧬 pydantic V2 compat` silent, 0 `orm_mode` | ✅ |
-| status `done`, not `done_with_context` | ❌ **still never observed, on any row, ever** |
+1. **Silence read as success.** `_smoke_test_runtime` returned `[]` for a clean
+   run, a missing entry point, an app with **zero routes**, and a tester crash
+   that meant verification never ran at all. `report.unresolved` could not tell
+   them apart.
+2. **Only one shape was verified.** Entry discovery searched three directories
+   for the literal string `"FastAPI("`. A CLI was never executed, a static page
+   never parsed, a library never imported.
+3. **The product was bent to fit that verifier.** `prompts/architect.txt` forced
+   a FastAPI backend into every project "NO EXCEPTIONS", justified in its own
+   text as *"required for the testing and debugging pipeline to function."*
 
-Row 4 additionally proved the non-FastAPI path: `Runtime smoke test skipped (no
-FastAPI entry point)` — a clean skip, not a false failure. `done_with_context`,
-882s, 105,999 tokens, 2 unresolved issues (both ordinary test failures).
+Row 4 is what they cost together: it shipped `done_with_context` with a valid
+ZIP, containing a FastAPI app at `bulk_file_renamer/main.py` that was never
+probed (the search looked in `backend/`, `src/` and the root) and a CLI that
+nothing executed. **The log line `Runtime smoke test skipped (no FastAPI entry
+point)` was recorded in this file as proof the non-web path worked. It was a
+miss, not a skip.**
 
-### 2. Row 3 cost 56% more than the run before it, and why
+### The new verification surface
 
-| | run 3 (2026-08-29) | run 4 (2026-08-30) |
+| Tool | What it does | Cost |
 |---|---|---|
-| tokens | 87,551 | **136,043** |
-| duration | 729s | **1142s** |
-| first smoke | — | **0/16** |
-| remediation passes | 0 | **2** |
+| `tools/verification.py` | Four answers instead of an empty list: VERIFIED / NOT_APPLICABLE / **NOT_RUN** / FAILED. NOT_RUN is never `ok` | — |
+| `tools/build_shape.py` | One detector every verifier keys off. Finds a web app anywhere in the tree, Flask as well as FastAPI, a `create_app()` factory as well as a module-level binding | 0 |
+| `tools/cli_smoke.py` | **Runs the tool**: `--help` must exit 0 and print something, each subcommand must describe itself, a tool with required arguments must print usage rather than raise. Runs in a temp sandbox, never the project | 0 |
+| `tools/web_asset_check.py` | Parses the page: every local asset resolves, no bare specifier in a module, no `import` in a classic script, and every `fetch()` path matches a declared route | 0 |
+| `tools/package_smoke.py` | Imports the library as a user would, so `__init__.py` re-exports and `__all__` promises are actually executed | 0 |
+| `tools/feature_coverage.py` | Compares `intent["features"]` against route paths, function names, CLI flags. It reached only the README before | 0 |
+| `tools/repair_guard.py` | One acceptance rule, shared. Two other agents overwrote files with no guard at all | 0 |
 
-`main.py`'s lifespan created the SQLite *file* and never the *tables* — it
-assumed `alembic upgrade head`, which nothing runs. All 16 routes answered
-`OperationalError`, and two full remediation passes were spent getting back to a
-working app. **The architect chose the alembic shape and then nothing ran a
-migration.** Either the lifespan must create tables regardless, or the build must
-run the migration; today it does neither and the debugger pays for it. This is
-the largest cheap saving available.
+### The `unusable` verdict
 
-Note what the debugger's fix was: it rewrote `routes.py` onto raw `sqlite3` with
-its own `CREATE TABLE IF NOT EXISTS`, so the shipped project declares its schema
-**twice** — in `models.py` (SQLAlchemy + alembic) and again in `routes.py`. It
-works, and it is exactly the drift §4.18 exists to catch.
+A floor beneath `done_with_context`, not a replacement for `failed`. `failed`
+means the pipeline crashed; `unusable` means it finished, the code is
+downloadable, and the artifact does not run — no routes, `--help` dies, nothing
+generated. Still in `DOWNLOADABLE_STATUSES`, still ships `SESSION_CONTEXT.md`.
 
-### 3. Phase B1 — the no-quota track
+`Pipeline._functional_verdict` is deliberately narrow and matches the findings
+the verifiers already produce, so there is one vocabulary. A missing feature or
+a failing test is still `done_with_context` — that is something a user can
+finish.
 
-Fully specified in `PHASE23_PLAN.md`. Auth needs migrations first, which is why
-it is B1 and not B2. The load-bearing constraint: **keep
-`api_platform/database.py`'s function signatures as the seam** — `get_project`,
-`list_projects`, `update_project`, `add_build_step` are called from `runner.py`,
-all five route modules and the tests, so reimplementing their bodies over
-SQLAlchemy means zero call-site changes. Alembic's first revision must be
-**stamped** against the existing DB so the live builds survive.
+**Plain `done` is still unreachable** and was deliberately left alone: it ANDs
+nine conditions including 100% of generated tests passing and no `TODO`
+substring in any function body. Worth revisiting; it is a separate change from
+making failure visible.
 
-Note the irony worth remembering while doing it: §4.21 exists because a generated
-project's `alembic/` folder was made into a package that shadowed the real
-alembic. Do not repeat that in `api_platform/`.
+### Prompt contradictions that were producing the errors
+
+Neither is visible from inside either file.
+
+- `architect.txt` mandates *"plain HTML/CSS/JavaScript for ALL frontend code"*;
+  `frontend_generator.txt` mandated React + Tailwind + axios. Row 2 shipped the
+  hybrid — a React component in `app.js` loaded by a plain
+  `<script type="module">`, whose bare `import React from "react"` no browser
+  can resolve. The page rendered nothing and no gate looked at it.
+- `backend_developer.txt` forbids ORMs; `debugger.txt`'s ✅ example was
+  `db.query(Supplier).all()`. With an architect free to plan `alembic/`, that is
+  the mechanism behind the persistence drift that opened row 3 at 0/16 routes
+  and cost two remediation passes.
+
+Both resolved, plus: the forced backend removed, `debugger.txt`'s "Maximum 60
+lines" (which contradicted the deliberately uncapped rewrite budget and invites
+truncation) replaced with "return the file complete", and a rule forbidding the
+silencing of an AttributeError. **`test_phase23.py` §44 asserts the prompts
+agree**, because a contradiction between two files is what no single-file review
+catches.
+
+### Repair reach
+
+Three of `_diagnose`'s four "repairable" findings contributed **no**
+`failed_paths`: frontend/TypeScript failures, "no executable tests generated",
+and "generated tests fail". Remediation announced a repair, found nothing to
+repair, logged "made no progress", and degraded the build — the commonest route
+to `done_with_context`. The first two are now advisory (nothing here can fix
+them); the third supplies the file under test, which it had all along. §45
+asserts the invariant: anything called repairable must name a file.
+
+### What to distrust next
+
+1. **A checker is a hypothesis until it has been run against a real build.**
+   Four of the new checks reported a defect that did not exist, and every one
+   was caught by disbelieving the result: the probe importing a package module
+   bare, `detect_shapes` returning absolute paths, feature coverage not
+   splitting `StockMovement`, and the flag regex reading `-d` instead of
+   `--dry-run`. Each would have sent a repair at working code.
+2. **A test can match its own documentation.** Three assertions passed or failed
+   on prose in the file they were checking. Assert the directive, not the
+   string.
+3. **Scores will look worse.** Row 3 going 16/16 → 12/16 was the fix working.
 
 ---
 
@@ -182,6 +197,17 @@ against the real API on a real project, not that a full build was rebuilt.
 | 4.20 | An import hidden in a module-level try/except is seen | ✅ | "all clean" → **6 defects** on the file that shipped 0 routes |
 | 4.21 | Three false verification failures: package shadowing, framework scripts, test sys.path | ✅ | `alembic/env.py` and `test_stock.py` both cleared |
 | 4.22 | A write endpoint is probed with a body its model accepts, so the handler actually runs | ✅ | **16/16 → 12/16 on the shipped project**, naming 4 real defects; `POST /warehouses/` answers 201 |
+| 4.23 | Three agents overwrote generated files with no guard at all; one shared rule now | ✅ᵒ | `tools/repair_guard.py`; a test repair may not go green by deleting the test |
+| 4.24 | "Not checked" is no longer "checked and clean" | ✅ᵒ | `tools/verification.py`; NOT_RUN is never `ok` and contributes an explicit finding |
+| 4.25 | One shape detector; a web app anywhere in the tree is found | ✅ | **found row 4's unprobed app**, which serves exactly one route: `GET /health` |
+| 4.26 | The CLI is actually executed | ✅ | ran row 4's `cli.py` for the first time in the project's history — it passes |
+| 4.27 | The page is parsed and its calls checked against real routes | ✅ | **caught row 2's `import React from "react"`**, which no gate had ever looked at |
+| 4.28 | A library is imported the way a user imports it | ✅ᵒ | `__init__.py` re-exports and `__all__` promises are executed |
+| 4.29 | The build is compared to `intent["features"]` | ✅ | row 3 6/6 and row 4 4/4, and it still catches a genuinely absent feature |
+| 4.30 | An app that boots and serves nothing is `unusable`, not `done_with_context` | ✅ᵒ | the literal empty build; it used to return `[]` and log nothing |
+| 4.31 | Verification runs even when a step crashed, and its result reaches the API | ✅ᵒ | a tester crash silently skipped every check; `smoke_summary` never left the log |
+| 4.32 | The prompts no longer contradict each other | ✅ᵒ | React-vs-plain-JS and ORM-vs-sqlite3, both of which were shipping broken builds |
+| 4.33 | "Repairable" now means there is a file to aim at | ✅ᵒ | 3 of 4 findings drove a pass that could do nothing, then degraded the build |
 
 ### §4.13 — the one that was costing the most
 
@@ -390,9 +416,9 @@ not strictly need a rebuild.
 
 | Item | Cost | Notes |
 |---|---|---|
-| Row 2, then rows 3 and 1 against the fixed probe | ~170K / ~140K / ~60K | rows 3 and 4 are done (2026-08-30); **20b must be at 70K+ first**, see §0 |
+| Row 2, then rows 3 and 1 against the new checks | ~170K / ~140K / ~60K | the static-frontend and route-contract checks have never run on a fresh build; **check 20b by hand**, see §0 |
 | A1 assertion 2 — a build reaching plain `done` | falls out of the above | never once observed, on any row, ever |
-| **The lifespan that creates no tables** | ~0 to diagnose | row 3 opened at 0/16 and burned 2 remediation passes and ~48K tokens getting back. The architect picks alembic and nothing runs a migration — §0 item 2 |
+| ~~The lifespan that creates no tables~~ | **addressed** | the architect is now forbidden to plan an `alembic/` layout and every prompt agrees on raw sqlite3, so the shape that needed a migration nobody runs is not planned. Unproven until a row 3 rebuild |
 | Phase B1-B5 | none | `PHASE23_PLAN.md`; B1 first, and startable while quota refills |
 | Phase C — vector memory | blocked | 18 diagnosed failures, all mechanical. Re-examine the premise before spending on it |
 | **A debugger repair that makes a file worse** | small — §0.3 verifies for ~5K | **No longer hypothetical: caught in the act 2026-08-30.** It rewrote `prod.sku` as `data.get("sku")`, silencing an AttributeError into a `None` in a NOT NULL column. Diagnosis and the two-part fix are in §0.7 |
