@@ -825,6 +825,16 @@ class Pipeline:
 
         intent = getattr(result, "intent", None) or {}
 
+        # Record what this project actually is, so the status and the API can
+        # say which shapes were verified rather than leaving the reader to infer
+        # it from which checks happened to be silent.
+        try:
+            shapes = self._detect_shapes(root)
+            if shapes is not None:
+                result.build_shape = shapes.describe()
+        except Exception:
+            pass
+
         outcomes = []
         for name, fn in (
             ("cli_smoke", smoke_test_cli),
@@ -1662,6 +1672,37 @@ class Pipeline:
                         break
 
                     raise
+
+            # ── Verification must happen, even when a step did not ────────────
+            #
+            # `_refine_and_remediate` is called from inside the per-step `try`,
+            # right after the tester returns. So when the tester raised — or
+            # timed out twice at 900s — the loop broke and NOTHING ran: no
+            # static audit, no SQL check, no runtime smoke test, no shape
+            # verifiers. The build was then packaged and shipped, and its report
+            # was indistinguishable from a build that had passed every one of
+            # them. That is the same "silence reads as clean" defect the
+            # VerificationOutcome states exist to remove, one level up.
+            #
+            # A quota stop is the exception: `_refine_and_remediate` has its own
+            # quota gate and would produce a degraded report without spending
+            # tokens, but running it here would also re-enter the debugger for a
+            # build we already know is paused. The handoff document covers that
+            # case and says plainly that verification did not run.
+            if result.remediation is None and quota_stop is None and (
+                result.backend_files or result.frontend_files
+            ):
+                logger.warning(
+                    "  🧾 Verification never ran (the pipeline stopped before the "
+                    "tester) — running it now so this build is not reported as "
+                    "clean by default"
+                )
+                try:
+                    result.remediation = self._refine_and_remediate(result)
+                    if result.remediation.degraded:
+                        result.degraded = True
+                except Exception as e:
+                    logger.warning(f"  ⚠️  Late verification failed: {e}")
 
             # ── Finalisation ──────────────────────────────────────────────────
             result.completed_steps = completed_labels

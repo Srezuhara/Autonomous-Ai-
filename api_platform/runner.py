@@ -70,6 +70,25 @@ TERMINAL_STATUSES     = ("done", "done_with_context", "unusable",
                          "failed", "cancelled")
 
 
+def _safe_text(value) -> str | None:
+    """A short string for the DB, or None. Never raises."""
+    try:
+        text = str(value or "").strip()
+        return text[:500] or None
+    except Exception:
+        return None
+
+
+def _safe_json(value) -> str | None:
+    """JSON for the DB, or None. Never let bookkeeping break a build."""
+    try:
+        if not value:
+            return None
+        return json.dumps(value)[:20000]
+    except Exception:
+        return None
+
+
 # ── Safe score helpers ────────────────────────────────────────────────────────
 
 def _safe_review_score(review_results: list, build_id: str) -> float | None:
@@ -675,6 +694,14 @@ class JobRunner:
                     tokens_by_model   = tokens_by_model,
                     completion_reason = completion_reason[:500] or None,
                     progress_percent  = progress_percent,
+                    # The "does it actually work" signal, persisted so it can be
+                    # read without grepping the server log.
+                    smoke_summary     = _safe_text(
+                        getattr(result, "smoke_summary", "")),
+                    verification      = _safe_json(
+                        getattr(result, "verification_outcomes", [])),
+                    build_shape       = _safe_text(
+                        getattr(result, "build_shape", "")),
                 )
                 _record_project_files(build_id, output_path)
 

@@ -26,6 +26,18 @@ STEP_NAMES = [
 ]
 
 
+def _load_verification(raw):
+    """The stored VerificationOutcome list, or [] — never raises on bad JSON."""
+    if not raw:
+        return []
+    try:
+        import json
+        value = json.loads(raw)
+        return value if isinstance(value, list) else []
+    except Exception:
+        return []
+
+
 def _elapsed(created_at: str) -> float:
     """Seconds since build started."""
     try:
@@ -106,6 +118,13 @@ async def get_job_status(build_id: str):
         "completion_reason": project.get("completion_reason"),
         "progress_percent":  project.get("progress_percent"),
         "downloadable":      status in DOWNLOADABLE_STATUSES,
+        # Whether the artifact actually runs, and what was checked to find out.
+        # These lived only in the server log, which is why run_live_matrix.py
+        # tells the operator to grep for them and has never been able to
+        # evaluate the second half of its own pass criterion.
+        "smoke_summary":     project.get("smoke_summary"),
+        "build_shape":       project.get("build_shape"),
+        "verification":      _load_verification(project.get("verification")),
     }
 
     if status == "running":

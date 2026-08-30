@@ -90,6 +90,20 @@ def initialize_db():
         # model's daily quota a build spent, which is what the token ledger
         # needs to rebuild itself after a restart instead of estimating.
         ("tokens_by_model",   "TEXT"),
+        # Whether the thing that was built actually works, and how we know.
+        #
+        # `smoke_summary` was set on BuildResult and read only by main.py's CLI
+        # table — it never reached the database or any API route. That is why
+        # run_live_matrix.py has to tell the operator to grep server.log, and
+        # why the matrix has never been able to evaluate the second half of its
+        # own pass criterion ("every build that boots reports 0 5xx").
+        ("smoke_summary",     "TEXT"),
+        # JSON list of VerificationOutcome dicts: which checks ran, on which
+        # shape, what they executed, what they found. A NOT_RUN entry here is
+        # the record that a build went unverified, which used to be
+        # indistinguishable from one that passed.
+        ("verification",      "TEXT"),
+        ("build_shape",       "TEXT"),
     ]
     with get_connection() as conn:
         for col_name, col_def in new_columns:
