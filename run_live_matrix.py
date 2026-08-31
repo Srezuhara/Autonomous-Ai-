@@ -331,6 +331,15 @@ def run_row(entry: dict) -> dict:
 #: Checks that are reported but do not decide a row. See `verification_verdict`.
 MANUAL_CHECKS = ("generated_tests",)
 
+#: Checks that RUN the artifact rather than reading it. Imported so this file
+#: and the pipeline cannot drift into two different ideas of what counts as
+#: evidence.
+try:
+    from tools.verification import EXECUTING_CHECKS
+except Exception:  # the driver must still run if the import path is odd
+    EXECUTING_CHECKS = frozenset({
+        "runtime_smoke", "cli_smoke", "package_smoke", "generated_tests"})
+
 
 def verification_verdict(row: dict) -> tuple:
     """
@@ -363,7 +372,14 @@ def verification_verdict(row: dict) -> tuple:
     judged  = [o for o in outcomes if o.get("check") not in MANUAL_CHECKS]
     failed  = [o for o in judged if o.get("status") == "failed"]
     not_run = [o for o in judged if o.get("status") == "not_run"]
-    ran     = [o for o in judged if o.get("status") == "verified"]
+    # "at least one check actually executed it" has to mean that. A verified
+    # `sql_schema` or `feature_coverage` says the source reads correctly and
+    # nothing was ever run: `project` and `todo_app` both passed this criterion
+    # on `sql_schema` alone.
+    ran     = [o for o in judged
+               if o.get("status") == "verified"
+               and o.get("check") in EXECUTING_CHECKS]
+    inspected = [o for o in judged if o.get("status") == "verified"]
 
     noted = [
         o for o in outcomes
@@ -381,6 +397,10 @@ def verification_verdict(row: dict) -> tuple:
         return False, ("never ran: "
                        + ", ".join(o.get("check", "?") for o in not_run) + suffix)
     if not ran:
+        if inspected:
+            return False, (
+                "nothing executed the artifact — it was only read statically ("
+                + ", ".join(o.get("check", "?") for o in inspected) + ")" + suffix)
         return False, ("nothing executed the artifact — every check answered "
                        "'not applicable'" + suffix)
     return True, ("verified by "

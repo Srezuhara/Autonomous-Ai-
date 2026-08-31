@@ -82,6 +82,29 @@ here.
 > from "Remaining Work", which says the application was executed and verified
 > and that these are the things the automated checks could not confirm.
 
+**§4.31 — "verified" meant "inspected", not "executed".**
+`is_evidence_of_working` returned True for any VERIFIED outcome, but half the
+checks never run what they inspect: `feature_coverage`, `web_assets`,
+`schema_attr` and `sql_schema` read the source and nothing else. A green static
+check was therefore read as proof the artifact runs.
+
+Measured on the baseline: **27 of 41 builds have a verified static check and no
+verified executing one**, and two of them — `project` and `todo_app` — **passed
+the row criterion on `sql_schema` alone**, with nothing ever having been run.
+The criterion's own sentence, "at least one check actually executed it", was
+implemented as `status == "verified"`.
+
+`tools/verification.EXECUTING_CHECKS` now names the four checks that run the
+artifact (`runtime_smoke`, `cli_smoke`, `package_smoke`, `generated_tests`), and
+both `is_evidence_of_working` and `run_live_matrix.verification_verdict` require
+membership. A row verified only statically now fails, and says so: *"nothing
+executed the artifact — it was only read statically (sql_schema)"*.
+
+This also repairs §4.26, which was shipped earlier the same day: the
+manual-testing gate keys off the same property, so a failing test suite could
+have been handed over as "the application was verified" on the strength of a
+static check. It cannot now.
+
 **§4.30 — telling a broken test from broken code, before repairing either.**
 The pipeline repaired in two directions at once and consulted no evidence about
 which side had failed:

@@ -3618,13 +3618,29 @@ from tools.verification import (                                     # noqa: E40
     VerificationOutcome as _VO42,
     collect_findings as _cf42,
     worst_status as _ws42,
+    EXECUTING_CHECKS as _EXEC42,
 )
 
-check("a check that passed is ok, and is evidence the thing works",
-      _VO42.verified("x").ok and _VO42.verified("x").is_evidence_of_working)
+check("a check that passed is ok",
+      _VO42.verified("x").ok)
+check("a check that RAN the artifact and passed is evidence it works",
+      _VO42.verified("runtime_smoke").is_evidence_of_working)
+# Half the checks never run the thing they inspect. A green static check says
+# the code reads correctly, which is not the same claim -- and 27 of the 41
+# saved builds have a verified static check and no verified executing one.
+check("a static check that passed is NOT evidence the thing works",
+      not _VO42.verified("sql_schema").is_evidence_of_working
+      and not _VO42.verified("feature_coverage").is_evidence_of_working
+      and not _VO42.verified("web_assets").is_evidence_of_working
+      and not _VO42.verified("schema_attr").is_evidence_of_working)
+check("...and an unknown check name is not evidence either",
+      not _VO42.verified("x").is_evidence_of_working)
+check("every check that executes the artifact is listed as such",
+      _EXEC42 == {"runtime_smoke", "cli_smoke", "package_smoke",
+                  "generated_tests"}, str(sorted(_EXEC42)))
 check("a check that does not apply is ok, but is NOT evidence",
-      _VO42.not_applicable("x").ok
-      and not _VO42.not_applicable("x").is_evidence_of_working)
+      _VO42.not_applicable("runtime_smoke").ok
+      and not _VO42.not_applicable("runtime_smoke").is_evidence_of_working)
 check("a check that never ran is NOT ok — the hole is not a pass",
       not _VO42.not_run("x", detail="no entry point").ok)
 check("a failed check is not ok",
@@ -5738,6 +5754,54 @@ check("the pipeline skips source repair when the test is at fault",
       'if getattr(r, "all_test_defects", False):' in _b30_pipe_src)
 check("...but still reports the failure, so nothing leaves the record",
       "_test_suite_issues.append(_test_issue)" in _b30_pipe_src)
+
+
+# -- 4.31 "Verified" must mean something ran, not something was read ----------
+# Half the checks never execute what they inspect. `is_evidence_of_working`
+# returned True for any VERIFIED outcome, so a green static check was read as
+# proof the artifact runs. Measured on the baseline: 27 of 41 builds have a
+# verified static check and NO verified executing one, and two of them --
+# `project` and `todo_app` -- passed the row criterion on `sql_schema` alone,
+# with nothing ever having been run.
+
+import run_live_matrix as _m31                                     # noqa: E402
+
+
+def _m31_rec(check, status):
+    return {"check": check, "status": status}
+
+
+_m31_static_only = {"verification": [
+    _m31_rec("sql_schema", "verified"),
+    _m31_rec("runtime_smoke", "not_applicable"),
+    _m31_rec("cli_smoke", "not_applicable"),
+]}
+_m31_ok, _m31_why = _m31.verification_verdict(_m31_static_only)
+check("a row verified only by static checks does NOT pass",
+      _m31_ok is False, _m31_why)
+check("...and the reason says it was only read, not merely 'not applicable'",
+      "only read statically" in _m31_why, _m31_why)
+
+_m31_real = {"verification": [
+    _m31_rec("runtime_smoke", "verified"),
+    _m31_rec("sql_schema", "verified"),
+]}
+check("a row where something actually ran still passes",
+      _m31.verification_verdict(_m31_real)[0] is True)
+
+check("the driver and the pipeline share one idea of what executes",
+      _m31.EXECUTING_CHECKS == _EXEC42,
+      f"{sorted(_m31.EXECUTING_CHECKS)} vs {sorted(_EXEC42)}")
+
+# The gate my manual-check routing uses is the same property, so it inherits
+# the fix: a failing test suite must not be handed to the user as "the app was
+# verified" when nothing executed the app.
+_m31_pl = Pipeline.__new__(Pipeline)
+_m31_pl._manual_checks = []
+_m31_pl._artifact_verified_working = False
+_m31_i, _m31_a = _m31_pl._hand_over_test_suite_findings(["Generated tests fail"], [])
+check("without execution, a test-suite finding is not handed over as verified",
+      _m31_i == ["Generated tests fail"] and _m31_pl._manual_checks == [])
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

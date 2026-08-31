@@ -32,6 +32,19 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+#: Checks that RUN the artifact, as opposed to reading it.
+#:
+#: Membership is the difference between "the code looks right" and "the thing
+#: works", and only the second is evidence. Adding a check here is a claim that
+#: it executes something — a static analyser must never be listed.
+EXECUTING_CHECKS = frozenset({
+    "runtime_smoke",     # HTTP-probes every declared route
+    "cli_smoke",         # runs each entry point's --help and subcommands
+    "package_smoke",     # imports the package as a user would
+    "generated_tests",   # runs the suite the build ships
+})
+
+
 class Status(str, Enum):
     """
     Why NOT_APPLICABLE and NOT_RUN are different.
@@ -118,8 +131,20 @@ class VerificationOutcome:
         positive evidence". NOT_APPLICABLE passes the first and fails the
         second, which is what the terminal-status decision needs — a build with
         no evidence at all should not be called verified.
+
+        **VERIFIED is not enough on its own.** Half the checks never run the
+        thing they inspect: `feature_coverage`, `web_assets`, `schema_attr` and
+        `sql_schema` read the source and nothing else. A green static check says
+        the code looks right, which is exactly the claim this property must not
+        make — 27 of the 41 saved builds have a verified static check and no
+        verified executing one, and two of them (`project`, `todo_app`) passed
+        the row criterion on `sql_schema` alone, with nothing having run.
+
+        That is the defect this whole phase exists to remove, one level up: not
+        an empty list meaning four things, but a verdict meaning "inspected"
+        while it is read as "executed".
         """
-        return self.status is Status.VERIFIED
+        return self.status is Status.VERIFIED and self.check in EXECUTING_CHECKS
 
     @property
     def is_fatal(self) -> bool:
