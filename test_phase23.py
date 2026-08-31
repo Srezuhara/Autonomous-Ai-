@@ -6749,6 +6749,69 @@ check("recording never changes the verdict",
 _rg53.RATIO_LOG.clear()
 
 
+
+# ---- 54. The commonest reason a build missed `done` was a complete file -----
+# §4.42. The audit of the `done` gate (A4) measured which conditions actually
+# fire across the corpus. `_audit_placeholders` fires on 23 of 42 projects —
+# more than the other three file-based conditions put together (5, 2, 1) — so it
+# is the dominant blocker of a plain `done`.
+#
+# 14 of the 42 files it reported were **fully written**. Every one was a
+# `requirements.txt` that `requirements_builder` had appended real packages to
+# while leaving the scaffold comment on line 1, so the audit read the marker and
+# called a complete file "never filled in". Those 14 spanned 14 projects, most
+# with no other placeholder finding, so a finished file was the whole reason
+# they could not reach `done`.
+#
+# The marker was a proxy. The direct question — does this file have anything in
+# it besides comments — is what `_has_substance` asks.
+_ph54 = Path(tempfile.mkdtemp(prefix="placeholder54_"))
+_pl54 = Pipeline.__new__(Pipeline)
+_MARK54 = _pl54._PLACEHOLDER_MARKER
+
+
+def _mk54(name: str, text: str) -> Path:
+    root = _ph54 / name
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "requirements.txt").write_text(text, encoding="utf-8")
+    return root
+
+
+# The corpus shape exactly: scaffold comment on top, real packages below.
+_filled54 = _mk54("filled", (
+    "# Python dependencies for the project\n"
+    f"# {_MARK54}.\n"
+    "# auto-added by Phase 19.1\n"
+    "fastapi>=0.111.0\n"
+    "# auto-added by Phase 19.1\n"
+    "httpx>=0.27.0\n"
+))
+check("a file with the marker AND real content is not reported",
+      _pl54._audit_placeholders(_filled54) == [],
+      str(_pl54._audit_placeholders(_filled54)))
+
+# ...and the genuinely-untouched stub still is. This is the half that must not
+# be lost: 28 of the 42 were real, and 10 projects still report after the fix.
+_stub54 = _mk54("stub", f"# Project dependencies\n# This file {_MARK54}.\n")
+check("a comment-only stub is still reported",
+      len(_pl54._audit_placeholders(_stub54)) == 1,
+      str(_pl54._audit_placeholders(_stub54)))
+
+# Blank lines are not substance either.
+_blank54 = _mk54("blank", f"# deps\n# {_MARK54}.\n\n   \n\n")
+check("blank lines do not count as content",
+      len(_pl54._audit_placeholders(_blank54)) == 1)
+
+# `//` comments, for the .json and .sql files this audit also reads.
+check("`//` comments are comments too",
+      not _pl54._has_substance("// a note\n// another\n"))
+check("...and one real line is substance",
+      _pl54._has_substance("// a note\nCREATE TABLE t (id INT);\n"))
+check("an empty file has no substance", not _pl54._has_substance(""))
+
+shutil.rmtree(_ph54, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

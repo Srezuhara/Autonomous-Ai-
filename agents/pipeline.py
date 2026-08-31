@@ -661,6 +661,28 @@ class Pipeline:
     # hidden by waiting for it.
     _WRITTEN_BY_A_LATER_STEP = {"README.md", "SETUP.md"}
 
+    @staticmethod
+    def _has_substance(text: str) -> bool:
+        """Is there anything in this file besides blank lines and comments?
+
+        The direct test for "did a generator fill this in", replacing the proxy
+        that the scaffold marker was. Measured on the corpus: 42 files carried
+        the marker and **14 of them were fully written** — every one a
+        `requirements.txt` that `requirements_builder` had appended real
+        packages to while leaving the scaffold comment on the first line. Those
+        14 spanned 14 projects, most of which had no other placeholder finding,
+        so a complete file was the whole reason they could not reach a plain
+        `done`.
+        """
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#") or stripped.startswith("//"):
+                continue
+            return True
+        return False
+
     def _audit_placeholders(self, project_dir: Path) -> list[str]:
         """Architect scaffold files that no generator ever filled in."""
         stubs = []
@@ -672,7 +694,11 @@ class Pipeline:
                 text = p.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
-            if self._PLACEHOLDER_MARKER in text:
+            # The marker alone is not the question. A file that carries it AND
+            # has real content was filled in; the marker is just a comment
+            # nobody cleared. Reporting it blocks `done` on a complete file,
+            # which is the single commonest way a build failed that gate.
+            if self._PLACEHOLDER_MARKER in text and not self._has_substance(text):
                 stubs.append(rel)
         if not stubs:
             return []
