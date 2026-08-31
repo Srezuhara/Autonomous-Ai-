@@ -931,6 +931,7 @@ class Pipeline:
             from tools.package_smoke import smoke_test_package
             from tools.schema_attr_check import check_schema_attributes
             from tools.generated_tests import run_generated_tests
+            from tools.static_smoke import smoke_test_static
             from tools.verification import collect_findings
         except Exception as e:
             logger.warning(f"  ⚠️  Shape verifiers unavailable: {e}")
@@ -952,6 +953,11 @@ class Pipeline:
         for name, fn in (
             ("cli_smoke", smoke_test_cli),
             ("web_assets", check_web_assets),
+            # web_assets READS the page; this one SERVES it and fetches what it
+            # asks for. Without it a project that is only a static page has no
+            # check that executes anything, so since §4.31 it could never show
+            # evidence of working at all.
+            ("static_smoke", smoke_test_static),
             # Only fires for a project that is neither run nor served — the
             # product IS the importable API. Worth having now that the architect
             # no longer bolts a FastAPI app onto every request.

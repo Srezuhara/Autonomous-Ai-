@@ -52,6 +52,7 @@ from tools.package_smoke import smoke_test_package         # noqa: E402
 from tools.runtime_smoke import smoke_test_app             # noqa: E402
 from tools.sql_schema_check import check_project_sql       # noqa: E402
 from tools.generated_tests import run_generated_tests      # noqa: E402
+from tools.static_smoke import smoke_test_static           # noqa: E402
 from tools.verification import VerificationOutcome         # noqa: E402
 from tools.web_asset_check import check_web_assets         # noqa: E402
 
@@ -178,8 +179,30 @@ def _sql_record(root: str) -> dict:
     ]
     report = check_project_sql(root, files)
     findings = sorted(str(i) for i in getattr(report, "issues", []))
+    if findings:
+        return {
+            "status":   "failed",
+            "detail":   f"{len(files)} python file(s) scanned",
+            "findings": findings,
+        }
+
+    # "Nothing to check" is not "checked and sound". `project` and `todo_app`
+    # contain no code at all — only handoff markdown — and this reported
+    # `verified` for both, which was the only verified check they had and was
+    # enough to pass the row criterion. A check with no subject must say so,
+    # the way `schema_attr` and `web_assets` already do.
+    has_sql = bool(getattr(report, "tables", None)) or bool(
+        getattr(report, "statements", None))
+    if not files or not has_sql:
+        return {
+            "status":   "not_applicable",
+            "detail":   ("this project contains no SQL to check"
+                         if files else "this project contains no python files"),
+            "findings": [],
+        }
+
     return {
-        "status":   "failed" if findings else "verified",
+        "status":   "verified",
         "detail":   f"{len(files)} python file(s) scanned",
         "findings": findings,
     }
@@ -207,6 +230,7 @@ def verify_one(name: str, intents: dict, keep: bool = False) -> dict:
             ("web_assets",    check_web_assets),
             ("package_smoke", smoke_test_package),
             ("generated_tests", run_generated_tests),
+            ("static_smoke",    smoke_test_static),
         ):
             record["checks"][check] = _guarded(check, fn, clone)
 

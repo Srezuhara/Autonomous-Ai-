@@ -527,7 +527,16 @@ def smoke_test_app(root: str, timeout: int = SMOKE_TIMEOUT) -> SmokeResult:
 
     entry = _find_entry(project_dir)
     if entry is None:
-        result.error = "no FastAPI entry point found"
+        # This used to say "no FastAPI entry point found", which named a
+        # narrower search than the one performed: `detect_shapes` understands
+        # Flask as well as FastAPI, and a `create_app()` factory as well as a
+        # module-level binding. A skip message that misdescribes the search is
+        # how a miss gets read as a legitimate skip — which is exactly what
+        # happened to row 4.
+        result.error = (
+            "no web application found to probe: no FastAPI or Flask app, and "
+            "no create_app() factory, anywhere in the project"
+        )
         return result
 
     result.entry = str(entry.relative_to(project_dir)).replace("\\", "/")

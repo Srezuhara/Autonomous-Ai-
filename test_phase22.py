@@ -446,8 +446,15 @@ noapp_dir.mkdir(parents=True, exist_ok=True)
 (noapp_dir / "script.py").write_text("print('hello')\n", encoding="utf-8")
 
 noapp = smoke_test_app(NOAPP_ROOT)
-check("no-FastAPI project skips cleanly", not noapp.ran and "entry point" in noapp.error,
+check("no-FastAPI project skips cleanly", not noapp.ran and noapp.error != "",
       f"ran={noapp.ran} err={noapp.error}")
+# Asserted on substance rather than on the sentence: this check used to match
+# the literal phrase "entry point", and the message it matched named a narrower
+# search than the probe performs. A skip message that misdescribes the search is
+# how a miss gets read as a legitimate skip -- which is what happened to row 4.
+check("...and the skip says what was actually searched for",
+      "FastAPI" in noapp.error and "Flask" in noapp.error,
+      noapp.error)
 check("missing project reports an error rather than raising",
       smoke_test_app("_phase22_does_not_exist").error != "")
 

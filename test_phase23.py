@@ -3637,7 +3637,11 @@ check("...and an unknown check name is not evidence either",
       not _VO42.verified("x").is_evidence_of_working)
 check("every check that executes the artifact is listed as such",
       _EXEC42 == {"runtime_smoke", "cli_smoke", "package_smoke",
-                  "generated_tests"}, str(sorted(_EXEC42)))
+                  "generated_tests", "static_smoke"}, str(sorted(_EXEC42)))
+check("and every static check is kept out of it",
+      not (_EXEC42 & {"web_assets", "feature_coverage", "schema_attr",
+                      "sql_schema"}),
+      "a static check is being counted as execution evidence")
 check("a check that does not apply is ok, but is NOT evidence",
       _VO42.not_applicable("runtime_smoke").ok
       and not _VO42.not_applicable("runtime_smoke").is_evidence_of_working)
@@ -5802,6 +5806,144 @@ _m31_pl._artifact_verified_working = False
 _m31_i, _m31_a = _m31_pl._hand_over_test_suite_findings(["Generated tests fail"], [])
 check("without execution, a test-suite finding is not handed over as verified",
       _m31_i == ["Generated tests fail"] and _m31_pl._manual_checks == [])
+
+
+# -- 4.32 A static page has to be served to count as verified -----------------
+# web_asset_check READS the page. Nothing SERVED it, so for a project that is
+# only a static page every executing check answered not_applicable -- and once
+# 4.31 made "verified" mean "something ran the artifact", such a build could
+# never demonstrate it works. That gap was created by the fix; this closes it.
+# Validated across the corpus before wiring: 32 not_applicable, 7 verified,
+# 2 failed, and both failures confirmed real by hand.
+
+from tools.static_smoke import smoke_test_static, _asset_refs   # noqa: E402
+
+_S32 = Path(tempfile.mkdtemp(prefix="static32_"))
+_S32_OUT = _S32 / "out"
+_S32_OUT.mkdir(parents=True)
+
+
+def _s32_project(name, files):
+    root = _S32_OUT / name
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(body, bytes):
+            p.write_bytes(body)
+        else:
+            p.write_text(body, encoding="utf-8")
+    return name
+
+
+def _s32_run(name):
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_S32_OUT)
+        return smoke_test_static(name)
+    finally:
+        config.OUTPUT_DIR = real
+
+
+_s32_project("good", {
+    "index.html": (
+        '<html><head><link rel="stylesheet" href="./styles.css">'
+        '<script src="https://cdn.example.com/x.js"></script></head>'
+        '<body><img src="./logo.png"><script src="./app.js"></script>'
+        "</body></html>"
+    ),
+    "styles.css": "body{}",
+    "app.js": "console.log(1)",
+    "logo.png": b"\x89PNG\r\n",
+})
+_o = _s32_run("good")
+check("a page whose assets all resolve is verified",
+      _o.status is Status.VERIFIED, f"{_o.status} {_o.detail}")
+check("...and the record says how much was actually fetched",
+      "3 local asset(s)" in (_o.detail or ""), _o.detail)
+check("...and a static page is now evidence the build works",
+      _o.is_evidence_of_working is True)
+
+# The defect a parser cannot see: a reference that looks fine and 404s.
+_s32_project("missing", {
+    "index.html": '<html><body><script src="./missing.js"></script></body></html>',
+})
+_o = _s32_run("missing")
+check("a page loading a script that is not served fails",
+      _o.status is Status.FAILED, str(_o.status))
+check("...and the finding names the reference",
+      any("missing.js" in f for f in _o.findings), str(_o.findings))
+check("...and defers to web_assets rather than filing the same defect twice",
+      any("web_assets" in f for f in _o.findings), str(_o.findings))
+
+# The case only execution can find: the file exists but is not reachable.
+_s32_project("escapes", {
+    "shared/util.js": "x=1",
+    "frontend/index.html":
+        '<html><body><script src="../shared/util.js"></script></body></html>',
+})
+_o = _s32_run("escapes")
+check("a file that exists but is outside the served root is reported",
+      _o.status is Status.FAILED, str(_o.status))
+check("...and is described as unreachable, not as absent",
+      any("exists in the project" in f for f in _o.findings), str(_o.findings))
+
+# Applicability and network hygiene.
+_s32_project("nopage", {"main.py": "print(1)"})
+check("a project with no HTML page is not applicable",
+      _s32_run("nopage").status is Status.NOT_APPLICABLE)
+
+_s32_project("cdn_only", {
+    "index.html": (
+        '<html><head><link rel="stylesheet" '
+        'href="https://cdn.example.com/a.css">'
+        '<script src="//cdn.example.com/b.js"></script></head>'
+        "<body>hi</body></html>"
+    ),
+})
+_o = _s32_run("cdn_only")
+check("remote assets are skipped, so a CDN never decides a build",
+      _o.status is Status.VERIFIED and "0 local asset(s)" in (_o.detail or ""),
+      f"{_o.status} {_o.detail}")
+
+check("absolute, protocol-relative and data URLs are all skipped",
+      _asset_refs(
+          '<script src="https://a/x.js"></script>'
+          '<script src="//b/y.js"></script>'
+          '<img src="data:image/png;base64,AAA">'
+          '<a href="#top"></a><script src="./real.js"></script>'
+      ) == ["./real.js"],
+      str(_asset_refs('<script src="./real.js"></script>')))
+
+# A missing project must not read as clean.
+check("a project that does not exist is NOT_RUN, never a pass",
+      _s32_run("does_not_exist").status is Status.NOT_RUN)
+
+# The server must not survive the check, or a long corpus run leaks ports.
+import threading as _th32                                          # noqa: E402
+_s32_before = _th32.active_count()
+_s32_run("good"); _s32_run("missing")
+check("the HTTP server is torn down after every check",
+      _th32.active_count() <= _s32_before,
+      f"threads {_s32_before} -> {_th32.active_count()}")
+
+# Wiring.
+check("static_smoke counts as a check that executes the artifact",
+      "static_smoke" in _EXEC42, str(sorted(_EXEC42)))
+check("the pipeline runs it beside web_assets",
+      '("static_smoke", smoke_test_static)' in
+      Path("agents/pipeline.py").read_text(encoding="utf-8"))
+check("verify_corpus runs it too, so it stays testable for free",
+      '("static_smoke",    smoke_test_static)' in
+      Path("tools/verify_corpus.py").read_text(encoding="utf-8"))
+
+# The two honesty fixes found on the way.
+_s32_rs = Path("tools/runtime_smoke.py").read_text(encoding="utf-8")
+check("the skip message no longer names a narrower search than it performs",
+      'result.error = "no FastAPI entry point found"' not in _s32_rs)
+check("...and says what it actually looked for",
+      "no create_app() factory" in _s32_rs)
+
+shutil.rmtree(_S32, ignore_errors=True)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

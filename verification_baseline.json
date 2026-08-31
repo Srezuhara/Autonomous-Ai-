@@ -50,6 +50,11 @@
         ],
         "status": "failed"
       },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 1 local asset(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "web_assets": {
         "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
         "findings": [
@@ -110,6 +115,11 @@
         ],
         "status": "failed"
       },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 1 local asset(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "web_assets": {
         "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
         "findings": [
@@ -169,6 +179,11 @@
         "detail": "16 python file(s) scanned",
         "findings": [],
         "status": "verified"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -231,6 +246,11 @@
         "findings": [],
         "status": "verified"
       },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "web_assets": {
         "detail": "this project ships no HTML page",
         "findings": [],
@@ -278,6 +298,11 @@
         "detail": "15 python file(s) scanned",
         "findings": [],
         "status": "verified"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -333,6 +358,11 @@
       },
       "sql_schema": {
         "detail": "36 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 1 local asset(s)",
         "findings": [],
         "status": "verified"
       },
@@ -395,7 +425,12 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "35 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 0 local asset(s)",
         "findings": [],
         "status": "verified"
       },
@@ -442,9 +477,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "12 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -491,9 +531,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "5 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -541,9 +586,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "10 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -583,7 +633,7 @@
         "status": "not_applicable"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -593,9 +643,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "25 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -640,9 +695,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "11 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -690,9 +750,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "12 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -737,9 +802,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "5 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -800,6 +870,11 @@
         ],
         "status": "failed"
       },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 1 local asset(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "web_assets": {
         "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
         "findings": [
@@ -840,7 +915,7 @@
         "status": "failed"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -850,9 +925,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "12 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -887,7 +967,7 @@
         "status": "failed"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -897,9 +977,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "11 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -936,7 +1021,7 @@
         "status": "failed"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -946,9 +1031,14 @@
         "status": "not_applicable"
       },
       "sql_schema": {
-        "detail": "8 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1003,6 +1093,11 @@
         "findings": [],
         "status": "verified"
       },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 2 local asset(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "web_assets": {
         "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
         "findings": [],
@@ -1039,7 +1134,7 @@
         "status": "not_applicable"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1049,9 +1144,14 @@
         "status": "not_applicable"
       },
       "sql_schema": {
-        "detail": "13 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1099,9 +1199,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "17 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1138,7 +1243,7 @@
         "status": "not_applicable"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1148,9 +1253,14 @@
         "status": "not_applicable"
       },
       "sql_schema": {
-        "detail": "12 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1198,9 +1308,14 @@
         "status": "not_applicable"
       },
       "sql_schema": {
-        "detail": "5 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1238,7 +1353,7 @@
         "status": "failed"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1248,9 +1363,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "7 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1316,6 +1436,11 @@
         "findings": [],
         "status": "verified"
       },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "web_assets": {
         "detail": "this project ships no HTML page",
         "findings": [],
@@ -1369,6 +1494,11 @@
         "findings": [],
         "status": "verified"
       },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "web_assets": {
         "detail": "this project ships no HTML page",
         "findings": [],
@@ -1415,9 +1545,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "16 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1466,6 +1601,11 @@
         "detail": "15 python file(s) scanned",
         "findings": [],
         "status": "verified"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1542,6 +1682,11 @@
         ],
         "status": "failed"
       },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "web_assets": {
         "detail": "this project ships no HTML page",
         "findings": [],
@@ -1601,9 +1746,16 @@
         "status": "failed"
       },
       "sql_schema": {
-        "detail": "19 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "served 2 page(s) over HTTP and fetched 2 local asset(s)",
+        "findings": [
+          "llm_api_key_dashboard/frontend/index.html loads `index.js`, which is not served (HTTP 404) because it is not in the project \u2014 `web_assets` names it in full"
+        ],
+        "status": "failed"
       },
       "web_assets": {
         "detail": "parsed 2 page(s), 6 frontend call(s) checked against 5 declared route(s)",
@@ -1645,7 +1797,7 @@
         "status": "failed"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1655,7 +1807,12 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "8 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "served 1 page(s) over HTTP and fetched 0 local asset(s)",
         "findings": [],
         "status": "verified"
       },
@@ -1690,7 +1847,7 @@
         "status": "not_applicable"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1700,9 +1857,14 @@
         "status": "not_applicable"
       },
       "sql_schema": {
-        "detail": "0 python file(s) scanned",
+        "detail": "this project contains no python files",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1752,9 +1914,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "28 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1806,9 +1973,17 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "11 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "served 4 page(s) over HTTP and fetched 4 local asset(s)",
+        "findings": [
+          "task_manager/frontend/public/index.html loads `index.js`, which is not served (HTTP 404) because it is not in the project \u2014 `web_assets` names it in full",
+          "task_manager/public/index.html loads `./index.js`, which is not served (HTTP 404) because it is not in the project \u2014 `web_assets` names it in full"
+        ],
+        "status": "failed"
       },
       "web_assets": {
         "detail": "parsed 4 page(s), 6 frontend call(s) checked against 2 declared route(s)",
@@ -1868,9 +2043,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "11 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1919,9 +2099,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "13 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -1970,9 +2155,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "14 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -2021,9 +2211,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "13 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -2056,7 +2251,7 @@
         "status": "not_applicable"
       },
       "runtime_smoke": {
-        "detail": "smoke test did not run (no FastAPI entry point found)",
+        "detail": "smoke test did not run (no web application found to probe: no FastAPI or Flask app, and no create_app() factory, anywhere in the project)",
         "findings": [],
         "status": "not_applicable"
       },
@@ -2066,9 +2261,14 @@
         "status": "not_applicable"
       },
       "sql_schema": {
-        "detail": "0 python file(s) scanned",
+        "detail": "this project contains no python files",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",
@@ -2125,6 +2325,11 @@
         "findings": [],
         "status": "verified"
       },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "web_assets": {
         "detail": "this project ships no HTML page",
         "findings": [],
@@ -2178,9 +2383,14 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "9 python file(s) scanned",
+        "detail": "this project contains no SQL to check",
         "findings": [],
-        "status": "verified"
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
       },
       "web_assets": {
         "detail": "this project ships no HTML page",

@@ -82,6 +82,57 @@ here.
 > from "Remaining Work", which says the application was executed and verified
 > and that these are the things the automated checks could not confirm.
 
+**§4.32 — a static page had to be served to count as verified.**
+`§4.31` raised the obvious question: is `runtime_smoke` reaching everything it
+should? Measured, not assumed — and **it is**. Of the 30 builds with no verified
+executing check, 22 had `runtime_smoke` *run and fail* on real 5xx, 6 had
+`cli_smoke`/`package_smoke` run and fail, and 2 (`project`, `todo_app`) contain
+no code at all, only handoff markdown. A per-shape matrix confirms every real
+shape already has an applicable executing check, **so `runtime_smoke` was not
+extended.**
+
+What the measurement did expose is a gap `§4.31` created. `build_shape` can
+report `static_frontend`, and for a project that is *only* a static page every
+executing check answered `not_applicable` — `web_asset_check` parses the page
+and runs nothing. So a legitimate static-page build could no longer show
+evidence of working at all, and the architect is no longer forced to emit a
+FastAPI backend, so "build me a landing page" produces exactly that shape.
+
+`tools/static_smoke.py` serves the project over real HTTP on an ephemeral port
+and fetches the page plus every local asset it references. Deliberately **no
+headless browser**: the claim it makes is exact — the page and the files it asks
+for are served, not that the JavaScript behaves. Remote URLs are skipped, so a
+CDN being down never fails a build, and the server is always torn down.
+
+Validated across all 41 builds before it was wired to anything: 32
+`not_applicable`, 7 `verified`, 2 `failed` — and **both failures confirmed real
+by hand** (`llm_api_key_dashboard` and `task_manager` ship pages loading an
+`index.js` that is not there).
+
+> **On overlap, which is worth stating.** `web_asset_check` already reports
+> those two, so `static_smoke` finds no *new* defect in the corpus. Its value is
+> the execution evidence — 7 builds now have a verified check that actually ran
+> them. Where the two do overlap, the finding **defers** ("`web_assets` names it
+> in full") rather than filing one defect twice under two check names. The case
+> only execution can reach — a file that exists but is unreachable from the
+> page's directory — is reported in full.
+
+Two honesty fixes found on the way:
+
+- `runtime_smoke` skipped with `"no FastAPI entry point found"` while actually
+  searching via `detect_shapes`, which understands Flask and `create_app()`
+  factories too. A skip message that names a narrower search than the one
+  performed is how a miss reads as a legitimate skip — which is what happened to
+  row 4. It now says what it looked for. A `test_phase22` assertion pinned to
+  the literal phrase now asserts the substance instead.
+- `sql_schema` returned `verified` for a project with no SQL — the vacuous pass
+  that was the *only* verified check `project` and `todo_app` had. It now reports
+  `not_applicable`, as `schema_attr` and `web_assets` already did.
+
+Baseline re-recorded deliberately: 69 changes, all of them either a new
+`static_smoke` entry (41) or a `sql_schema` flip to `not_applicable` (28), and
+nothing else.
+
 **§4.31 — "verified" meant "inspected", not "executed".**
 `is_evidence_of_working` returned True for any VERIFIED outcome, but half the
 checks never run what they inspect: `feature_coverage`, `web_assets`,

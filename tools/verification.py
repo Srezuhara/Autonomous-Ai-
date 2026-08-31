@@ -42,6 +42,7 @@ EXECUTING_CHECKS = frozenset({
     "cli_smoke",         # runs each entry point's --help and subcommands
     "package_smoke",     # imports the package as a user would
     "generated_tests",   # runs the suite the build ships
+    "static_smoke",      # serves the page over HTTP and fetches its assets
 })
 
 

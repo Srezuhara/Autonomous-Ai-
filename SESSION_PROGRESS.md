@@ -28,6 +28,21 @@ now does an index search instead of scanning all 1,023 progress rows.
 Detail, and the four decisions worth knowing about, in `PHASE23_HANDOFF.md`.
 **B2 (auth) is unblocked** — it needs a schema change, which is now a revision.
 
+### A static page is now executed, not just read
+
+`§4.31` made "verified" mean something ran the artifact. Measuring whether
+`runtime_smoke` reached far enough showed it does — every real shape already has
+an applicable executing check, so it was **not** extended. But a project that is
+*only* a static page had no executing check at all, so `§4.31` left it unable to
+demonstrate it works. `tools/static_smoke.py` serves the page over real HTTP and
+fetches every local asset it references (no headless browser; it proves the
+files are served, not that the JS behaves).
+
+Validated across all 41 builds before wiring: 32 n/a, 7 verified, 2 failed, both
+failures real. Also fixed two vacuous signals: `runtime_smoke`'s skip message
+named a narrower search than it performs, and `sql_schema` returned `verified`
+for projects containing no SQL.
+
 ### Repair now knows which side broke
 
 `tools/test_blame.py` reads the deepest frame of each pytest traceback and says
