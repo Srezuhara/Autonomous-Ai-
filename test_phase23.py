@@ -6688,6 +6688,67 @@ check("a tests/ directory is not evidence of a feature",
 shutil.rmtree(_F52, ignore_errors=True)
 
 
+
+# ---- 53. repair_guard's thresholds, measured rather than asserted -----------
+# §4.41. `_SMALL_FILE_CHARS` and the shrink ratio were both judgement, and the
+# ratio has already moved once on anecdote. The floor was checked against the
+# corpus and holds: of 551 generated .py files, the 109 it exempts are 91
+# `__init__.py`, 16 ungenerated placeholder stubs and exactly two real files —
+# it exempts files with nothing worth deleting, which is what it claims.
+#
+# The ratio could not be checked the same way, because a repair's before/after
+# pair exists nowhere in this checkout. So it is left alone and instrumented
+# instead: RATIO_LOG makes the next live build produce the distribution the
+# corpus cannot. These tests pin the behaviour that instrumentation must not
+# have changed.
+import tools.repair_guard as _rg53                                     # noqa: E402
+
+_rg53.RATIO_LOG.clear()
+
+_cur53 = "def handler():\n" + "    x = 1\n" * 60 + "    return x\n"
+
+# The rule itself, unchanged: a body gutted below the ratio is refused even
+# though the top-level name survives.
+_gut53 = "def handler():\n    return 1\n"
+_ok53, _why53 = _rg53.accept_generated_fix(_cur53, _gut53, "r.py")
+check("a gutted body is still refused", not _ok53)
+check("...and the reason still names both sizes",
+      str(len(_cur53)) in _why53 and str(len(_gut53)) in _why53, _why53)
+
+# A real tightening just above the line is still accepted.
+_ok53b, _ = _rg53.accept_generated_fix(
+    _cur53, "def handler():\n" + "    x = 1\n" * 40 + "    return x\n", "r.py")
+check("a genuine tightening above the ratio is still accepted", _ok53b)
+
+# Below the floor there is nothing to judge, so the shrink rule must not fire
+# and must not be recorded — 19.8% of the corpus lives here and it is almost
+# entirely `__init__.py` and stubs.
+_n_before = len(_rg53.RATIO_LOG)
+_rg53.accept_generated_fix("x = 1\n", "y = 2\n", "tiny.py")
+check("a file under the floor is not judged on shrinkage",
+      len(_rg53.RATIO_LOG) == _n_before,
+      "a sub-floor file was recorded, so the shrink rule reached it")
+
+# The instrumentation records both directions, because a threshold that only
+# sees its rejections cannot be told it is too strict.
+_kinds = {row[0] for row in _rg53.RATIO_LOG}
+check("both accepted and rejected ratios are recorded", _kinds == {True, False},
+      str(_rg53.RATIO_LOG))
+check("...with the sizes that produced them",
+      all(len(row) == 5 and row[2] > 0 for row in _rg53.RATIO_LOG),
+      str(_rg53.RATIO_LOG))
+
+# The measurement is written down next to the number it justifies, so the next
+# person finds evidence rather than a better guess.
+_src53 = Path("tools/repair_guard.py").read_text(encoding="utf-8")
+check("the ratio is a named constant, not a literal in two places",
+      _src53.count("_SHRINK_RATIO") >= 3 and "* 0.6" not in _src53)
+check("recording never changes the verdict",
+      "_record_ratio(not shrunk, current, fixed, label)" in _src53)
+
+_rg53.RATIO_LOG.clear()
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
