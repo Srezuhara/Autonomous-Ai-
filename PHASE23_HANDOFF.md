@@ -126,16 +126,41 @@ this row's spend**. The "121,484 left" that authorised the row was substantially
 wrong, and the fast model ran dry after ~19K of recorded consumption. Treat
 `--dry-run` as even weaker evidence than §0.-1 already says.
 
-### Still open from row 3
+**§4.34 — one import convention, enforced rather than requested.** Row 3's
+second blocker, now diagnosed and fixed. `backend/main.py` used the forbidden
+`from backend import models` beside a correct `from routes import router`, while
+`routes.py` used `from . import models`. Either convention alone works — the
+flat one is what the sys.path shim exists to support — but the mixture cannot:
+loading `routes` flat breaks its relative import, and the shim is what makes the
+flat load happen.
 
-`backend/main.py` mixes conventions for sibling modules — `from backend import
-models` (package) beside `from routes import router` (top-level) — and the
-top-level form is only possible because the shim puts `backend/` on `sys.path`.
-Loading `routes.py` outside its package then breaks its own
-`from . import models`. Repairing the `__future__` damage on a clone exposes
-this as the **second, independent** blocker. Not yet diagnosed as to whether the
-generator or a repair pass produced it; the comment above it in the generated
-file (`# Import project modules using absolute imports`) hints at a repair pass.
+**This is the model disobeying an explicit instruction, not a pipeline defect.**
+`prompts/backend_developer.txt` says "All backend/ files are siblings ... NEVER:
+from backend.x  from ..x". Measured across the saved builds: **39 violations in
+10 of them** — 28 package-qualified, 11 relative. Systemic, not a row-3 fluke,
+so `Debugger._normalise_sibling_imports` now enforces it deterministically
+(zero-token) as step 0 of `_apply_structural_import_repairs`.
+
+Conservative by construction: a line is rewritten only when the module it names
+resolves to a real sibling file beside the importer, so a third-party package
+called `backend` is untouched; an unparseable file is left for another pass
+rather than regexed; and a second pass is a no-op.
+
+### Still open from row 3 — a third, deeper defect
+
+Normalising the imports on a clone gets the app past both blockers and straight
+into a **third**: `routes.py` references `models.SupplierCreate`,
+`models.ProductCreate`, `models.WarehouseCreate` and
+`models.StockMovementCreate`, and **`models.py` defines none of them** — it
+holds only SQLAlchemy ORM classes (`Base`, `Supplier`, `Warehouse`, `Product`,
+`StockMovement`). The prompt required the opposite: *"models.py is a flat file
+with Pydantic classes only. No database code."*
+
+No import fix reaches this. It also explains a signal that was easy to skim
+past: `schema_attr` reported `not_applicable — this project declares no pydantic
+models`, which for a FastAPI build with 18 routes is not a neutral fact. **A
+FastAPI project with zero Pydantic models is itself suspicious**, and the check
+currently says nothing about it. That is the next thing to look at.
 
 **§4.32 — a static page had to be served to count as verified.**
 `§4.31` raised the obvious question: is `runtime_smoke` reaching everything it

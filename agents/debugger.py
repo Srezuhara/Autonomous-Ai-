@@ -125,6 +125,15 @@ def _is_framework_script(file_path: str) -> bool:
     parts = [p.lower() for p in Path(str(file_path).replace("\\", "/")).parts]
     return any(p in FRAMEWORK_SCRIPT_DIRS for p in parts[:-1])
 
+def _is_sibling_pkg_head(module: str) -> bool:
+    """True for `backend`, a project-root package name, or any single segment.
+
+    Used to spot `from backend import models`, where the sibling is the NAME
+    rather than the module path.
+    """
+    return bool(module) and "." not in module
+
+
 SYSPATH_BLOCK = """\
 import sys as _sys, os as _os
 _here = _os.path.dirname(_os.path.abspath(__file__))
@@ -344,6 +353,128 @@ class Debugger(BaseAgent):
     # [REBUILT] from debugger.cpython-312.pyc constants. Docstrings, regexes and
     # log strings are exact; surrounding control flow is reconstructed.
 
+    def _normalise_sibling_imports(self, file_paths: list) -> list:
+        """
+        Rewrite package-qualified and relative imports to the flat sibling form
+        `prompts/backend_developer.txt` mandates and the sys.path shim supports.
+
+        The prompt could not be plainer — "All backend/ files are siblings ...
+        NEVER: from backend.x  from ..x" — and the model ignores it anyway: 39
+        violations across 10 of the saved builds, measured 2026-08-31.
+
+        Row 3 is what it costs. `main.py` used the forbidden
+        `from backend import models` beside the correct
+        `from routes import router`, while `routes.py` used `from . import
+        models`. Mixed like that the package is unimportable either way round:
+        loading `routes` flat breaks its relative import, and the shim that puts
+        `backend/` on the path is what makes the flat load happen. Every file
+        obeying one convention works; the mixture cannot.
+
+        Deterministic, zero-token, and conservative: a line is rewritten ONLY
+        when the module it names resolves to a real sibling file next to the
+        importer. Anything that does not resolve is left exactly as it is —
+        a third-party package called `backend` is not this function's business.
+        """
+        import ast
+
+        fixes: list = []
+        for fp in file_paths:
+            if not str(fp).endswith(".py"):
+                continue
+            try:
+                content = read_file(fp)
+            except Exception:
+                continue
+            if "import" not in content:
+                continue
+
+            try:
+                tree = ast.parse(content)
+            except SyntaxError:
+                # Unparseable files are somebody else's repair; guessing at
+                # import lines with a regex here is how good code gets broken.
+                continue
+
+            directory = (Path(config.OUTPUT_DIR) / fp).parent
+
+            def _is_sibling(name: str) -> bool:
+                if not name or not name.isidentifier():
+                    return False
+                return ((directory / f"{name}.py").is_file()
+                        or (directory / name / "__init__.py").is_file())
+
+            replacements: dict = {}
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                if getattr(node, "end_lineno", None) is None:
+                    continue
+
+                module = node.module or ""
+                level = node.level or 0
+                names = [(a.name, a.asname) for a in node.names]
+
+                if level == 0 and not module:
+                    continue
+
+                # `from . import models`  /  `from backend import models`
+                # The imported NAMES are the sibling modules.
+                if (level and not module) or (
+                        not level and _is_sibling_pkg_head(module)
+                        and all(_is_sibling(n) for n, _ in names)):
+                    if not all(_is_sibling(n) for n, _ in names):
+                        continue
+                    parts = [f"{n} as {a}" if a else n for n, a in names]
+                    new = f"import {', '.join(parts)}"
+                else:
+                    # `from .services import f` / `from backend.services import f`
+                    # / `from proj.backend.services import f` — the LAST segment
+                    # of the dotted path is the sibling module.
+                    tail = module.rsplit(".", 1)[-1] if module else ""
+                    if not tail or not _is_sibling(tail):
+                        continue
+                    if not level and tail == module:
+                        continue  # already flat
+                    parts = [f"{n} as {a}" if a else n for n, a in names]
+                    new = f"from {tail} import {', '.join(parts)}"
+
+                replacements[(node.lineno, node.end_lineno)] = new
+
+            if not replacements:
+                continue
+
+            lines = content.splitlines(keepends=True)
+            out, i, changed = [], 0, 0
+            while i < len(lines):
+                span = next((k for k in replacements if k[0] == i + 1), None)
+                if span is None:
+                    out.append(lines[i])
+                    i += 1
+                    continue
+                indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+                out.append(f"{indent}{replacements[span]}\n")
+                changed += 1
+                i = span[1]  # skip the statement's remaining lines
+
+            if not changed:
+                continue
+
+            new_content = "".join(out)
+            try:
+                ast.parse(new_content)
+            except SyntaxError:
+                logger.warning(
+                    f"  \u26a0\ufe0f  import normalisation would break {fp}; left alone")
+                continue
+
+            create_file(fp, new_content)
+            fixes.append(fp)
+            logger.info(
+                f"  \U0001f9ed Normalised {changed} import(s) in {fp} to the flat "
+                "sibling form the prompt requires")
+
+        return fixes
+
     def _apply_structural_import_repairs(self, file_paths: list[str]) -> list[str]:
         """
         Deterministically repair import structures that LLM retries handle badly.
@@ -354,6 +485,11 @@ class Debugger(BaseAgent):
         """
         fixes: list[str] = []
         local_modules = {Path(fp).stem for fp in file_paths}
+
+        # 0. Put every sibling import into the one convention the prompt
+        #    mandates. Runs first: the later rules reason about which modules a
+        #    file imports, and they should see the normalised form.
+        fixes.extend(self._normalise_sibling_imports(file_paths))
 
         # 1. Drop copies of other files that the LLM pasted into this one.
         for fp in file_paths:

@@ -6041,6 +6041,120 @@ check("the scanner stops at the first line that is not a future import",
 shutil.rmtree(_F33, ignore_errors=True)
 
 
+# -- 4.34 One import convention, enforced rather than requested ---------------
+# prompts/backend_developer.txt could not be plainer: "All backend/ files are
+# siblings ... NEVER: from backend.x  from ..x". The model ignores it anyway --
+# 39 violations across 10 of the saved builds, measured 2026-08-31. Row 3 is
+# what that costs: main.py used the forbidden `from backend import models`
+# beside a correct `from routes import router`, while routes.py used
+# `from . import models`. Either convention alone works; the mixture cannot.
+
+_N34 = Path(tempfile.mkdtemp(prefix="norm34_"))
+_N34_OUT = _N34 / "out"
+_N34_OUT.mkdir(parents=True)
+
+
+def _n34_build(name, files):
+    root = _N34_OUT / name
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    return [f"{name}/{r}" for r in files]
+
+
+def _n34_run(paths):
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_N34_OUT)
+        return _Dbg33.__new__(_Dbg33)._normalise_sibling_imports(paths)
+    finally:
+        config.OUTPUT_DIR = real
+
+
+def _n34_read(name, rel):
+    return (_N34_OUT / name / rel).read_text(encoding="utf-8")
+
+
+# Row 3's exact shape.
+_paths = _n34_build("row3", {
+    "backend/models.py": "class Supplier:\n    pass\n",
+    "backend/services.py": "def get_stock():\n    return 1\n",
+    "backend/routes.py":
+        "from . import models\nfrom .services import get_stock\nrouter = None\n",
+    "backend/main.py":
+        "from backend import models\nfrom routes import router\n",
+})
+_n34_run(_paths)
+
+check("`from backend import models` becomes a flat import",
+      "import models" in _n34_read("row3", "backend/main.py")
+      and "from backend import" not in _n34_read("row3", "backend/main.py"),
+      _n34_read("row3", "backend/main.py"))
+check("an already-correct flat import is left alone",
+      "from routes import router" in _n34_read("row3", "backend/main.py"))
+check("`from . import models` becomes a flat import",
+      "import models" in _n34_read("row3", "backend/routes.py")
+      and "from . import" not in _n34_read("row3", "backend/routes.py"),
+      _n34_read("row3", "backend/routes.py"))
+check("`from .services import x` keeps its names and drops the dot",
+      "from services import get_stock" in _n34_read("row3", "backend/routes.py"),
+      _n34_read("row3", "backend/routes.py"))
+
+# Deep package paths, aliases, and multiple names.
+_paths = _n34_build("deep", {
+    "backend/ocr.py": "def read():\n    pass\n",
+    "backend/models.py": "A = 1\nB = 2\n",
+    "backend/routes.py":
+        "from proj.backend.ocr import read\n"
+        "from backend.models import A as Alpha, B\n",
+})
+_n34_run(_paths)
+_deep = _n34_read("deep", "backend/routes.py")
+check("a deep dotted path collapses to the sibling module",
+      "from ocr import read" in _deep, _deep)
+check("aliases and multiple names survive the rewrite",
+      "from models import A as Alpha, B" in _deep, _deep)
+
+# The conservative half: never touch what does not resolve to a sibling.
+_paths = _n34_build("third_party", {
+    "backend/main.py":
+        "from backend.nonexistent import thing\n"
+        "from fastapi import FastAPI\nimport os\n",
+})
+_n34_run(_paths)
+_tp = _n34_read("third_party", "backend/main.py")
+check("an import that resolves to no sibling file is left untouched",
+      "from backend.nonexistent import thing" in _tp, _tp)
+check("third-party imports are never rewritten",
+      "from fastapi import FastAPI" in _tp and "import os" in _tp, _tp)
+
+# A file that does not parse must not be guessed at.
+_paths = _n34_build("broken", {
+    "backend/models.py": "X = 1\n",
+    "backend/main.py": "from . import models\ndef f(:\n    pass\n",
+})
+check("an unparseable file is left for another pass, not regexed",
+      _n34_run(_paths) == [], "it rewrote a file it could not parse")
+check("...and its content is unchanged",
+      "from . import models" in _n34_read("broken", "backend/main.py"))
+
+# Idempotence: a second pass must find nothing to do.
+_paths = _n34_build("twice", {
+    "backend/models.py": "X = 1\n",
+    "backend/main.py": "from backend import models\n",
+})
+_n34_run(_paths)
+check("a second normalisation pass is a no-op",
+      _n34_run(_paths) == [], "it rewrote an already-flat file")
+
+check("the structural repair pass runs it first",
+      "_normalise_sibling_imports(file_paths)" in
+      Path("agents/debugger.py").read_text(encoding="utf-8"))
+
+shutil.rmtree(_N34, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
