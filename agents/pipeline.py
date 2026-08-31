@@ -564,8 +564,24 @@ class Pipeline:
             self._test_suite_issues.append(_test_issue)
             for r in failed_tests:
                 fp = getattr(r, "file_path", "")
-                if fp and fp not in failed_paths:
-                    failed_paths.append(fp)
+                if not fp or fp in failed_paths:
+                    continue
+                # `file_path` is the SOURCE file the test covers, and handing it
+                # to the debugger is only useful if the source is what broke.
+                # When every failure was raised inside the test itself — a
+                # fixture calling .close() on the None that init_db() returned —
+                # there is nothing in the source to repair, and the pass would
+                # rewrite a file that was never wrong.
+                #
+                # Anything ambiguous (an assertion, or output that could not be
+                # parsed) leaves this False and the file is repaired as before.
+                if getattr(r, "all_test_defects", False):
+                    logger.info(
+                        f"  🧭 {fp}: not repairing — {getattr(r, 'blame_summary', '')} "
+                        f"(the defect is in the test, which the tester repairs)"
+                    )
+                    continue
+                failed_paths.append(fp)
 
         return issues, failed_paths, advisory
 

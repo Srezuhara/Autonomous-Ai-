@@ -28,6 +28,20 @@ now does an index search instead of scanning all 1,023 progress rows.
 Detail, and the four decisions worth knowing about, in `PHASE23_HANDOFF.md`.
 **B2 (auth) is unblocked** — it needs a schema change, which is now a revision.
 
+### Repair now knows which side broke
+
+`tools/test_blame.py` reads the deepest frame of each pytest traceback and says
+whether the failure came from the test or from the code under test. The tester
+no longer rewrites a test when the source is at fault (which would teach the
+test to accept the bug), and `_diagnose` no longer hands the source to the
+debugger when the test is at fault. Assertions and anything unparseable stay
+ambiguous, so both repairs run exactly as before.
+
+Validated against all 41 saved builds before being wired to anything: **18
+builds stop rewriting the test, 7 stop repairing the source, none both.** The
+first version of the parser handled only `--tb=native` while the tester uses
+`--tb=long`, so it silently did nothing — the corpus run is what caught it.
+
 ### Row 2 — the result the runbook asked for
 
 `bookmark_manager_e045ca2d`, `done_with_context` in 1752.5s, 173,307 tokens

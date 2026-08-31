@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from agents.base_agent import BaseAgent
 from tools.file_writer import read_file, create_file
 from tools.repair_guard import accept_test_reply
+from tools.test_blame import classify_pytest_output
 from tools.code_executor import run_command, run_python
 from tools.code_introspect import analyze_file
 import config
@@ -155,6 +156,13 @@ class TestResult:
     errors:          list = field(default_factory=list)
     skipped:         bool = False
     skip_reason:     str  = ""
+    # Which side of the failing tests was actually broken, from the deepest
+    # frame of the traceback. `source_defect` gates the test rewrite here;
+    # `all_test_defects` gates source repair in Pipeline._diagnose. Both default
+    # to the old behaviour when nothing could be attributed.
+    source_defect:    bool = False
+    all_test_defects: bool = False
+    blame_summary:    str  = ""
 
     def __str__(self):
         if self.skipped:
@@ -793,6 +801,25 @@ Rules:
                 return result
 
             if attempt <= MAX_TEST_FIXES and failed > 0:
+                # Which side is actually broken? Rewriting a test so it agrees
+                # with buggy code turns a red suite green and destroys the only
+                # signal the bug exists. `accept_test_reply` catches a repair
+                # that DELETES a failing test, but not one that edits an
+                # assertion to expect the wrong value.
+                blame = classify_pytest_output(output, project_root_abs)
+                result.source_defect    = blame.has_source_defect
+                result.all_test_defects = blame.all_test_defects
+                result.blame_summary    = blame.summary()
+
+                if blame.has_source_defect:
+                    logger.info(
+                        f"  🧭 {blame.summary()} — not rewriting the "
+                        f"test: the defect is in the code under test, and the "
+                        f"debugger repairs that. A rewrite here could only "
+                        f"teach the test to accept it."
+                    )
+                    break
+
                 logger.info(f"  🔧 {failed} failing — fixing (attempt {attempt})")
                 try:
                     current = read_file(test_path)

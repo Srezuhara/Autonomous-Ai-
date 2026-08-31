@@ -82,6 +82,45 @@ here.
 > from "Remaining Work", which says the application was executed and verified
 > and that these are the things the automated checks could not confirm.
 
+**§4.30 — telling a broken test from broken code, before repairing either.**
+The pipeline repaired in two directions at once and consulted no evidence about
+which side had failed:
+
+| Path | Rewrites | Wrong when |
+|---|---|---|
+| `Tester._test_file` (`_fix_tests`, 3 attempts) | the **test** | the source is wrong — it teaches the test to accept a real bug |
+| `Pipeline._diagnose` → debugger | the **source** (`TestResult.file_path`) | the test is wrong — repairs a file that was never at fault |
+
+The second is wasted tokens; the first is worse, because a test rewritten to
+match buggy behaviour removes the only evidence the bug exists. `accept_test_reply`
+catches a repair that *deletes* a failing test, not one that edits an assertion
+to expect the wrong value.
+
+`tools/test_blame.py` classifies each failure by the **deepest frame of the
+traceback** — where the exception was finally raised, which is not the same as
+the file being imported. `ai_report_generator` fails `NameError: name 'List' is
+not defined` while importing a test, but raises it in the source: a real defect.
+Row 2's `conn.close()` on the `None` from `init_db()` raises in the fixture: a
+test defect.
+
+Three verdicts, and the third is the load-bearing one. **Assertions are
+AMBIGUOUS, not test defects** — an assertion always executes in the test file,
+but the expectation can be right and the code wrong. So is anything unparseable.
+Ambiguity anywhere leaves both repairs enabled, exactly as before.
+
+Measured over all 41 saved builds before it was wired to anything: 65 source
+defects, 41 test defects, 40 ambiguous. **18 builds stop rewriting the test, 7
+stop repairing the source, 9 are unchanged, and no build appears in both lists.**
+Row 2 is deliberately *not* among the 7: its two assertion failures sit beside
+four fixture errors, so the ambiguity holds it back.
+
+> **The catch that justifies the corpus run.** The first version parsed only
+> `File "...", line N`, which is `--tb=native`. The tester runs `--tb=long`,
+> whose frames read `tests/test_api.py:6: AttributeError`. Against real pipeline
+> output it attributed nothing and changed no behaviour — it failed safe and did
+> nothing, and only running it against the corpus showed that. Both formats are
+> parsed now, and both are tested.
+
 **§4.29 — the tester keeps working; only its residue is handed over.** The
 `tester` step runs the generated suite with real pytest and a failing test is
 often the only sign that the code *under* test is wrong, so it must keep driving
@@ -107,15 +146,15 @@ carrying it into the shipped document.
 > running the suite *as a whole, from the project root, the way a user would*,
 > which is how it found 4 fixture errors where the per-file tester scored 1/3.
 
-**A cost this leaves open, deliberately.** A failing test file is still
-classified as repairable, so it spends quota: the tester makes up to 3 LLM fix
-attempts per failing file and remediation re-runs it — row 2's log shows at
-least 8 `N failing → fixing` cycles. That is the right behaviour when the test
-is failing because the *code* is wrong, and waste when the test itself is the
-broken thing. Tokens are recorded per build rather than per step, so the tester's
-share of row 2's 173K is not separable without new instrumentation. Options, in
-increasing order of work: cap the attempts at one; split the cause so only
-source-implicating failures are repaired; or leave it.
+~~A cost this leaves open, deliberately.~~ **Addressed by §4.30 above**, and
+the framing there was backwards: the tester rewrites the *test*, so its three
+attempts are right when the test is wrong and actively harmful when the source
+is. The cause is now split rather than the attempts capped — `MAX_TEST_FIXES`
+is still 3, but the attempts are spent only when the test is the thing that can
+be fixed. Tokens remain recorded per build rather than per step, so the exact
+saving is still not separable without new instrumentation; what is measurable is
+that 18 of 34 failing builds no longer spend rewrites on a source defect, and 7
+no longer spend debugger passes on a test defect.
 
 **§4.27 — the shipped document described a mid-build state.** `issues` and
 `diag_advisory` came from the diagnosis that ran *before* remediation and were

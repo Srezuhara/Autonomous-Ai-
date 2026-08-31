@@ -5594,6 +5594,152 @@ check("the advisory-only exit hands over too",
       f"{_t29_src.count('_hand_over_test_suite_findings(')} call sites")
 
 
+# -- 4.30 Which side of a failing test is actually broken ---------------------
+# The pipeline repaired in two directions at once without evidence: the tester
+# rewrote the TEST (which, when the source is at fault, teaches the test to
+# accept a real bug) and _diagnose handed the SOURCE to the debugger (wasted
+# when the test is at fault). The deepest traceback frame separates them.
+# Measured over the corpus: 65 source defects, 41 test defects, 40 ambiguous;
+# 18 builds stop rewriting the test, 7 stop repairing the source, none both.
+
+from tools.test_blame import (                                     # noqa: E402
+    Blame, classify_pytest_output, is_test_path,
+)
+
+# Row 2's exact defect, in the format `Tester._run_pytest_single` produces.
+_B30_TEST_SIDE = """
+=================================== ERRORS ====================================
+_________________________ ERROR at setup of test_one __________________________
+
+    @pytest.fixture(autouse=True)
+    def reset_db():
+        conn = init_db()
+>       conn.close()
+E       AttributeError: 'NoneType' object has no attribute 'close'
+
+tests/test_api.py:6: AttributeError
+"""
+
+_B30_SOURCE_SIDE = """
+=================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_app.py _______________________
+
+tests/test_app.py:3: in <module>
+    from backend.services import build_report
+backend/services.py:12: in <module>
+    def build(rows: List[str]):
+E   NameError: name 'List' is not defined
+
+backend/services.py:12: NameError
+"""
+
+_B30_ASSERTION = """
+=================================== FAILURES ==================================
+___________________________ test_create_product _______________________________
+
+    def test_create_product():
+>       assert response.status_code == 201
+E       assert 422 == 201
+
+tests/test_products.py:14: AssertionError
+"""
+
+_b30_t = classify_pytest_output(_B30_TEST_SIDE)
+check("an exception raised inside the test is a test defect",
+      [f.verdict for f in _b30_t.failures] == [Blame.TEST_DEFECT],
+      str([str(f) for f in _b30_t.failures]))
+check("...so the source must not be repaired for it",
+      _b30_t.all_test_defects is True)
+check("...and the test may still be rewritten",
+      _b30_t.has_source_defect is False)
+
+_b30_s = classify_pytest_output(_B30_SOURCE_SIDE)
+check("an exception raised inside the source is a source defect, even though "
+      "it surfaced while importing a test",
+      [f.verdict for f in _b30_s.failures] == [Blame.SOURCE_DEFECT],
+      str([str(f) for f in _b30_s.failures]))
+check("...so the test must NOT be rewritten to accommodate it",
+      _b30_s.has_source_defect is True)
+check("...and it is not mistaken for a test defect",
+      _b30_s.all_test_defects is False)
+
+_b30_a = classify_pytest_output(_B30_ASSERTION)
+check("a failing assertion is ambiguous, not a test defect",
+      [f.verdict for f in _b30_a.failures] == [Blame.AMBIGUOUS],
+      str([str(f) for f in _b30_a.failures]))
+check("...so neither repair is skipped for it",
+      _b30_a.has_source_defect is False and _b30_a.all_test_defects is False)
+
+# A mixed file: one real source defect is enough to stop the test rewrite.
+_b30_mixed = classify_pytest_output(_B30_TEST_SIDE + _B30_SOURCE_SIDE)
+check("one source defect among test defects still stops the test rewrite",
+      _b30_mixed.has_source_defect is True)
+check("...and stops the source repair being skipped",
+      _b30_mixed.all_test_defects is False)
+
+# Ambiguity anywhere must fall back to today's behaviour.
+_b30_amb = classify_pytest_output(_B30_TEST_SIDE + _B30_ASSERTION)
+check("a single ambiguous failure prevents skipping the source repair",
+      _b30_amb.all_test_defects is False,
+      str(_b30_amb.counts()))
+
+# Unreadable output must never change behaviour. This is the rule that the
+# study behind this module got wrong first time, scoring ten broken suites as
+# passing because an empty result meant two different things.
+for _b30_junk in ("", "1 failed in 0.2s", "no frames here at all",
+                  "tests/x.py: some prose without a line number"):
+    _b30_r = classify_pytest_output(_b30_junk)
+    check(f"unreadable output changes nothing ({_b30_junk[:24]!r})",
+          _b30_r.has_source_defect is False
+          and _b30_r.all_test_defects is False
+          and _b30_r.failures == [])
+
+check("a report with no failures is not 'all test defects'",
+      classify_pytest_output("").all_test_defects is False)
+check("the summary of an empty report says so rather than implying a pass",
+      "no failures could be attributed" in classify_pytest_output("").summary())
+
+# --tb=native is the other format that reaches this, and must agree.
+_B30_NATIVE = """=========================== ERRORS ============================
+Traceback (most recent call last):
+  File "tests/test_api.py", line 6, in reset_db
+    conn.close()
+AttributeError: 'NoneType' object has no attribute 'close'
+"""
+check("the native traceback format is classified the same way",
+      classify_pytest_output(_B30_NATIVE).all_test_defects is True,
+      str(classify_pytest_output(_B30_NATIVE).counts()))
+
+# Path classification underpins all of it.
+check("test files are recognised by name and by directory",
+      all(is_test_path(p) for p in
+          ("tests/test_api.py", "test_x.py", "a/b_test.py",
+           "tests/conftest.py", r"pkg\tests\test_z.py")))
+check("source files are not mistaken for tests",
+      not any(is_test_path(p) for p in
+              ("backend/services.py", "main.py", "src/latest_test_helper.py",
+               "")),
+      "a source path was classified as a test")
+
+# The wiring, in both directions.
+_b30_tester_src = Path("agents/tester.py").read_text(encoding="utf-8")
+check("the tester classifies before spending a rewrite",
+      "classify_pytest_output(output" in _b30_tester_src)
+check("...and skips the rewrite when the source is at fault",
+      "if blame.has_source_defect:" in _b30_tester_src)
+check("TestResult carries the verdict to the pipeline",
+      "all_test_defects" in _b30_tester_src and
+      "source_defect" in _b30_tester_src)
+check("MAX_TEST_FIXES is unchanged — attempts are spent, not capped",
+      "MAX_TEST_FIXES = 3" in _b30_tester_src)
+
+_b30_pipe_src = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("the pipeline skips source repair when the test is at fault",
+      'if getattr(r, "all_test_defects", False):' in _b30_pipe_src)
+check("...but still reports the failure, so nothing leaves the record",
+      "_test_suite_issues.append(_test_issue)" in _b30_pipe_src)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
