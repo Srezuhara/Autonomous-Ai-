@@ -228,7 +228,38 @@ because nothing had executed the artifact.
 A second blocker remains open: `main.py` mixes package and top-level imports for
 sibling modules. See `PHASE23_HANDOFF.md`.
 
-### Next session — do this
+### Next session — start here
+
+**The highest-value work needs no quota.** Row 3 dies on a defect nothing
+checks for: `backend/routes.py` references `models.SupplierCreate`,
+`ProductCreate`, `WarehouseCreate` and `StockMovementCreate`, and
+`backend/models.py` defines none of them — it holds only SQLAlchemy ORM classes,
+where `prompts/backend_developer.txt` demanded *"Pydantic classes only. No
+database code."* `inventory_system_3322017e` is on disk and reproduces it for
+free.
+
+Two things follow, both zero-token:
+
+1. **Make `schema_attr` say something.** It currently reports
+   `not_applicable — this project declares no pydantic models`, which for a
+   `web_api` shape with 18 routes is a red flag reported as a shrug. A FastAPI
+   build with routes and no Pydantic models should be a finding.
+2. **Tighten the prompt**, since the model put ORM classes where schemas were
+   explicitly required — the same disobedience §4.34 had to enforce
+   mechanically for imports.
+
+Everything else still open is listed in `PHASE23_HANDOFF.md` §0.-0.5, in value
+order, and summarised in memory (`pipeline-open-defects`).
+
+**And the caveat that matters more than the list:** ten of the last eleven
+changes have never run inside a live build, and row 3 showed why that is not a
+formality — *both* of its blockers were invisible to all 41 saved builds. The
+corpus caught neither §4.33 nor §4.34; one fresh build found both in a single
+run.
+
+### The quota picture
+
+
 
 **Quota has refilled: `20b` ~121K, `120b` ~150K, and `--dry-run` says start.**
 But read `PHASE23_QUOTA_RUNBOOK.md` §0.-1 first: the ledger is optimistic
