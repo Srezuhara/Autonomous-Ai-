@@ -2056,7 +2056,7 @@
         "status": "failed"
       },
       "web_assets": {
-        "detail": "parsed 2 page(s), 6 frontend call(s) checked against 5 declared route(s)",
+        "detail": "parsed 2 page(s), 7 frontend call(s) checked against 5 declared route(s)",
         "findings": [
           "llm_api_key_dashboard/frontend/index.html loads a script that does not exist: `index.js`",
           "llm_api_key_dashboard/frontend/src/App.js calls `/user`, which the backend does not serve. Declared routes: /alerts, /api-keys, /api-keys/{api_key_id}, /login, /usage-data",
@@ -2306,13 +2306,14 @@
         "status": "failed"
       },
       "web_assets": {
-        "detail": "parsed 4 page(s), 6 frontend call(s) checked against 2 declared route(s)",
+        "detail": "parsed 4 page(s), 17 frontend call(s) checked against 2 declared route(s)",
         "findings": [
           "index.js uses `import`/`export` but task_manager/frontend/src/index.html loads it as a classic script \u2014 add type=\"module\" or the browser raises a syntax error before any of it runs",
           "src/index.js uses `import`/`export` but task_manager/frontend/index.html loads it as a classic script \u2014 add type=\"module\" or the browser raises a syntax error before any of it runs",
           "task_manager/frontend/public/index.html loads a script that does not exist: `index.js`",
           "task_manager/public/index.html loads a script that does not exist: `./index.js`",
-          "task_manager/src/App.js calls `/boards`, which the backend does not serve. Declared routes: /tasks/, /tasks/{task_id}"
+          "task_manager/src/App.js calls `/boards`, which the backend does not serve. Declared routes: /tasks/, /tasks/{task_id}",
+          "task_manager/src/components/Board.js calls `http://localhost:8000/boards/${board.id}/tasks`, which the backend does not serve. Declared routes: /tasks/, /tasks/{task_id}"
         ],
         "status": "failed"
       }

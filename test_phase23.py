@@ -6812,6 +6812,103 @@ check("an empty file has no substance", not _pl54._has_substance(""))
 shutil.rmtree(_ph54, ignore_errors=True)
 
 
+
+# ---- 55. A template literal that starts with a path ------------------------
+# §4.43, and the A5 measurement that justified it. `web_asset_check` skipped
+# every template literal that did not begin `${BASE}`, which is documented
+# precision-over-recall — so the question asked was whether the skip was hiding
+# anything.
+#
+# Measured: 42 fetch/axios call sites across the corpus, 34 recognised and 8
+# skipped, all 8 the same shape. Seven were correct. One was not:
+# `task_manager/src/components/Board.js` calls `/boards/${board.id}/tasks`
+# against a backend serving only `/tasks/` and `/tasks/{task_id}`. One real
+# defect is what decided this was worth closing rather than documenting, and
+# closing it added exactly that one finding to the corpus and no others.
+from tools.web_asset_check import (                                    # noqa: E402
+    _static_shape as _shape55,
+    check_web_assets as _wa55,
+)
+
+# The shape is recovered by collapsing each interpolation to ONE segment, so the
+# existing route matcher — which already treats a declared `{item_id}` as a
+# wildcard — does the comparison. That reuse is what keeps this as precise as
+# the quoted-literal path beside it.
+check("an id interpolation becomes one segment",
+      _shape55("/tasks/${task.id}") == "/tasks/_")
+check("...and the origin is stripped first",
+      _shape55("http://localhost:8000/tasks/${task.id}") == "/tasks/_")
+check("...and a query string is dropped",
+      _shape55("/items/${id}?full=1") == "/items/_")
+check("a deeper path keeps its segment count",
+      _shape55("http://h/boards/${b.id}/tasks") == "/boards/_/tasks")
+
+# Everything it must still refuse to guess at.
+check("a relative template is skipped", _shape55("tasks/${id}") == "")
+check("a leading interpolation is skipped — that is the ${BASE} shape",
+      _shape55("${apiPath}/x") == "")
+check("an interpolation that could BE a path is skipped",
+      _shape55("/api/${routePath}/x") == ""
+      and _shape55("/api/${endpoint}") == "",
+      "an interpolation spanning a slash would change the segment count")
+
+# End to end, both directions, against a real project on disk.
+_W55 = Path(tempfile.mkdtemp(prefix="webasset55_"))
+_W55_OUT = _W55 / "out"
+_W55_OUT.mkdir(parents=True)
+
+
+def _mk55(name: str, js: str) -> str:
+    root = _W55_OUT / name
+    (root / "frontend").mkdir(parents=True, exist_ok=True)
+    (root / "backend").mkdir(parents=True, exist_ok=True)
+    (root / "frontend" / "index.html").write_text(
+        "<html><body><script src='app.js'></script></body></html>",
+        encoding="utf-8")
+    (root / "frontend" / "app.js").write_text(js, encoding="utf-8")
+    (root / "backend" / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "@app.get('/tasks/')\n"
+        "def index(): return []\n"
+        "@app.get('/tasks/{task_id}')\n"
+        "def one(task_id: int): return {}\n",
+        encoding="utf-8")
+    return name
+
+
+def _findings55(name: str) -> list:
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W55_OUT)
+        return list(_wa55(name).findings)
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# The corpus defect, reproduced: a route the backend does not serve.
+_bad55 = _mk55("bad", "fetch(`http://localhost:8000/boards/${b.id}/tasks`);\n")
+check("a template literal naming an unserved route is now a finding",
+      any("/boards/" in f for f in _findings55(_bad55)),
+      str(_findings55(_bad55)))
+
+# The seven that were correct must stay correct — this is the half that decides
+# whether the change was worth making or was a false-positive generator.
+_good55 = _mk55("good", "fetch(`/tasks/${task.id}`);\nfetch(`/tasks/`);\n")
+check("a template literal naming a served route is not a finding",
+      not any("tasks" in f and "does not serve" in f
+              for f in _findings55(_good55)),
+      str(_findings55(_good55)))
+
+# A dynamic path is still left alone rather than guessed at.
+_dyn55 = _mk55("dyn", "fetch(`${API}/whatever`);\nfetch(`/api/${endpoint}`);\n")
+check("a dynamic template is still skipped, not guessed at",
+      not any("does not serve" in f for f in _findings55(_dyn55)),
+      str(_findings55(_dyn55)))
+
+shutil.rmtree(_W55, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

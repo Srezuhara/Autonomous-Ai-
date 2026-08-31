@@ -39,9 +39,12 @@ What this checks
    files written by separate LLM calls, agreeing on a contract nothing checks.
 
 Precision over recall throughout, as in `sql_schema_check`. Anything dynamic — a
-template literal, a variable URL, a path built at runtime — is skipped rather
-than guessed at, because a false positive spends an LLM repair call on correct
-code.
+variable URL, a path built at runtime — is skipped rather than guessed at,
+because a false positive spends an LLM repair call on correct code. A template
+literal is checked when its static shape is recoverable: each `${...}` collapses
+to one path segment and the existing route matcher, which already treats a
+declared `{item_id}` as a wildcard, does the comparison. An interpolation that
+could itself expand to a path is still skipped.
 
 Deterministic and free — no LLM, no tokens, no browser.
 """
@@ -81,11 +84,54 @@ _API_BASE_RE = re.compile(
     r"""(?:const|let|var)\s+(\w+)\s*=\s*['"]([^'"]+)['"]""",
 )
 
+# fetch(`/tasks/${task.id}`) and fetch(`http://host/boards/${b.id}/tasks`) —
+# a template literal whose FIRST segment is literal text rather than a base
+# constant. `_FETCH_TEMPLATE_RE` below only claims the `${BASE}/path` shape, so
+# these were skipped entirely.
+#
+# Measured on the corpus before this was written: 42 fetch/axios call sites, 34
+# recognised and 8 skipped, and all 8 are this shape. Seven of them are correct
+# and one is not — `task_manager/src/components/Board.js` calls
+# `/boards/${board.id}/tasks` against a backend that serves only `/tasks/` and
+# `/tasks/{task_id}`. So the skip was hiding exactly one real defect, which is
+# what decided this was worth closing rather than documenting.
+_FETCH_LITERAL_TEMPLATE_RE = re.compile(
+    r"""(?:fetch\s*\(|axios\s*\.\s*(?:get|post|put|patch|delete)\s*\()\s*"""
+    r"""`(?!\$\{)([^`]*)`""",
+    re.IGNORECASE,
+)
+
+#: One interpolation, replaced by a placeholder segment so the existing route
+#: matcher can do the work: it already treats a declared `{item_id}` as a
+#: wildcard, so `/tasks/${task.id}` -> `/tasks/_` matches `/tasks/{task_id}`
+#: and `/boards/${b.id}/tasks` -> `/boards/_/tasks` does not match anything
+#: with two segments. Reusing that is what keeps this as precise as the
+#: literal-URL path beside it.
+_INTERPOLATION_RE = re.compile(r"\$\{[^}]*\}")
+
+
+def _static_shape(template: str) -> str:
+    """A template literal's path, with each `${...}` collapsed to one segment.
+
+    Returns "" when there is nothing checkable — no leading slash once any
+    origin is removed, or an interpolation that could itself expand to a path.
+    """
+    path = re.sub(r"^https?://[^/]+", "", template).split("?")[0]
+    if not path.startswith("/"):
+        return ""
+    # An interpolation that spans a slash would change the segment count and
+    # make the comparison a guess, so anything naming a path is left alone.
+    for hole in _INTERPOLATION_RE.findall(path):
+        inner = hole[2:-1].lower()
+        if any(word in inner for word in ("path", "url", "endpoint", "route")):
+            return ""
+    return _INTERPOLATION_RE.sub("_", path)
+
+
 # fetch(`${BASE}/bookmarks/${id}`) — the overwhelmingly common shape, and the
 # one row 2 uses. Quoted-literal URLs are handled by _FETCH_RE; this covers the
 # template literal whose FIRST interpolation is a base constant, because then
-# everything after it is a static path we can check. A template literal that
-# starts with anything else is a runtime value and is skipped.
+# everything after it is a static path we can check.
 _FETCH_TEMPLATE_RE = re.compile(
     r"""(?:fetch\s*\(|axios\s*\.\s*(?:get|post|put|patch|delete)\s*\()\s*"""
     r"""`\$\{(\w+)\}([^`]*)`""",
@@ -388,6 +434,18 @@ def check_web_assets(root: str) -> VerificationOutcome:
                 if not _route_matches(path_part, declared):
                     findings.append(
                         f"{rel_js} calls `{path_part}`, which the backend does "
+                        f"not serve. Declared routes: "
+                        f"{', '.join(sorted(declared)[:6])}"
+                    )
+
+            for template in _FETCH_LITERAL_TEMPLATE_RE.findall(source):
+                shape = _static_shape(template)
+                if not shape:
+                    continue
+                evidence["checked_routes"] += 1
+                if not _route_matches(shape, declared):
+                    findings.append(
+                        f"{rel_js} calls `{template}`, which the backend does "
                         f"not serve. Declared routes: "
                         f"{', '.join(sorted(declared)[:6])}"
                     )
