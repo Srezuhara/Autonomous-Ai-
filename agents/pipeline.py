@@ -1010,16 +1010,6 @@ class Pipeline:
         if smoke_outcome is not None:
             recorded.insert(0, smoke_outcome)
 
-        try:
-            # Replace, do not append. This runs twice — once before remediation
-            # and once in the final re-audit — and appending listed every check
-            # twice, leaving a reader unable to tell which run they were looking
-            # at or whether a repair had changed anything. The last run is the
-            # one that describes the shipped artifact.
-            result.verification_outcomes = [o.to_dict() for o in recorded]
-        except Exception:
-            pass
-
         # Findings that describe the artifact not working stay advisory and
         # degrade the build. Findings from `generated_tests` are different in
         # kind: the suite is something the build *ships*, not something the
@@ -1038,6 +1028,10 @@ class Pipeline:
         self._artifact_verified_working = works
         manual: list[str] = []
         counted = []
+        #: check name -> the outcome as it reads AFTER routing. Only a check
+        #: whose findings were *partly* routed appears here; see below for why
+        #: a wholly-routed one must not.
+        rewritten: dict = {}
         for outcome in outcomes:
             if works and outcome.check in self._MANUAL_WHEN_WORKING:
                 manual.extend(outcome.findings)
@@ -1071,6 +1065,7 @@ class Pipeline:
                             shape=outcome.shape, detail=outcome.detail,
                             findings=kept, evidence=dict(outcome.evidence),
                         )
+                    rewritten[outcome.check] = outcome
             counted.append(outcome)
 
         self._manual_checks = manual
@@ -1080,6 +1075,33 @@ class Pipeline:
                 "has been shown to work — handing them to the user as manual "
                 "testing rather than marking the build degraded"
             )
+
+        try:
+            # Replace, do not append. This runs twice — once before remediation
+            # and once in the final re-audit — and appending listed every check
+            # twice, leaving a reader unable to tell which run they were looking
+            # at or whether a repair had changed anything. The last run is the
+            # one that describes the shipped artifact.
+            #
+            # Written AFTER routing, and this ordering is load-bearing. It used
+            # to be written before, so a check whose findings were all handed to
+            # manual testing was still recorded `failed` — and the record is
+            # what `GET /jobs/{id}/status` serves and what
+            # `run_live_matrix.verification_verdict` judges a matrix row on.
+            # A build that works and ships one test file with a bad import
+            # therefore failed its row, which is §4.26's decision undone by the
+            # driver rather than by the pipeline.
+            #
+            # Only a *partly* routed check is rewritten. A wholly routed one
+            # (`generated_tests`) stays `failed` on purpose: the driver excludes
+            # it by name and prints "for manual testing: generated_tests", which
+            # is the shape a passing row takes when its suite is broken. Calling
+            # it `verified` here would delete that signal.
+            result.verification_outcomes = [
+                rewritten.get(o.check, o).to_dict() for o in recorded
+            ]
+        except Exception:
+            pass
 
         return collect_findings(counted)
 

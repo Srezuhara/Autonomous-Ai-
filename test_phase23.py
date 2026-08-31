@@ -4665,7 +4665,11 @@ check("every exit of the web probe records an outcome",
       _src49.count("self._smoke_outcome = ") >= 6,
       f"{_src49.count('self._smoke_outcome = ')} assignments")
 check("the recorded list is the one the API stores",
-      "result.verification_outcomes = [o.to_dict() for o in recorded]" in _src49)
+      # §4.39 moved this write below the routing loop, so the expression now
+      # maps each recorded outcome through the routed rewrite. What is being
+      # asserted is unchanged: the API stores `recorded`, not `counted`.
+      "for o in recorded" in _src49
+      and "result.verification_outcomes = [" in _src49)
 check("the web probe's findings are recorded but not collected twice",
       "recorded.insert(0, smoke_outcome)" in _src49)
 
@@ -6421,6 +6425,158 @@ check("a project with no routes at all is still not_applicable",
       _attr47o(_none49).status.value == "not_applicable")
 
 shutil.rmtree(_S49, ignore_errors=True)
+
+
+
+# ---- 51. The record is written after routing, not before --------------------
+# §4.26 decided that a broken test suite is not a broken build. §4.35 gave
+# `module_ref` findings that can be either kind, and §4.36 routed the test-file
+# ones per finding. All of that was correct inside the pipeline and invisible
+# outside it: `result.verification_outcomes` was assigned BEFORE the routing
+# loop, so a check whose every finding had been handed to manual testing was
+# still recorded `failed`.
+#
+# That record is what `GET /jobs/{id}/status` serves and what
+# `run_live_matrix.verification_verdict` judges a matrix row on, and its
+# MANUAL_CHECKS does not name `module_ref`. So a build that works and ships one
+# test file with a bad import failed its row — §4.26 undone by the driver rather
+# than by the pipeline. These tests run the real verdict function, because none
+# of the three "the three places agree" tests could catch this: they compare the
+# check-name tuples, not the record.
+import run_live_matrix as _rlm50                                       # noqa: E402
+from tools.verification import VerificationOutcome as _VO50            # noqa: E402
+
+_M50 = Path(tempfile.mkdtemp(prefix="record50_"))
+_M50_OUT = _M50 / "out"
+_M50_OUT.mkdir(parents=True)
+_m50_n = [0]
+
+
+def _m50_run(files: dict, executed: bool = True):
+    """Build a project, verify it, and return (record-by-check, row verdict)."""
+    _m50_n[0] += 1
+    name = f"p{_m50_n[0]}"
+    root = _M50_OUT / name
+    for rel, text in files.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    res = type("R", (), {})()
+    res.architecture = {"root_folder": name, "files": [{"path": "calc.py"}]}
+    res.intent = {}
+    res.backend_files = [{"path": "calc.py"}]
+    res.frontend_files = []
+    res.verification_outcomes = []
+    res.build_shape = None
+    res.remediation = None
+
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_M50_OUT)
+        pl = Pipeline.__new__(Pipeline)
+        # "something executed the artifact and found it sound" — the condition
+        # every routing decision here turns on.
+        pl._smoke_outcome = (
+            _VO50.verified("runtime_smoke", detail="served 3/3 routes")
+            if executed else None
+        )
+        pl._verify_other_shapes(res)
+        usable, why = pl._functional_verdict(res)
+    finally:
+        config.OUTPUT_DIR = real
+
+    record = {o["check"]: o for o in res.verification_outcomes}
+    passes, reason = _rlm50.verification_verdict(
+        {"verification": res.verification_outcomes})
+    return record, passes, reason, usable, list(pl._manual_checks)
+
+
+_GOOD_CALC = "import helper\ndef add(a, b):\n    return helper.present(a) + b\n"
+_GOOD_HELP = "def present(x):\n    return x\n"
+
+# The case that was broken: the ONLY undefined name is in a test module, and
+# another check has executed the artifact and found it sound.
+_r50, _pass50, _why50, _usable50, _man50 = _m50_run({
+    "calc.py":            _GOOD_CALC,
+    "helper.py":          _GOOD_HELP,
+    "tests/test_calc.py": "from calc import add, subtract\n",
+})
+check("a wholly-routed check is recorded verified, not failed",
+      _r50["module_ref"]["status"] == "verified",
+      f'recorded {_r50["module_ref"]["status"]}')
+check("...and its findings still reach the user as manual testing",
+      any("subtract" in m for m in _man50), str(_man50)[:200])
+check("...so the matrix row PASSES",
+      _pass50, f"row failed: {_why50}")
+check("...and the build is not called unusable", _usable50)
+
+# The signal that must survive: `generated_tests` is routed as a WHOLE check,
+# and the driver both excludes it by name and prints it. Rewriting it to
+# verified here would delete the "for manual testing:" suffix that a passing
+# row with a broken suite is supposed to carry.
+check("a wholly-routed generated_tests stays failed in the record",
+      _r50["generated_tests"]["status"] == "failed",
+      f'recorded {_r50["generated_tests"]["status"]}')
+check("...and the passing row still says so",
+      "for manual testing: generated_tests" in _why50, _why50)
+
+# A defect in the shipped application is never routed away.
+_r51, _pass51, _why51, _usable51, _ = _m50_run({
+    "calc.py":            "import helper\ndef add(a, b):\n    return helper.missing_fn(a, b)\n",
+    "helper.py":          _GOOD_HELP,
+    "tests/test_calc.py": "from calc import add, subtract\n",
+})
+check("a source defect keeps the check failed even when a test defect is routed",
+      _r51["module_ref"]["status"] == "failed")
+check("...and only the source finding is left counting against the build",
+      len(_r51["module_ref"]["findings"]) == 1
+      and "missing_fn" in _r51["module_ref"]["findings"][0],
+      str(_r51["module_ref"]["findings"]))
+check("...and the row FAILS", not _pass51)
+
+# With nothing having executed the artifact, a test-only defect still counts:
+# then it corroborates what the other checks suspect rather than standing alone.
+_r52, _pass52, _why52, _, _ = _m50_run({
+    "calc.py":            _GOOD_CALC,
+    "helper.py":          _GOOD_HELP,
+    "tests/test_calc.py": "from calc import add, subtract\n",
+}, executed=False)
+check("with no evidence the artifact works, nothing is routed away",
+      _r52["module_ref"]["status"] == "failed")
+check("...and the row FAILS", not _pass52)
+
+# `unusable` is decided from `evidence["fatal"]` in the record, so the reorder
+# is exactly where that flag could have been dropped.
+_r53, _, _, _usable53, _ = _m50_run({
+    "calc.py":            "from helper import missing_fn\ndef add(a, b):\n    return missing_fn(a, b)\n",
+    "helper.py":          _GOOD_HELP,
+    "tests/test_calc.py": "from calc import add\n",
+})
+check("an import-time source defect still marks the record fatal",
+      (_r53["module_ref"].get("evidence") or {}).get("fatal") is True)
+check("...and the build is unusable", not _usable53)
+
+_r54, _, _, _usable54, _ = _m50_run({
+    "calc.py":            _GOOD_CALC,
+    "helper.py":          _GOOD_HELP,
+    "tests/test_calc.py": "from calc import add, subtract\n",
+})
+check("an import-time TEST-only defect never marks the record fatal",
+      not (_r54["module_ref"].get("evidence") or {}).get("fatal"))
+check("...and the build stays usable", _usable54)
+
+# Assert the directive, not the prose explaining it — three earlier tests in
+# this file passed on a comment quoting the rule they were checking for.
+_src50 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("the record is built from the routed outcomes",
+      "rewritten.get(o.check, o).to_dict() for o in recorded" in _src50)
+check("...and it is assigned after the routing loop, not before",
+      _src50.index("rewritten: dict = {}")
+      < _src50.index("result.verification_outcomes = ["),
+      "the assignment moved back above the loop")
+
+shutil.rmtree(_M50, ignore_errors=True)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

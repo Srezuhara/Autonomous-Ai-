@@ -115,7 +115,7 @@ class RefIssue:
             f"{lead}: `{self.module}` defines {have}, and no `{self.name}`. "
             f"This raises {when}. Add `{self.name}` to `{self.module}` — do NOT "
             f"delete the reference or point it at a different name, which "
-            f"silently changes what the endpoint accepts."
+            f"silently changes what this code does instead of fixing it."
         )
 
 
