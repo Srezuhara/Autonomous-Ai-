@@ -51,6 +51,7 @@ from tools.feature_coverage import check_feature_coverage  # noqa: E402
 from tools.package_smoke import smoke_test_package         # noqa: E402
 from tools.runtime_smoke import smoke_test_app             # noqa: E402
 from tools.sql_schema_check import check_project_sql       # noqa: E402
+from tools.generated_tests import run_generated_tests      # noqa: E402
 from tools.verification import VerificationOutcome         # noqa: E402
 from tools.web_asset_check import check_web_assets         # noqa: E402
 
@@ -205,6 +206,7 @@ def verify_one(name: str, intents: dict, keep: bool = False) -> dict:
             ("cli_smoke",     smoke_test_cli),
             ("web_assets",    check_web_assets),
             ("package_smoke", smoke_test_package),
+            ("generated_tests", run_generated_tests),
         ):
             record["checks"][check] = _guarded(check, fn, clone)
 

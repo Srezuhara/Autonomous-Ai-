@@ -149,6 +149,14 @@ Per row, beyond the driver's own verdict:
   check could not run, because that is usually a pipeline defect, not a build
   defect.
 
+**A seventh check exists as of 2026-08-31: `generated_tests`.** It runs the
+suite the build ships. Expect it to FAIL: 34 of the 41 saved builds have a
+suite that does not pass, so a row that is otherwise perfect will still read
+`done_with_context`. Read it as "does the shipped suite run", not as a verdict
+on whether the app works — `runtime_smoke` answers that. Decide explicitly
+whether the row criterion counts it (see `PHASE23_HANDOFF.md` §4.24) rather
+than letting a red check erode the meaning of the criterion.
+
 Then re-run the free corpus check, which now includes the new build:
 
 ```bash

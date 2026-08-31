@@ -40,7 +40,7 @@ generation time, `repair_guard` rolled back a rewrite that fixed nothing rather
 than shipping the churn, and the debugger repaired the defect in the file that
 *declares* the field rather than the one that reads it.
 
-### Two defects row 2 exposed, both still open
+### Two defects row 2 exposed, both since fixed
 
 1. **A finding is recorded once and never re-read.** The shipped
    `SESSION_CONTEXT.md` tells the user to fix `bookmark.description` — a defect
@@ -52,6 +52,14 @@ than shipping the churn, and the debugger repaired the defect in the file that
    `init_db()` returns `None`, so all 4 tests error at fixture setup. The build
    is legitimately `verified: yes` at the same time, because no check in the
    six-check record executes the generated test suite.
+
+**Both are now fixed** (`PHASE23_HANDOFF.md` §4.24-4.25), and the second fix
+turned up something larger: **34 of the 41 saved builds ship a test suite that
+does not pass.** Nothing had noticed because nothing ran them. That makes a
+product decision unavoidable — under the current matrix criterion this check
+turns almost every row red, including row 2. It is not marked fatal, so it does
+not claim the app is broken; it does mean rows will read `done_with_context`
+until the criterion is decided one way or the other.
 
 
 **Last session: 2026-08-30, evening (Phase 23 — the zero-quota session).**

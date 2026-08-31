@@ -332,6 +332,102 @@ Return ONLY raw SQL. No markdown, no explanation."""
 
         return defects
 
+    def rescan_unrepaired_defects(
+        self, architecture: dict, root: str, written: list[str]
+    ) -> dict[str, list[str]]:
+        """
+        Re-check the recorded unrepaired defects against what is on disk now.
+
+        `unrepaired_defects` is a snapshot taken during generation, and the
+        debugger runs after it. Row 2 recorded `bookmark.description` as
+        unrepairable, the debugger then fixed it in `models.py` — the file that
+        *declares* the field — and `schema_attr` verified the build clean, but
+        the shipped SESSION_CONTEXT.md still told the user to go and fix it.
+        A finding read once and never re-read sends its reader after work that
+        is already done.
+
+        Re-runs exactly the scans that produced the entries, so this is a
+        comparison rather than a different question. Static and zero-token.
+        Never raises: on failure the snapshot stands, which is the safe
+        direction — a stale finding costs a reader a minute, a dropped one
+        costs them the defect.
+        """
+        if not self.unrepaired_defects:
+            return self.unrepaired_defects
+
+        try:
+            planned = self._planned_modules(architecture)
+
+            ctx_managers: set[str] = set()
+            for path in written:
+                if path.endswith(".py"):
+                    try:
+                        ctx_managers.update(analyze_file(path).contextmanagers)
+                    except Exception:
+                        pass
+
+            schema_defects: dict[str, list[str]] = {}
+            try:
+                from tools.sql_schema_check import check_project_sql
+                for issue in check_project_sql(root, written).issues:
+                    schema_defects.setdefault(issue.file, []).append(str(issue))
+            except Exception:
+                pass
+            try:
+                from tools.schema_attr_check import check_project_attributes
+                for issue in check_project_attributes(root).issues:
+                    schema_defects.setdefault(issue.file, []).append(str(issue))
+            except Exception:
+                pass
+
+            still: dict[str, list[str]] = {}
+            cleared: list[str] = []
+            for path in list(self.unrepaired_defects):
+                # A file that cannot be read scans as having no defects, and
+                # clearing the finding on that basis would be this codebase's
+                # oldest mistake: silence read as a pass. Only a file that is
+                # actually there and actually scanned can clear one.
+                # OUTPUT_DIR-relative, the same convention `_scan_defects`
+                # reads with. Resolving against the CWD instead is the trap
+                # that once turned every generated file into "does not parse".
+                try:
+                    import config as _cfg
+                    present = (
+                        Path(path).is_file()
+                        or (Path(_cfg.OUTPUT_DIR) / path).is_file()
+                    )
+                except Exception:
+                    present = False
+                if not present:
+                    still[path] = self.unrepaired_defects[path]
+                    continue
+                try:
+                    defects = self._scan_defects(path, planned, ctx_managers)
+                except Exception:
+                    # Cannot re-check it, so cannot claim it is fixed.
+                    still[path] = self.unrepaired_defects[path]
+                    continue
+                defects = defects + schema_defects.get(
+                    str(path).replace("\\", "/"), []
+                )
+                if defects:
+                    still[path] = defects
+                else:
+                    cleared.append(path)
+
+            for path in cleared:
+                logger.info(
+                    f"✅ [Phase 23] {path}: the defect(s) recorded during "
+                    "generation are gone — a later pass fixed them, so this no "
+                    "longer ships as an open issue"
+                )
+
+            self.unrepaired_defects = still
+        except Exception as e:
+            logger.warning(f"⚠️  [Phase 23] could not re-scan unrepaired defects: {e}")
+
+        return self.unrepaired_defects
+
     def _verify_and_repair(
         self, intent: dict, architecture: dict, root: str, written: list[str]
     ) -> None:

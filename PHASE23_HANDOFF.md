@@ -43,19 +43,67 @@ and buried the real reason. Same verdict, useless text. `CLI_TIMEOUT` is now 90s
 and reads `CLI_SMOKE_TIMEOUT` from the environment. A slow `--help` is still a
 defect and still fails; it now fails saying why.
 
+### Closed later the same session (2026-08-31)
+
+**§4.24 — nothing executed the suite the build ships.** New
+`tools/generated_tests.py`, registered in `_verify_other_shapes` and in
+`verify_corpus.py`. It runs the project's own tests in a throwaway copy (they
+write files — row 2's suite creates a SQLite database in the working directory)
+and separates the verdicts that matter: a project with no tests is
+NOT_APPLICABLE, a suite that errors before executing reads differently from one
+that runs and disagrees, and a suite that collects zero tests is called inert.
+
+**What it found is the reason it exists: 34 of the 41 saved builds ship a test
+suite that does not pass. 1 passes, 6 ship no tests.** The failures are real and
+specific — `assert 422 == 201` (the API rejects its own test's payload),
+`KeyError: 'id'`, `NameError: name 'List' is not defined` (a missing import in
+the *source*), `AttributeError` on a None returned by `init_db()`. There were
+**zero** `ModuleNotFoundError`, which is what a wrong sandbox PYTHONPATH would
+have produced, so this is not the checker misreading the corpus. Row 4 —
+`bulk_file_renamer_912f9b22`, the first plain `done` in the project's history —
+ships a `test_cli.py` that loads `parent.parent / "cli.py"` when the file is at
+`bulk_file_renamer/cli.py`. It fails in the user's checkout exactly as it fails
+here.
+
+> **A decision this forces, deliberately left open.** The matrix criterion is
+> "every check either verified the artifact or correctly did not apply". Under
+> that rule `generated_tests` turns almost every row red, including row 2, which
+> passed everything else. The check is **not** marked fatal — a failing suite
+> does not mean the artifact cannot run, and `_functional_verdict` stays narrow
+> — but it does contribute findings, so rows will read `done_with_context`.
+> Either the criterion counts this check or it tracks it separately; that is a
+> product call, not a bug, and it should be made rather than drifted into.
+
+**§4.25 — a finding recorded once was never re-read.**
+`BackendDeveloper.rescan_unrepaired_defects` re-runs exactly the scans that
+produced `unrepaired_defects` (per-file scan + `check_project_sql` +
+`check_project_attributes`) against what is on disk now, and `_diagnose` calls
+it before assembling the issue list. Verified against the real row-2 build:
+both recorded `description` defects clear, because the debugger had fixed them
+in the file that declares the field.
+
+Two things that fix got wrong first, both caught by the suite and worth keeping
+in mind for the next re-scan-shaped change:
+
+- A file that could not be read scanned as "no defects" and **cleared a real
+  finding** — silence read as a pass, this codebase's oldest mistake. Only a
+  file that is present and actually scanned may clear one.
+- The existence check resolved against the CWD, not `OUTPUT_DIR`. That is the
+  two-path trap that once turned every generated file into "does not parse".
+
 ### Still open, found by row 2
 
-- **A finding is recorded once and never re-read.** The shipped
-  `SESSION_CONTEXT.md` lists `bookmark.description` as unrepaired, but the
-  debugger fixed it — `schema_attr` verifies 0 undeclared reads across 7 models.
-  The unresolved-issue checklist is built from findings captured at
-  backend_developer time and never reconciled against the final verification
-  record. The user is sent after work already done.
-- **Nothing executes the generated tests.** `tests/test_api.py` in the shipped
-  ZIP is dead on arrival (`conn = init_db()` returns `None`, so all 4 tests
-  error at fixture setup) while the build is legitimately `verified: yes`. None
-  of the six checks runs the test suite the build ships. This is the same shape
-  as every other defect in this phase: a signal nobody reads.
+~~A finding is recorded once and never re-read.~~ **Fixed, §4.25 above.**
+
+~~Nothing executes the generated tests.~~ **Fixed, §4.24 above** — and the fix
+found that 34 of 41 saved builds ship a suite that does not pass.
+
+**Live-unproven.** Neither fix has run inside a build. `generated_tests` has
+been run against all 41 saved builds, which is the strongest evidence available
+without quota; the re-scan has been run against the real row-2 project. What
+neither has done is run *in the pipeline*, where `_diagnose` calls the re-scan
+twice and the verifier runs on a project the build just wrote. That is the
+first thing the next live row proves.
 
 ---
 

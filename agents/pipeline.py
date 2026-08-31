@@ -457,9 +457,25 @@ class Pipeline:
         # the build shipped defects that a pass had already identified, and
         # remediation never heard about them. This IS repairable: the file is
         # right there.
+        # Re-check against disk before reporting. These were recorded during
+        # generation and the debugger runs after; row 2 shipped a checklist
+        # telling the user to fix `bookmark.description` that the debugger had
+        # already fixed, while `schema_attr` verified the same build clean.
+        # `_diagnose` runs again in the final re-audit, so this is also what
+        # keeps the shipped SESSION_CONTEXT.md honest.
+        bd = getattr(self, "backend_developer", None)
+        if bd is not None and getattr(bd, "unrepaired_defects", None):
+            try:
+                bd.rescan_unrepaired_defects(
+                    result.architecture or {},
+                    (result.architecture or {}).get("root_folder", ""),
+                    list(result.backend_files or []),
+                )
+            except Exception as e:
+                logger.warning(f"  ⚠️  unrepaired-defect re-scan skipped: {e}")
+
         unrepaired = dict(
-            getattr(getattr(self, "backend_developer", None),
-                    "unrepaired_defects", {}) or {}
+            getattr(bd, "unrepaired_defects", {}) or {}
         )
         if unrepaired:
             failed_paths.extend(p for p in unrepaired if p not in failed_paths)
@@ -874,6 +890,7 @@ class Pipeline:
             from tools.feature_coverage import check_feature_coverage
             from tools.package_smoke import smoke_test_package
             from tools.schema_attr_check import check_schema_attributes
+            from tools.generated_tests import run_generated_tests
             from tools.verification import collect_findings
         except Exception as e:
             logger.warning(f"  ⚠️  Shape verifiers unavailable: {e}")
@@ -908,6 +925,11 @@ class Pipeline:
             # request body it could not synthesise, and the nullable column a
             # silenced repair writes NULL into without ever raising.
             ("schema_attr", check_schema_attributes),
+            # The suite the build ships. Row 2 shipped one in which every test
+            # errored at fixture setup and was still recorded `verified: yes`,
+            # because no other check executes the tests — a suite that cannot
+            # collect looked exactly like one that passed.
+            ("generated_tests", run_generated_tests),
         ):
             try:
                 outcomes.append(fn(root))

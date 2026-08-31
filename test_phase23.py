@@ -239,6 +239,7 @@ check("the check sits inside the key-retry loop, not before it",
 print("\n[7] run_python validates package-relative imports")
 
 import shutil
+import tempfile
 from pathlib import Path
 import config
 from tools import code_executor
@@ -4807,6 +4808,236 @@ llm_client._mark_model_daily_limited("openai/gpt-oss-20b", "daily quota")
 check("a reason carrying no counter changes nothing",
       llm_client.get_daily_usage(_R22_NOW)["models"][
           "openai/gpt-oss-20b"]["tokens_used"] == 50000)
+
+
+# -- 4.24 The build ships a test suite; something must run it -----------------
+# Row 2 shipped tests/test_api.py in which all 4 tests errored at fixture setup
+# (`conn = init_db()` returns None) and was still recorded `verified: yes`,
+# because no check in the six-check record executes the tests. A suite that
+# cannot collect looked exactly like one that passed.
+
+from tools.verification import Status                      # noqa: E402
+from tools.generated_tests import (                       # noqa: E402
+    run_generated_tests, _find_test_files, _summarise, _counts,
+)
+
+_G24 = Path(tempfile.mkdtemp(prefix="gt24_"))
+_G24_OUT = _G24 / "out"
+_G24_OUT.mkdir(parents=True)
+
+
+def _g24_project(name, files):
+    root = _G24_OUT / name
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    return name
+
+
+def _g24_run(name):
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_G24_OUT)
+        return run_generated_tests(name)
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# A project with no tests is not a failure -- the architect decides that.
+_g24_project("no_tests", {"main.py": "print('hi')\n"})
+_o = _g24_run("no_tests")
+check("a project shipping no tests is not applicable, not failed",
+      _o.status is Status.NOT_APPLICABLE, str(_o.status))
+
+# A suite that passes.
+_g24_project("good", {
+    "calc.py": "def add(a, b):\n    return a + b\n",
+    "tests/test_calc.py": (
+        "from calc import add\n"
+        "def test_add():\n    assert add(2, 3) == 5\n"
+        "def test_add_negative():\n    assert add(-1, 1) == 0\n"
+    ),
+})
+_o = _g24_run("good")
+check("a suite that passes is verified", _o.status is Status.VERIFIED, str(_o.status))
+check("...and the record says what ran, not just that something did",
+      "2 passed" in (_o.detail or ""), _o.detail)
+
+# Row 2's exact defect: every test errors at fixture setup.
+_g24_project("dead_fixture", {
+    "db.py": "def init_db():\n    pass\n",
+    "tests/test_api.py": (
+        "import pytest\n"
+        "from db import init_db\n"
+        "@pytest.fixture(autouse=True)\n"
+        "def reset_db():\n"
+        "    conn = init_db()\n"
+        "    conn.close()\n"
+        "    yield\n"
+        "def test_one():\n    assert True\n"
+        "def test_two():\n    assert True\n"
+    ),
+})
+_o = _g24_run("dead_fixture")
+check("a suite whose every test errors at setup FAILS",
+      _o.status is Status.FAILED, str(_o.status))
+check("...and is described as not running, not as failing assertions",
+      any("error before executing" in f for f in _o.findings), str(_o.findings[:1]))
+check("...and the record carries the real reason, not just a count",
+      any("AttributeError" in f for f in _o.findings), str(_o.findings))
+check("a build with a dead suite is not evidence of working",
+      _o.is_evidence_of_working is False)
+
+# A suite that collects but disagrees with the code is a different verdict from
+# one that never ran, and must read differently.
+_g24_project("failing", {
+    "calc.py": "def add(a, b):\n    return a - b\n",
+    "tests/test_calc.py": "from calc import add\ndef test_add():\n    assert add(2, 3) == 5\n",
+})
+_o = _g24_run("failing")
+check("a suite that runs and disagrees fails", _o.status is Status.FAILED)
+check("...and says so as a failure, not as an error before executing",
+      not any("error before executing" in f for f in _o.findings), str(_o.findings[:1]))
+
+# Test files that collect nothing at all are inert, and that is worth saying.
+_g24_project("inert", {"tests/test_nothing.py": "x = 1\n"})
+_o = _g24_run("inert")
+check("test files that collect zero tests are reported as inert",
+      _o.status is Status.FAILED and
+      any("collected" in f and "0 tests" in f for f in _o.findings),
+      str(_o.findings))
+
+# A project that does not exist cannot be called clean.
+_o = _g24_run("does_not_exist_at_all")
+check("a missing project is NOT_RUN, never a pass", _o.status is Status.NOT_RUN)
+
+check("both test-file naming conventions are collected",
+      {p.name for p in _find_test_files(_G24_OUT / "good")} == {"test_calc.py"})
+
+check("the tally parser reads pytest's own wording",
+      _counts("4 failed, 13 passed, 2 errors in 1.2s") ==
+      {"failed": 4, "passed": 13, "error": 2})
+check("a collection error is summarised even with no summary block",
+      any("ImportError" in f for f in
+          _summarise("E   ImportError: cannot import name 'x'", "")))
+
+# The wiring: the pipeline must actually run it, and the corpus tool must be
+# able to, or the check is a hypothesis nobody tested.
+_g24_pipe = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("the pipeline registers generated_tests among its shape verifiers",
+      '("generated_tests", run_generated_tests)' in _g24_pipe)
+check("...and imports it", "from tools.generated_tests import" in _g24_pipe)
+check("verify_corpus runs it too, so it is testable for free",
+      '("generated_tests", run_generated_tests)' in
+      Path("tools/verify_corpus.py").read_text(encoding="utf-8"))
+
+shutil.rmtree(_G24, ignore_errors=True)
+
+
+# -- 4.25 A finding recorded once must be re-read before it ships --------------
+# Row 2 recorded `bookmark.description` as unrepairable during generation; the
+# debugger then fixed it in the file that DECLARES the field, and schema_attr
+# verified the build clean -- but the shipped SESSION_CONTEXT.md still told the
+# user to go and fix it.
+
+_R25 = Path(tempfile.mkdtemp(prefix="rescan25_"))
+_R25_OUT = _R25 / "out"
+_R25_OUT.mkdir(parents=True)
+
+
+def _r25_build(name, files):
+    root = _R25_OUT / name
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    rels = [str(p.relative_to(root)).replace("\\", "/")
+            for p in root.rglob("*.py")]
+    arch = {"root_folder": name, "files": [{"path": r} for r in rels]}
+    return arch, [name + "/" + r for r in rels], name
+
+
+_R25_CLEAN = {
+    "backend/models.py": (
+        "from pydantic import BaseModel\n"
+        "from typing import Optional\n"
+        "class BookmarkCreate(BaseModel):\n"
+        "    url: str\n    title: str\n"
+        "    description: Optional[str] = None\n"
+    ),
+    "backend/services.py": (
+        "from backend.models import BookmarkCreate\n"
+        "def create(bookmark: BookmarkCreate):\n"
+        "    return bookmark.description\n"
+    ),
+}
+
+_r25_arch, _r25_written, _r25_root = _r25_build("fixed_since", _R25_CLEAN)
+_r25_snapshot = {
+    _r25_root + "/backend/services.py": [
+        "`bookmark.description` is read at line 3, but `bookmark` is a "
+        "`BookmarkCreate`, which declares title, url.",
+    ]
+}
+
+_real_out = config.OUTPUT_DIR
+try:
+    config.OUTPUT_DIR = str(_R25_OUT)
+    _bd25 = BackendDeveloper.__new__(BackendDeveloper)
+    _bd25.unrepaired_defects = dict(_r25_snapshot)
+    _r25_after = _bd25.rescan_unrepaired_defects(
+        _r25_arch, _r25_root, _r25_written)
+finally:
+    config.OUTPUT_DIR = _real_out
+
+check("a defect fixed after it was recorded stops being reported",
+      _r25_after == {}, str(_r25_after))
+
+# The other direction matters more: a defect that is still there must survive.
+_R25_BROKEN = dict(_R25_CLEAN)
+_R25_BROKEN["backend/models.py"] = (
+    "from pydantic import BaseModel\n"
+    "class BookmarkCreate(BaseModel):\n"
+    "    url: str\n    title: str\n"
+)
+_r25_arch2, _r25_written2, _r25_root2 = _r25_build("still_broken", _R25_BROKEN)
+try:
+    config.OUTPUT_DIR = str(_R25_OUT)
+    _bd25b = BackendDeveloper.__new__(BackendDeveloper)
+    _bd25b.unrepaired_defects = {
+        _r25_root2 + "/backend/services.py": ["`bookmark.description` ..."]
+    }
+    _r25_after2 = _bd25b.rescan_unrepaired_defects(
+        _r25_arch2, _r25_root2, _r25_written2)
+finally:
+    config.OUTPUT_DIR = _real_out
+
+check("a defect that is still on disk still ships as an open issue",
+      list(_r25_after2) == [_r25_root2 + "/backend/services.py"],
+      str(_r25_after2))
+check("...and it is re-stated from disk rather than replayed from the snapshot",
+      any("description" in d for d in
+          _r25_after2[_r25_root2 + "/backend/services.py"]))
+
+# An empty snapshot must not cost a scan, and must not invent one.
+_bd25c = BackendDeveloper.__new__(BackendDeveloper)
+_bd25c.unrepaired_defects = {}
+check("nothing recorded means nothing to re-check",
+      _bd25c.rescan_unrepaired_defects({}, "", []) == {})
+
+# Failure must leave the snapshot standing: a stale finding costs a minute, a
+# dropped one costs the defect.
+_bd25d = BackendDeveloper.__new__(BackendDeveloper)
+_bd25d.unrepaired_defects = {"x/y.py": ["something"]}
+check("a re-scan that cannot run keeps the finding rather than clearing it",
+      _bd25d.rescan_unrepaired_defects(None, None, None) ==
+      {"x/y.py": ["something"]})
+
+check("the pipeline re-scans before assembling the issue list",
+      "rescan_unrepaired_defects(" in _g24_pipe)
+
+shutil.rmtree(_R25, ignore_errors=True)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
