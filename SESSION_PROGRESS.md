@@ -71,14 +71,25 @@ than shipping the churn, and the debugger repaired the defect in the file that
 turned up something larger: **34 of the 41 saved builds ship a test suite that
 does not pass.** Nothing had noticed because nothing ran them.
 
+**A correction worth carrying:** the claim that "nothing executes the generated
+tests" was wrong. `agents/tester.py` has always run them with real pytest and
+its failures always reached the checklist. The real gap was that they had no
+entry in the verification record, so `verified: yes` could sit beside a dead
+suite. The tester still runs, still repairs, and is worth keeping.
+
 **The rule that follows from it: a broken test suite is not a broken build.**
 `generated_tests` is reported everywhere and decides nothing. When another check
 has executed the artifact and found it sound, its findings are handed to the
 user as manual testing — the shipped `SESSION_CONTEXT.md` grows a "Worth
 Checking By Hand" section — and the build finishes `done` with its row passing.
-With no positive evidence that the artifact works, they still count. And the
-shipped document now describes the **final** state: the last re-audit re-runs
-the whole diagnosis instead of reusing the one taken before remediation.
+With no positive evidence that the artifact works, they still count.
+
+The same rule now covers the tester's own findings: it keeps running and keeps
+driving repair during the build, but if the suite still does not run once the
+build is verified, that goes to manual testing rather than degrading a working
+product. And the shipped document describes the **final** state: the last
+re-audit re-runs the whole diagnosis instead of reusing the one taken before
+remediation.
 
 
 **Last session: 2026-08-30, evening (Phase 23 — the zero-quota session).**

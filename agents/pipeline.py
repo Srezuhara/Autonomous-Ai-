@@ -445,6 +445,18 @@ class Pipeline:
         failed_paths: list[str] = []
         advisory:    list[str] = []
 
+        # Findings that are about the suite the build SHIPS rather than about
+        # the application it built. They are produced here, and they are still
+        # returned as ordinary issues, so the tester keeps driving repair — a
+        # failing test is often the only sign that the code under test is
+        # wrong, and that is worth the tokens.
+        #
+        # What changes is the ENDING. If, after the whole build has been
+        # verified, the suite still does not run, that is not a defect in a
+        # working application; it is something the user should check by hand.
+        # The final re-audit routes these accordingly.
+        self._test_suite_issues = []
+
         failed_debug = [
             r for r in result.debug_results
             if not getattr(r, "success", False)
@@ -527,10 +539,12 @@ class Pipeline:
         # Also advisory: no repair pass generates tests, so announcing this as
         # repairable guaranteed a pass that could do nothing about it.
         if not executable_tests and result.backend_files:
-            advisory.append(
+            _no_tests = (
                 "No executable backend tests were generated, so the code is "
                 "unverified by tests."
             )
+            advisory.append(_no_tests)
+            self._test_suite_issues.append(_no_tests)
 
         # This one IS repairable, and was the only one of the three that had a
         # file to aim at — it just never supplied it. A failing test usually
@@ -543,9 +557,11 @@ class Pipeline:
                 f"({getattr(r, 'passed', 0)}/{getattr(r, 'tests_generated', 0)})"
                 for r in failed_tests[:5]
             )
-            issues.append(
+            _test_issue = (
                 f"Generated tests fail for {len(failed_tests)} file(s): {preview}"
             )
+            issues.append(_test_issue)
+            self._test_suite_issues.append(_test_issue)
             for r in failed_tests:
                 fp = getattr(r, "file_path", "")
                 if fp and fp not in failed_paths:
@@ -985,6 +1001,11 @@ class Pipeline:
         # build. With no such evidence they stay advisory, because then they are
         # corroborating what the other checks already suspect.
         works = any(o.is_evidence_of_working for o in recorded)
+        # Read by the final re-audit, which decides whether a test-suite finding
+        # is a defect in this build or something to hand over for manual
+        # testing. Recorded rather than recomputed so both decisions are made
+        # from the same evidence.
+        self._artifact_verified_working = works
         manual: list[str] = []
         counted = []
         for outcome in outcomes:
@@ -1006,6 +1027,42 @@ class Pipeline:
     #: Checks whose failure is not a verdict on the artifact itself, provided
     #: something else executed the artifact and found it sound.
     _MANUAL_WHEN_WORKING = ("generated_tests",)
+
+    def _hand_over_test_suite_findings(
+        self, issues: list, advisory: list
+    ) -> tuple:
+        """
+        Move test-suite findings to manual testing once the build is verified.
+
+        Called only at the end, after the tester has run and repair has had
+        every pass it was going to get. Until then these are ordinary issues
+        and they drive repair, because a failing test is often the only sign
+        that the code under test is wrong.
+
+        What this decides is the ending. If the suite still does not run and
+        something has executed the application and found it sound, the two
+        facts are independent: the product works, and the tests shipped beside
+        it do not. That goes to the user as manual testing. With no evidence
+        the artifact works it stays outstanding, because then it corroborates
+        what the other checks already suspect.
+        """
+        findings = list(getattr(self, "_test_suite_issues", []) or [])
+        if not findings or not getattr(self, "_artifact_verified_working", False):
+            return issues, advisory
+
+        issues   = [i for i in issues if i not in findings]
+        advisory = [a for a in advisory if a not in findings]
+
+        already = list(getattr(self, "_manual_checks", []) or [])
+        handed_over = [f for f in findings if f not in already]
+        self._manual_checks = already + handed_over
+
+        logger.info(
+            f"  🧑‍🔬 The application was verified; {len(handed_over)} "
+            "test-suite finding(s) go to the user for manual testing rather "
+            "than counting against the build"
+        )
+        return issues, advisory
 
     def _detect_shapes(self, root: str):
         """Every shape this project contains, or None if it cannot be read."""
@@ -1564,6 +1621,10 @@ class Pipeline:
         # Advisory-only: nothing an LLM repair pass can act on. Mark the build
         # degraded so the handoff document is written, and spend zero tokens.
         if not issues:
+            # Nothing here can be repaired, so this is the end of the road for
+            # this build — which makes it the point where a test-suite finding
+            # stops being an outstanding issue and becomes a manual check.
+            _, advisory = self._hand_over_test_suite_findings([], advisory)
             report.unresolved    = advisory
             report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
             report.degraded      = bool(advisory)
@@ -1738,6 +1799,15 @@ class Pipeline:
         # the form that names the endpoints. Keeping the synthetic issue
         # string too would print the same fact twice in SESSION_CONTEXT.md.
         issues = [i for i in issues if "raise at request time" not in i]
+
+        # The tester has run, and repair has had every pass it was going to get.
+        # If the suite still does not run and the application itself has been
+        # executed and found sound, the two facts are independent: the product
+        # works, and the tests that ship beside it do not. Handing that to the
+        # user as manual testing is honest; calling the build degraded for it is
+        # not. With no evidence the artifact works, it stays an outstanding
+        # issue, because then it corroborates what the other checks suspect.
+        issues, advisory = self._hand_over_test_suite_findings(issues, advisory)
 
         report.unresolved    = list(issues) + list(advisory)
         report.manual_checks = list(getattr(self, "_manual_checks", []) or [])

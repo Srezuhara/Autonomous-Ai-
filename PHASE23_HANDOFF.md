@@ -82,6 +82,41 @@ here.
 > from "Remaining Work", which says the application was executed and verified
 > and that these are the things the automated checks could not confirm.
 
+**§4.29 — the tester keeps working; only its residue is handed over.** The
+`tester` step runs the generated suite with real pytest and a failing test is
+often the only sign that the code *under* test is wrong, so it must keep driving
+repair — `TestResult.file_path` names the file to fix, and it still reaches the
+debugger. What changed is the ending. Once the build has been verified and
+repair has had every pass it gets, a suite that still does not run is not a
+defect in a working application: `_hand_over_test_suite_findings` moves it to
+manual testing. With no evidence the artifact works it stays outstanding.
+
+Both exits from `_remediate` route, not just the one that runs repair — the
+advisory-only exit is exactly how a build whose only finding is "no executable
+backend tests were generated" reaches the user, and it was missing the routing
+at first. The finding list is rebuilt on every `_diagnose`, so a second
+diagnosis that finds nothing clears a finding the first one recorded rather than
+carrying it into the shipped document.
+
+> **A correction to what §4.24 said.** It claimed nothing executed the generated
+> tests. That was wrong: `agents/tester.py` has always run them with real
+> pytest, per file, and failures have always reached the checklist — row 2's own
+> shipped checklist said "Generated tests fail for 1 file(s): tests/test_api.py
+> (1/3)". The real gap was narrower: no entry in the **verification record**, so
+> `verified: yes` could sit beside a dead suite. What `generated_tests` adds is
+> running the suite *as a whole, from the project root, the way a user would*,
+> which is how it found 4 fixture errors where the per-file tester scored 1/3.
+
+**A cost this leaves open, deliberately.** A failing test file is still
+classified as repairable, so it spends quota: the tester makes up to 3 LLM fix
+attempts per failing file and remediation re-runs it — row 2's log shows at
+least 8 `N failing → fixing` cycles. That is the right behaviour when the test
+is failing because the *code* is wrong, and waste when the test itself is the
+broken thing. Tokens are recorded per build rather than per step, so the tester's
+share of row 2's 173K is not separable without new instrumentation. Options, in
+increasing order of work: cap the attempts at one; split the cause so only
+source-implicating failures are repaired; or leave it.
+
 **§4.27 — the shipped document described a mid-build state.** `issues` and
 `diag_advisory` came from the diagnosis that ran *before* remediation and were
 reused verbatim at the end, so the re-scan below only half-worked: the checklist

@@ -5486,6 +5486,114 @@ check("the excluded set is exactly the one the pipeline uses",
       f"{_m28.MANUAL_CHECKS} vs {Pipeline._MANUAL_WHEN_WORKING}")
 
 
+# -- 4.29 The tester keeps working; only its residue is handed over -----------
+# The tester runs the generated suite and a failing test is often the only sign
+# that the code under test is wrong, so it must keep driving repair. What
+# changes is the ENDING: once the build has been verified and repair has had
+# every pass it gets, a suite that still does not run is not a defect in a
+# working application -- it goes to the user as manual testing.
+
+
+def _t29_result(test_results):
+    r = type("R", (), {})()
+    r.architecture = {"root_folder": "proj", "files": []}
+    r.intent = {}
+    r.backend_files = ["proj/backend/main.py"]
+    r.frontend_files = []
+    r.debug_results = []
+    r.frontend_debug_results = []
+    r.test_results = test_results
+    r.verification_outcomes = []
+    return r
+
+
+def _t29_failing_test(passed=1, generated=3, path="proj/tests/test_api.py"):
+    t = type("T", (), {})()
+    t.skipped = False
+    t.tests_generated = generated
+    t.passed = passed
+    t.file_path = path
+    return t
+
+
+# During the build: unchanged. This is the half that must not regress.
+_t29_pl = Pipeline.__new__(Pipeline)
+_t29_issues, _t29_paths, _t29_adv = _t29_pl._diagnose(
+    _t29_result([_t29_failing_test()]))
+
+check("a failing test suite is still an issue while the build is running",
+      any("Generated tests fail" in i for i in _t29_issues), str(_t29_issues))
+check("...and still hands the debugger the file to repair",
+      "proj/tests/test_api.py" in _t29_paths, str(_t29_paths))
+check("...so the tester keeps catching defects in the code under test",
+      len(_t29_paths) >= 1)
+
+# At the end, with the application verified: handed over, build not degraded.
+_t29_pl._artifact_verified_working = True
+_t29_pl._manual_checks = []
+_t29_ei, _t29_ea = _t29_pl._hand_over_test_suite_findings(
+    list(_t29_issues), list(_t29_adv))
+check("once the application is verified, the residue stops being an issue",
+      not any("Generated tests fail" in i for i in _t29_ei), str(_t29_ei))
+check("...and is handed to the user for manual testing",
+      any("Generated tests fail" in m for m in _t29_pl._manual_checks),
+      str(_t29_pl._manual_checks))
+check("...leaving nothing to degrade the build",
+      (_t29_ei + _t29_ea) == [], str(_t29_ei + _t29_ea))
+
+# Without evidence the application works, it must still count.
+_t29_pl2 = Pipeline.__new__(Pipeline)
+_t29_i2, _t29_p2, _t29_a2 = _t29_pl2._diagnose(
+    _t29_result([_t29_failing_test()]))
+_t29_pl2._artifact_verified_working = False
+_t29_pl2._manual_checks = []
+_t29_ei2, _t29_ea2 = _t29_pl2._hand_over_test_suite_findings(
+    list(_t29_i2), list(_t29_a2))
+check("with nothing showing the application works, the finding still counts",
+      any("Generated tests fail" in i for i in _t29_ei2), str(_t29_ei2))
+check("...and is not quietly moved to manual testing",
+      _t29_pl2._manual_checks == [], str(_t29_pl2._manual_checks))
+
+# A build that generated no tests at all, but works, is the same shape.
+_t29_pl3 = Pipeline.__new__(Pipeline)
+_t29_i3, _t29_p3, _t29_a3 = _t29_pl3._diagnose(_t29_result([]))
+check("a build with no executable tests says so",
+      any("No executable backend tests" in a for a in _t29_a3), str(_t29_a3))
+_t29_pl3._artifact_verified_working = True
+_t29_pl3._manual_checks = []
+_t29_ei3, _t29_ea3 = _t29_pl3._hand_over_test_suite_findings(
+    list(_t29_i3), list(_t29_a3))
+check("...and once verified, that too is a manual check rather than a defect",
+      _t29_ea3 == [] and len(_t29_pl3._manual_checks) == 1,
+      f"advisory={_t29_ea3} manual={_t29_pl3._manual_checks}")
+
+# Passing tests must produce nothing to hand over.
+_t29_pl4 = Pipeline.__new__(Pipeline)
+_t29_i4, _t29_p4, _t29_a4 = _t29_pl4._diagnose(
+    _t29_result([_t29_failing_test(passed=3, generated=3)]))
+check("a suite that passes leaves nothing to hand over",
+      getattr(_t29_pl4, "_test_suite_issues", []) == [],
+      str(getattr(_t29_pl4, "_test_suite_issues", [])))
+
+# The per-diagnosis reset matters: _diagnose runs twice per build, and a stale
+# list would hand over a finding the second run no longer produces.
+_t29_pl5 = Pipeline.__new__(Pipeline)
+_t29_pl5._diagnose(_t29_result([_t29_failing_test()]))
+check("the first diagnosis records a test-suite finding",
+      len(_t29_pl5._test_suite_issues) == 1)
+_t29_pl5._diagnose(_t29_result([_t29_failing_test(passed=3, generated=3)]))
+check("...and a later diagnosis that finds none clears it, rather than "
+      "carrying the old one into the shipped document",
+      _t29_pl5._test_suite_issues == [],
+      str(_t29_pl5._test_suite_issues))
+
+# Both exits from remediation must route, not just the one that runs repair.
+_t29_src = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("the advisory-only exit hands over too",
+      _t29_src.count("_hand_over_test_suite_findings(") >= 3,
+      f"{_t29_src.count('_hand_over_test_suite_findings(')} call sites")
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
