@@ -1,6 +1,132 @@
 # Session Progress — start here
 
-**Last session: 2026-08-31 (Phase 23 — the eighth session). Zero tokens spent.**
+**Last session: 2026-08-31 (Phase 23 — the ninth session). Zero tokens spent.**
+`test_phase23.py` is **820/820**, up from 765. **Part A of
+[`PHASE23_NEXT_SESSION_PLAN.md`](PHASE23_NEXT_SESSION_PLAN.md) is complete** —
+every no-quota item is closed. What remains for Phase 23 needs a live row, and
+quota was ~22 h out when the plan was written.
+
+> **Next session: Part B.** Pre-flight, then `run_live_matrix.py --rows 3`. The
+> six assertions to make when it finishes are in §B2 of the plan.
+
+## §0.0 The five defects closed, in the order they were found
+
+**§4.39 — the record said `failed` after the pipeline concluded `verified`.**
+`_verify_other_shapes` assigned `result.verification_outcomes` *before* the
+manual-routing loop, so a check whose every finding had been handed to the user
+as manual testing was still recorded `failed`. Nothing inside the pipeline
+noticed: the routing was correct, the build was not degraded, the findings
+reached the user. The damage was one layer out — that record is what
+`GET /jobs/{id}/status` serves and what `run_live_matrix.verification_verdict`
+judges a row on, and the driver's `MANUAL_CHECKS` does not name `module_ref`.
+
+**A build that works, shipping one test file with a bad import, failed its row.**
+§4.26's decision undone by the driver rather than by the pipeline. Reproduced
+before fixing, then fixed by writing the record after routing. Only a *partly*
+routed check is rewritten; `generated_tests` deliberately stays `failed`,
+because the driver excludes it by name and prints "for manual testing:
+generated_tests", which is the shape a passing row with a broken suite takes.
+
+This is the one that mattered: it was introduced by the eighth session and it
+would have failed row 3 on a correct build.
+
+**§4.40 — `feature_coverage` was matching on the wrong word.** It reported 5/5
+corpus projects verified and **four of those five passes were on a word that had
+nothing to do with the evidence**: "tag filtering" passed on "tag" while the
+handler is `filter_bookmarks`; "a frontend that lists bookmarks" passed on
+"bookmark" while the evidence is a `frontend/` directory; "adds a bookmark
+through a form" passed on "bookmark" while the form is written by `app.js`.
+Right by accident, four times out of five, and no verdict-level test could see
+it because the verdict was correct.
+
+Three vocabulary gaps closed: `-ing` stripping (guarded so `string` cannot
+become `str`), directory names (only for directories containing a file, since
+the architect scaffolds empty ones), and structural HTML elements read before
+the markup is discarded — and read out of `.js` too, because a plain-JS frontend
+ships a page that is one empty div and writes its form at runtime.
+
+**The threshold tightening still does not ship.** Re-measured after the fixes it
+flips 5 features down to 2, but both survivors are still wrong, and they are on
+`bulk_file_renamer_912f9b22` — the first plain `done` in this project's history.
+**Synonyms are now the single remaining blocker** (`reverse` vs `undo_log`),
+which is a sharper answer than the one this started with.
+
+**§4.41 — `repair_guard`'s floor measured, its ratio made self-answering.**
+`_SMALL_FILE_CHARS = 120` now has evidence: of 551 generated `.py` files it
+exempts 109, and those are 91 `__init__.py`, 16 ungenerated stubs and exactly
+**two** real files. It exempts files containing nothing worth deleting, which is
+what its docstring claimed. The number does not move.
+
+The 0.6 ratio could not be validated the same way and was **not** moved on
+another guess: a repair's before/after pair exists nowhere in this checkout —
+`generated_projects/` is untracked, there are no `.orig` files, and the `files`
+table stores paths, not content. It is instrumented instead. `RATIO_LOG` records
+every decision in both directions, so the next live build produces the
+distribution this one cannot.
+
+**§4.42 — the commonest reason a build missed `done` was a file that was
+complete.** The gate is `degraded = bool(report.unresolved)`. Its four
+file-based conditions, measured across 42 projects:
+
+| condition | projects | findings |
+|---|---|---|
+| **placeholders** | **23** | **23** |
+| python_imports | 5 | 5 |
+| js_imports | 1 | 1 |
+| stub_functions | 2 | 2 |
+
+`_audit_placeholders` fires more than the other three together. Asked the
+audit's question — product or scaffolding? — the answer was neither: **14 of the
+42 files it reported were fully written.** Every one a `requirements.txt` holding
+real packages that `requirements_builder` had appended while leaving the scaffold
+comment on line 1. Those 14 spanned 14 projects, most with no other placeholder
+finding, so a finished file was the entire reason they could not reach `done`.
+
+`_has_substance` asks the direct question instead. 23 projects reporting drops
+to 10, and all 10 survivors were read back: genuine two-line stubs.
+
+Also settled, needing no change: **"100% of generated tests passing" is no longer
+a `done` condition in practice.** Both test conditions feed `_test_suite_issues`,
+and `_hand_over_test_suite_findings` removes them once something has executed the
+artifact. §4.26 already routes them correctly.
+
+**§4.43 — the template literals `web_asset_check` was skipping.** The skip is
+documented precision-over-recall, so the question asked was whether it hid
+anything. 42 fetch/axios call sites, 34 recognised, 8 skipped, all 8 the same
+shape — and **one of the eight is a real defect**:
+`task_manager/src/components/Board.js` calls `/boards/${board.id}/tasks` against
+a backend serving only `/tasks/`. Now checked by collapsing each `${...}` to one
+path segment and reusing `_route_matches`, which already treats a declared
+`{item_id}` as a wildcard. The corpus diff is exactly that one finding.
+
+## §0.1 How much of this is evidence
+
+Every change was measured against all 41-42 saved builds before being wired in,
+and every corpus diff was explained in both directions:
+
+- §4.39: no verdict moved. The 148-line diff was 74 findings out and the same 74
+  back in — a wording fix — with identical (project, symbol) sets.
+- §4.40: no verdict moved, **and that is the expected result** — every corpus
+  feature was already passing, just for the wrong reason. The change is
+  verifiable by the flip count (5 → 2) and by word-level assertions, not by a
+  verdict.
+- §4.42: 23 projects → 10, survivors read back by hand.
+- §4.43: exactly one new finding across 41 builds, and it is real.
+
+**What none of it proves.** Nothing here has run inside a live build. That has
+now been true for four sessions, and row 3 remains the standing proof that it
+matters: both of its blockers were invisible to all 41 saved builds, and one
+fresh build found both. §4.39 is the sharpest example yet — it was found by
+*planning* against the live-run path, not by any test or corpus sweep, and it
+had been green in 765 tests.
+
+
+
+---
+
+## §0.2 The eighth session (2026-08-31)
+
+**Zero tokens.**
 `test_phase23.py` is **765/765**, up from 735. Row 3's actual blocker is closed,
 and two changes that looked obviously worth making were **measured and not
 shipped**, which is the more useful half of the session.

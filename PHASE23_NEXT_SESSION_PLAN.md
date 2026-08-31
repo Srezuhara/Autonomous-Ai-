@@ -6,6 +6,26 @@ what to spend the refill on. `SESSION_PROGRESS.md` §0 is the state it was
 written against; `PHASE23_QUOTA_RUNBOOK.md` is the standing procedure, and §B1
 here deliberately overrides its §3 row order.*
 
+> ## ✅ Part A is COMPLETE (2026-08-31, ninth session, zero tokens)
+>
+> All five no-quota items are closed and committed; `test_phase23.py` is
+> **820/820** and the corpus baseline is clean and re-recorded. What each one
+> turned out to be is recorded in `SESSION_PROGRESS.md` §0.0.
+>
+> | item | outcome |
+> |---|---|
+> | **A1** record written before routing | fixed (§4.39) — reproduced first; it would have failed row 3 on a correct build |
+> | **A2** `feature_coverage` vocabulary | fixed (§4.40); **the tightening still does not ship** — synonyms are now the sole blocker |
+> | **A3** `repair_guard` thresholds | floor measured and kept; ratio instrumented rather than guessed at (§4.41) |
+> | **A4** the `done` gate | audited, and it found a real defect (§4.42): 14 of 42 placeholder findings were on complete files |
+> | **A5** `web_asset_check` recall | closed (§4.43) — the skip was hiding exactly one real defect |
+>
+> **Start at Part B.** Re-run the quota arithmetic in Part 0 first; the ~22 h
+> figure was measured on 2026-08-31 and the ledger is optimistic between 429s.
+> Part 0's three "verify before trusting" facts are now: 820/820, baseline
+> clean, HEAD `826507b` or later.
+
+
 ## Context
 
 Phase 23 exists to make the pipeline's verdict about its own builds trustworthy.
