@@ -73,6 +73,26 @@ _WEAK = {
 
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
+# HTML elements that answer "what did you build", as opposed to how it is laid
+# out. A page containing a `<form>` is evidence for a feature that asked for a
+# form; a `<div>` is evidence of nothing.
+_MEANINGFUL_TAGS = {
+    "form", "input", "button", "table", "select", "textarea", "nav", "search",
+    "label", "video", "audio", "canvas", "dialog", "progress", "meter",
+    "fieldset", "iframe", "details", "summary",
+}
+
+# Directories that are never something the user asked for. `tests` is in here
+# deliberately: a test directory is scaffolding, and letting it answer a feature
+# request would let a project "implement" a feature by testing for it.
+_VOCAB_SKIP_DIRS = {
+    "__pycache__", "node_modules", ".git", "venv", ".venv", "env",
+    "dist", "build", ".pytest_cache", ".mypy_cache", "migrations",
+    "alembic", "versions", ".idea", ".vscode", "htmlcov", "tests", "test",
+}
+
+_TAG_RE = re.compile(r"<\s*([a-zA-Z][a-zA-Z0-9-]*)")
+
 
 def _normalise(word: str) -> str:
     """
@@ -84,6 +104,18 @@ def _normalise(word: str) -> str:
     match hides a missing feature, which is the thing we are looking for.
     """
     w = word.lower()
+    # "-ing" first: `filtering` has to reach `filter`, or a request for "tag
+    # filtering" cannot match a `filter_bookmarks` handler. Measured on the
+    # corpus, that miss was real — the feature passed anyway, on the word "tag",
+    # which is the check being right by accident.
+    #
+    # The >= 5 guard is the whole safety margin. `string` -> `str` would be a
+    # false match against a very common fragment, and a false match hides a
+    # missing feature, which is the thing this is looking for. Requiring five
+    # characters left over keeps `filtering`, `reporting`, `notifying` and
+    # rejects `string`, `thing`, `rating`.
+    if w.endswith("ing") and len(w) - 3 >= 5:
+        return w[:-3]
     if len(w) > 4 and w.endswith("ies"):
         return w[:-3] + "y"
     if len(w) > 3 and w.endswith("ses"):
@@ -136,7 +168,30 @@ def _artifact_vocabulary(project_dir: Path) -> tuple[set[str], dict]:
     let a project "implement" a feature by describing it.
     """
     vocab: set[str] = set()
-    evidence = {"routes": [], "functions": 0, "classes": 0, "html_pages": 0}
+    evidence = {"routes": [], "functions": 0, "classes": 0, "html_pages": 0,
+                "dirs": 0}
+
+    # Directory names are structure the user asked for and can see. "a frontend
+    # that lists bookmarks" is answered by a `frontend/` directory, and nothing
+    # here collected one, so that feature passed on the word "bookmark" instead
+    # — the check being right by accident, which is what this pass removes.
+    for path in project_dir.rglob("*"):
+        if not path.is_dir():
+            continue
+        if any(part in _VOCAB_SKIP_DIRS for part in path.parts):
+            continue
+        # An empty directory is not a feature. Without this, a build could
+        # satisfy "a frontend that lists bookmarks" by creating `frontend/` and
+        # putting nothing in it — the architect scaffolds directories before the
+        # generators fill them, so this is a shape that really occurs.
+        try:
+            if not any(child.is_file() for child in path.iterdir()):
+                continue
+        except Exception:
+            continue
+        evidence["dirs"] += 1
+        for part in _split_identifier(path.name):
+            vocab.add(_normalise(part))
 
     route_re = re.compile(
         r"""@\w+\.(?:get|post|put|patch|delete|route)\s*\(\s*['"]([^'"]+)['"]""",
@@ -191,9 +246,45 @@ def _artifact_vocabulary(project_dir: Path) -> tuple[set[str], dict]:
         except Exception:
             continue
         visible = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+        # The element names themselves, read before the markup is discarded.
+        # A request for "adds a bookmark through a form" is answered by the page
+        # having a form, and stripping all markup made that unanswerable — the
+        # feature passed on "bookmark". `visible` still carries the markup at
+        # this point; only script and style bodies have been removed, which is
+        # exactly the text to read tags from.
+        for tag in _TAG_RE.findall(visible):
+            low = tag.lower()
+            if low in _MEANINGFUL_TAGS:
+                vocab.add(_normalise(low))
+
         visible = re.sub(r"(?s)<[^>]+>", " ", visible)
         for word in _WORD_RE.findall(visible):
             vocab.add(_normalise(word))
+
+    # Markup emitted from JavaScript. A plain-JS frontend — the shape row 2 is —
+    # ships a page that is one empty `<div>` and builds everything else at
+    # runtime, so scanning only `.html` sees no form, no table and no button on
+    # a page that has all three. `_live_verify_row2_final` is exactly that: its
+    # `index.html` declares a single div and `app.js` writes `<form>`, `<input>`
+    # and `<button>` into it, so "adds a bookmark through a form" could only ever
+    # match on the word "bookmark".
+    #
+    # Only tag names are taken from JavaScript, never free words: identifiers and
+    # string literals in a script are not user-visible names, and counting them
+    # would let any project match almost any feature.
+    for path in project_dir.rglob("*.js"):
+        if any(part in _VOCAB_SKIP_DIRS for part in path.parts):
+            continue
+        if path.name.endswith(".min.js"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        for tag in _TAG_RE.findall(text):
+            low = tag.lower()
+            if low in _MEANINGFUL_TAGS:
+                vocab.add(_normalise(low))
 
     vocab.discard("")
     return vocab, evidence

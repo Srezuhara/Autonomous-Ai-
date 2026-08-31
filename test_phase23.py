@@ -6579,6 +6579,115 @@ check("...and it is assigned after the routing loop, not before",
 shutil.rmtree(_M50, ignore_errors=True)
 
 
+
+# ---- 52. feature_coverage matched on the wrong word -------------------------
+# §4.40. The check reported 5/5 corpus projects verified and FOUR of those five
+# passes were on a word that had nothing to do with the evidence: "tag
+# filtering" passed on "tag" while the handler is `filter_bookmarks`; "a
+# frontend that lists bookmarks" passed on "bookmark" while the evidence is a
+# `frontend/` directory; "adds a bookmark through a form" passed on "bookmark"
+# while the form is written by `app.js`. Right by accident.
+#
+# These assert the matching WORD, not the verdict. A verdict-level test passes
+# on the same accident the check was making, which is why the defect survived
+# two sessions of green tests.
+from tools.feature_coverage import (                                   # noqa: E402
+    _artifact_vocabulary as _vocab52,
+    _content_words as _words52,
+    _normalise as _norm52,
+    _WEAK as _WEAK52,
+)
+
+_F52 = Path(tempfile.mkdtemp(prefix="feat52_"))
+
+
+def _mk52(files: dict) -> Path:
+    root = _F52 / f"p{len(list(_F52.iterdir()))}"
+    for rel, text in files.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return root
+
+
+def _matched52(root: Path, feature: str) -> set:
+    vocab, _ = _vocab52(root)
+    strong = {w for w in _words52(feature) if w not in _WEAK52}
+    return strong & vocab
+
+
+# `-ing`, with the guard that keeps it from eating short words.
+check("`filtering` normalises to `filter`", _norm52("filtering") == "filter")
+check("...and `reporting` to `report`",     _norm52("reporting") == "report")
+check("`string` is left alone — the guard",  _norm52("string") == "string")
+check("...and so is `thing`",                _norm52("thing") == "thing")
+check("...and `rating`, which is not a verb here",
+      _norm52("rating") == "rating")
+
+_p52a = _mk52({"backend/routes.py":
+               "@router.get('/bookmarks/tag/{tag}')\n"
+               "def filter_bookmarks(tag: str):\n    return []\n"})
+check("\"tag filtering\" matches on `filter`, the handler that implements it",
+      "filter" in _matched52(_p52a, "tag filtering"),
+      str(_matched52(_p52a, "tag filtering")))
+
+# A directory is structure the user asked for and can see.
+_p52b = _mk52({"backend/main.py": "app = 1\n",
+               "frontend/app.js": "console.log('hi')\n"})
+check("\"a frontend that...\" matches on `frontend`, the directory",
+      "frontend" in _matched52(_p52b, "a frontend that lists bookmarks"),
+      str(_matched52(_p52b, "a frontend that lists bookmarks")))
+
+# ...but only when something is in it. The architect scaffolds directories
+# before the generators fill them, so an empty one really does occur.
+_p52c = _mk52({"backend/main.py": "app = 1\n"})
+(_p52c / "frontend").mkdir(parents=True, exist_ok=True)
+check("an EMPTY directory does not satisfy a feature",
+      "frontend" not in _matched52(_p52c, "a frontend that lists bookmarks"),
+      str(_matched52(_p52c, "a frontend that lists bookmarks")))
+
+# Structural elements, in the page and in the script that writes the page.
+_p52d = _mk52({"frontend/index.html":
+               "<html><body><form><input name='u'></form></body></html>\n"})
+check("a `<form>` in the page answers a feature that asked for a form",
+      "form" in _matched52(_p52d, "adds a bookmark through a form"))
+
+_p52e = _mk52({"frontend/index.html": "<html><body><div id='root'></div></body></html>\n",
+               "frontend/app.js":
+               "root.innerHTML = '<form><input id=\"u\"><button>Add</button></form>';\n"})
+check("a form written by JavaScript answers it too",
+      "form" in _matched52(_p52e, "adds a bookmark through a form"),
+      str(_matched52(_p52e, "adds a bookmark through a form")))
+check("...which is the plain-JS shape row 2 ships",
+      "button" in _matched52(_p52e, "a button that adds it"))
+
+# Precision: only tag NAMES come out of JavaScript, never free words. Counting
+# identifiers in a script would let any project match almost any feature.
+_p52f = _mk52({"frontend/index.html": "<html><body><div></div></body></html>\n",
+               "frontend/app.js":
+               "const notification = 'email'; function sendEmail(){}\n"})
+check("free words in a script are not vocabulary",
+      _matched52(_p52f, "email notifications when stock runs low") == set(),
+      str(_matched52(_p52f, "email notifications when stock runs low")))
+
+# `div` is layout, not an answer to anything.
+_p52g = _mk52({"frontend/index.html": "<html><body><div></div><span></span></body></html>\n"})
+check("layout elements are not evidence of a feature",
+      _matched52(_p52g, "a div based layout") == set(),
+      str(_matched52(_p52g, "a div based layout")))
+
+# A test directory must never answer a feature request — a project would then
+# "implement" a feature by testing for it.
+_p52h = _mk52({"backend/main.py": "app = 1\n",
+               "tests/test_notifications.py": "def test_x(): pass\n"})
+check("a tests/ directory is not evidence of a feature",
+      "notification" not in _matched52(_p52h, "notification support")
+      and "test" not in _matched52(_p52h, "test coverage reporting"),
+      str(_matched52(_p52h, "notification support")))
+
+shutil.rmtree(_F52, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
