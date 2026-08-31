@@ -10,6 +10,40 @@ which one to start, and what to assert when it finishes.
 
 ---
 
+## 0.-1 Read this before trusting any number below (2026-08-31)
+
+**The ledger under-reports. It has now been made self-correcting, but only
+forward.** `_add_tokens` is reached only after `raise_for_status()`, so the
+ledger records a call only when it returned 2xx with a usage body. Every 400,
+every 429-rejected attempt and every attempt retried after a per-minute wait
+spends real budget and leaves no trace.
+
+Measured on row 2, this session: the ledger said **145,967** used on
+`gpt-oss-20b` at the moment Groq's own 429 said **`used 197323`**. A ~51,000
+token shortfall — a quarter of the daily limit, entirely in the optimistic
+direction. The row cleared the 90,000 fast floor showing "151,303 left" and ran
+the model dry mid-tester anyway. **The floors added on 2026-08-30 were
+denominated in a unit that could not do the job they were added for.**
+
+Fixed: `_mark_model_daily_limited` now parses `limit N, used M` out of the 429
+and calls `reconcile_ledger_from_groq`, which anchors the bucket to Groq's own
+figure. It reconciles **upward only** — an over-count costs a wait, an
+under-count costs a dead build. The 429 is the single exact reading of Groq's
+counter this code ever receives; it used to be spent on a log line.
+
+Two consequences for the next session:
+
+- **The estimate is still optimistic between 429s.** Reconciliation happens when
+  a model hits the wall, not before. Treat `--dry-run` as a lower bound on spend
+  and an upper bound on budget, and prefer starting a row with margin over the
+  floor rather than just above it.
+- Even a full rebuild from the database's own build rows
+  (`seed_ledger_from_history`) came out **21,923 tokens short** of Groq's figure,
+  so the gap is not a bookkeeping slip in one path — non-2xx spend is invisible
+  everywhere.
+
+---
+
 ## 0. The one thing to get right
 
 **Check the FAST model, not the best one.** `gpt-oss-20b` carries the tester,

@@ -1,5 +1,59 @@
 # Session Progress — start here
 
+**Last session: 2026-08-31 (Phase 23 — the seventh session, row 2 live).**
+`test_phase23.py` is **559/559**, up from 541. Row 2 was rebuilt and **passes
+the matrix criterion**; the session's most important result is not the row but
+what the row exposed about the quota ledger.
+
+**The one-line version.** The token ledger only ever recorded calls that came
+back 2xx, so it under-reported `gpt-oss-20b` spend by ~51,000 tokens — a
+quarter of the daily limit — and the two start floors added the session before
+were therefore denominated in a unit that could not do their job. Row 2 cleared
+the 90,000 floor at "151,303 left" and ran the fast model dry mid-tester. The
+429 that stops a build states Groq's own counter exactly; it is now fed back
+into the ledger instead of into a log line. **Details and the two consequences
+for planning: `PHASE23_QUOTA_RUNBOOK.md` §0.-1.**
+
+### Row 2 — the result the runbook asked for
+
+`bookmark_manager_e045ca2d`, `done_with_context` in 1752.5s, 173,307 tokens
+(20b 100,673 / 120b 72,634). Driver verdict: **verified: yes**. ZIP 23,911
+bytes, `PK` magic. Shape detected as `web_api+static_frontend`.
+
+| Check | Verdict |
+|---|---|
+| `runtime_smoke` | verified — 7/7 routes, no 5xx |
+| `web_assets` | **verified** — 1 page parsed, 3 frontend calls matched to 3 declared routes |
+| `feature_coverage` | verified — 4/4 features |
+| `schema_attr` | verified — 7 models, 0 undeclared reads |
+| `cli_smoke`, `package_smoke` | correctly not_applicable |
+
+Zero NOT_RUN. Phantom-defect count (`grep -c "does not parse"`) **0**. This is
+the first time `web_assets` has run on a fresh build of the shape it was
+written for, and **the React-vs-plain-JS prompt fix holds**: the generated
+`app.js` has no bare specifier, no React and no axios, and `index.html` loads
+it as a classic script.
+
+Three of the sixth session's changes fired inside a live build for the first
+time: `schema_attr_check` caught a real `AttributeError`-on-every-POST at
+generation time, `repair_guard` rolled back a rewrite that fixed nothing rather
+than shipping the churn, and the debugger repaired the defect in the file that
+*declares* the field rather than the one that reads it.
+
+### Two defects row 2 exposed, both still open
+
+1. **A finding is recorded once and never re-read.** The shipped
+   `SESSION_CONTEXT.md` tells the user to fix `bookmark.description` — a defect
+   the debugger had already fixed by the end of the run, as `schema_attr`
+   (verified, 0 undeclared reads) confirms. The build ships a checklist sending
+   its reader after work that is already done.
+2. **Nothing runs the generated tests.** The shipped `tests/test_api.py` is
+   entirely dead — `reset_db()` does `conn = init_db(); conn.close()` and
+   `init_db()` returns `None`, so all 4 tests error at fixture setup. The build
+   is legitimately `verified: yes` at the same time, because no check in the
+   six-check record executes the generated test suite.
+
+
 **Last session: 2026-08-30, evening (Phase 23 — the zero-quota session).**
 Committed on `main`, `76b331d`..`e47a79a`. `test_phase23.py` is **541/541**, up
 from 491. Nothing in it spent a token; the plan for the next refill is

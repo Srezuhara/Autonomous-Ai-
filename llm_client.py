@@ -821,6 +821,73 @@ def _bucket_level(entries: list, now: float) -> float:
     return max(0.0, level - _REFILL_RATE * (now - prev))
 
 
+# ── Reconciling the estimate against Groq's own counter (Phase 23) ────────────
+#
+# Everything above this line is an *estimate*. `_add_tokens` is only ever
+# reached after `resp.raise_for_status()`, so the ledger records a call only
+# when it came back 2xx with a usage body. Every request Groq counted that did
+# not — a 400, a 429-rejected attempt, an attempt retried after a per-minute
+# wait — spends real budget and leaves no trace here.
+#
+# Measured on row 2, 2026-08-31: the ledger reported 145,967 used on
+# `gpt-oss-20b` at the moment Groq's own 429 said `used 197323`. A ~51,000
+# token shortfall, a quarter of the daily limit, all in the optimistic
+# direction — so the two start floors in `run_live_matrix.py` cleared a row
+# ("151,303 left") that then ran the model dry mid-tester.
+#
+# The 429 is the one exact reading of Groq's counter this code ever gets. It
+# was previously spent on a log line. Now it re-anchors the ledger.
+_TPD_USAGE_RE = re.compile(
+    r"tokens\s+per\s+day\s*\(tpd\)\s*:\s*limit\s+(\d+)\s*,\s*used\s+(\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_tpd_usage(reason: str) -> Optional[tuple[int, int]]:
+    """`(limit, used)` from a Groq tokens-per-day 429, or None if absent."""
+    if not reason:
+        return None
+    m = _TPD_USAGE_RE.search(reason)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def reconcile_ledger_from_groq(
+    model: str, used: int, now: Optional[float] = None
+) -> int:
+    """
+    Anchor this model's ledger to a figure Groq stated itself.
+
+    Adds the shortfall as a single `reconciled` entry timestamped now, so the
+    next `_bucket_level` returns exactly `used` and then drains normally from
+    there.
+
+    Reconciles **upwards only**. If the ledger already claims more spend than
+    Groq reports, that is the pessimistic direction and the codebase's standing
+    rule is to never move this number towards more budget than there is: a
+    stale over-count costs a wait, an under-count costs a dead build.
+    """
+    if not model or used < 0:
+        return 0
+    now = now if now is not None else time.time()
+    with _ledger_lock:
+        _ledger_prune(now)
+        entries = [(e[0], e[2]) for e in _ledger if e[1] == model]
+        level = _bucket_level(entries, now)
+        delta = int(round(used - level))
+        if delta <= 0:
+            return 0
+        _ledger.append([now, model, delta, "reconciled"])
+        _ledger_save()
+    logger.warning(
+        f"📐 Ledger reconciled for [{model}]: estimate was "
+        f"{int(round(level)):,}, Groq reports {used:,} — added {delta:,} "
+        "token(s) the ledger never saw (non-2xx calls are invisible to it)."
+    )
+    return delta
+
+
 def seconds_until_tokens(need: int, remaining: int) -> int:
     """
     How long until `need` tokens are available, given `remaining` now.
@@ -1126,6 +1193,14 @@ def _mark_groq_exhausted(key: str, model: str, reason: str = "daily quota"):
 
 
 def _mark_model_daily_limited(model: str, reason: str = "daily quota"):
+    # The 429 that brought us here usually states Groq's own counter outright.
+    # Reconcile before flagging: this is the only ground truth the ledger gets,
+    # and without it the estimate stays optimistic for the rest of the day.
+    parsed = parse_tpd_usage(reason)
+    if parsed:
+        _limit, used = parsed
+        reconcile_ledger_from_groq(model, used)
+
     with _exhausted_lock:
         _exhausted_by_model[model] = set(range(len(_groq_keys)))
     with _model_state_lock:

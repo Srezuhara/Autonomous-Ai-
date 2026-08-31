@@ -807,6 +807,46 @@
     },
     "shape": "package"
   },
+  "bookmark_manager_e045ca2d": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "7/7 routes responded without a server error",
+        "findings": [],
+        "status": "verified"
+      },
+      "schema_attr": {
+        "detail": "7 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "13 python file(s) scanned",
+        "findings": [],
+        "status": "verified"
+      },
+      "web_assets": {
+        "detail": "parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s)",
+        "findings": [],
+        "status": "verified"
+      }
+    },
+    "shape": "web_api+static_frontend"
+  },
   "bulk_file_renamer_912f9b22": {
     "checks": {
       "cli_smoke": {

@@ -15,6 +15,50 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ---
 
+## 0.-2 The seventh session (2026-08-31) — row 2, and the ledger
+
+Row 2 ran and **passed** (`bookmark_manager_e045ca2d`, `done_with_context`,
+verified: yes, 173,307 tokens). Full record in `SESSION_PROGRESS.md` §0.
+
+**§4.22 — the ledger only counted successful calls.** `_add_tokens` sits after
+`raise_for_status()` at both call sites, so a 400, a 429-rejected attempt or an
+attempt retried after a per-minute wait spends real budget and records nothing.
+Measured: the ledger said 145,967 used on `gpt-oss-20b` when Groq's 429 said
+`used 197323`. ~51,000 tokens, a quarter of the daily limit, all optimistic.
+`_mark_model_daily_limited` now parses `limit N, used M` from the 429 and calls
+`reconcile_ledger_from_groq(model, used)`, which anchors the leaky bucket to
+that figure and then drains normally. **Upward only** — an over-count costs a
+wait, an under-count costs a dead build. 18 new tests.
+
+Note the scope: this corrects the estimate *when a model hits the wall*, not
+continuously. Between 429s the number is still optimistic. Even rebuilding from
+the database's own build rows came out 21,923 short, so the gap is structural,
+not a slip in one path.
+
+**§4.23 — `cli_smoke`'s 30s budget masked its own diagnosis.**
+`ai_report_generator_c60361c0` really fails with
+`ImportError: cannot import name 'run_streamlit_ui'`, but its module-level
+`import streamlit` costs ~36s cold, so the check reported "timed out after 30s"
+and buried the real reason. Same verdict, useless text. `CLI_TIMEOUT` is now 90s
+and reads `CLI_SMOKE_TIMEOUT` from the environment. A slow `--help` is still a
+defect and still fails; it now fails saying why.
+
+### Still open, found by row 2
+
+- **A finding is recorded once and never re-read.** The shipped
+  `SESSION_CONTEXT.md` lists `bookmark.description` as unrepaired, but the
+  debugger fixed it — `schema_attr` verifies 0 undeclared reads across 7 models.
+  The unresolved-issue checklist is built from findings captured at
+  backend_developer time and never reconciled against the final verification
+  record. The user is sent after work already done.
+- **Nothing executes the generated tests.** `tests/test_api.py` in the shipped
+  ZIP is dead on arrival (`conn = init_db()` returns `None`, so all 4 tests
+  error at fixture setup) while the build is legitimately `verified: yes`. None
+  of the six checks runs the test suite the build ships. This is the same shape
+  as every other defect in this phase: a signal nobody reads.
+
+---
+
 ## 0.-1 What changed in the fifth session (2026-08-30)
 
 **The one-line version: an empty findings list meant four different things, so a

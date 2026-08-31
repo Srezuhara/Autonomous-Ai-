@@ -50,7 +50,14 @@ from tools.verification import VerificationOutcome
 
 logger = logging.getLogger(__name__)
 
-CLI_TIMEOUT = 30
+# A `--help` that takes this long is itself a defect and still fails the check.
+# The budget is nevertheless generous, because a *tight* one changes what the
+# failure says: `ai_report_generator_c60361c0` really fails with
+# `ImportError: cannot import name 'run_streamlit_ui'`, but its module-level
+# `import streamlit` costs ~36s cold on Windows, so a 30s budget reported
+# "timed out after 30s" and buried the actual diagnosis. Same verdict, useless
+# reason. Overridable so a slow machine does not have to edit source.
+CLI_TIMEOUT = int(os.getenv("CLI_SMOKE_TIMEOUT", "90"))
 
 # Flags that must never be passed to a generated tool during verification: they
 # ask it to do the destructive thing on purpose.

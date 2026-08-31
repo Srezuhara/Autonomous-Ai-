@@ -4704,6 +4704,111 @@ check("the report no longer sends the reader to the server log",
       "Runtime smoke test|failed to boot" not in
       Path("run_live_matrix.py").read_text(encoding="utf-8"))
 
+# ── §4.22 Reconciling the ledger against Groq's own counter ───────────────────
+# The ledger only records calls that came back 2xx with a usage body, so every
+# 400, every 429-rejected attempt and every retried attempt is invisible to it.
+# Measured on row 2 (2026-08-31): the estimate read 145,967 used on gpt-oss-20b
+# at the moment Groq's 429 stated `used 197323` — a 51K shortfall, all in the
+# optimistic direction, which is how a row cleared the 90,000 start floor and
+# then ran the fast model dry mid-tester.
+
+_R22_REAL_429 = (
+    "rate limit reached for model `openai/gpt-oss-20b` in organization "
+    "`org_01kjhb2kvxft0s58tg3tz9mg0p` service tier `on_demand` on tokens per "
+    "day (tpd): limit 200000, used 197323, requested 3745. please try again "
+    "in 7m41.376s. need more tokens? upgrade to dev tier today"
+)
+
+check("the real row-2 429 yields Groq's own (limit, used)",
+      llm_client.parse_tpd_usage(_R22_REAL_429) == (200000, 197323))
+check("a per-minute 429 carries no daily figure and must not be mistaken for one",
+      llm_client.parse_tpd_usage(
+          "rate limit reached ... on tokens per minute (tpm): limit 30000, "
+          "used 29000, requested 2000") is None)
+check("an empty reason parses to nothing rather than raising",
+      llm_client.parse_tpd_usage("") is None)
+check("a reason that is just the default string parses to nothing",
+      llm_client.parse_tpd_usage("daily quota") is None)
+
+
+def _r22_ledger(entries, model="openai/gpt-oss-20b"):
+    llm_client._ledger = [[ts, model, tok, "live"] for ts, tok in entries]
+    llm_client._ledger_covered = {}
+
+
+_R22_NOW = 1_000_000.0
+
+# The measured drift, reproduced exactly.
+_r22_ledger([(_R22_NOW, 145967)])
+_r22_before = llm_client.get_daily_usage(_R22_NOW)["models"]["openai/gpt-oss-20b"]
+_r22_added = llm_client.reconcile_ledger_from_groq(
+    "openai/gpt-oss-20b", 197323, now=_R22_NOW)
+_r22_after = llm_client.get_daily_usage(_R22_NOW)["models"]["openai/gpt-oss-20b"]
+
+check("before reconciling, the estimate reports the optimistic figure",
+      _r22_before["tokens_used"] == 145967)
+check("the shortfall Groq's counter reveals is added",
+      _r22_added == 51356, f"added {_r22_added}")
+check("after reconciling, used matches Groq exactly",
+      _r22_after["tokens_used"] == 197323)
+check("…and remaining is the honest 2,677, not 54,033",
+      _r22_after["tokens_remaining"] == 2677,
+      f"remaining {_r22_after['tokens_remaining']}")
+check("a row would now be refused against the 90,000 fast floor",
+      _r22_after["tokens_remaining"] < 90000)
+
+# Reconciling must never hand back budget: an over-count costs a wait, an
+# under-count costs a dead build.
+_r22_down = llm_client.reconcile_ledger_from_groq(
+    "openai/gpt-oss-20b", 10_000, now=_R22_NOW)
+check("a lower figure from Groq is refused — the pessimistic side is kept",
+      _r22_down == 0)
+check("…and the ledger is left where it was",
+      llm_client.get_daily_usage(_R22_NOW)["models"][
+          "openai/gpt-oss-20b"]["tokens_used"] == 197323)
+
+# The bucket must keep draining afterwards, not freeze at the anchor.
+_r22_hour = llm_client.get_daily_usage(_R22_NOW + 3600)["models"][
+    "openai/gpt-oss-20b"]["tokens_used"]
+check("a reconciled ledger still refills at ~8,333/hour",
+      abs(_r22_hour - (197323 - 8333)) <= 2, f"after 1h: {_r22_hour}")
+
+# Reconciling an empty ledger is the cold-start case: a fresh process that has
+# spent nothing locally but shares an organisation budget already half gone.
+_r22_ledger([])
+_r22_cold = llm_client.reconcile_ledger_from_groq(
+    "openai/gpt-oss-20b", 180_000, now=_R22_NOW)
+check("a cold ledger adopts Groq's figure wholesale",
+      _r22_cold == 180000 and llm_client.get_daily_usage(_R22_NOW)["models"][
+          "openai/gpt-oss-20b"]["tokens_used"] == 180000)
+
+check("a blank model name is refused rather than creating a phantom entry",
+      llm_client.reconcile_ledger_from_groq("", 100, now=_R22_NOW) == 0)
+
+# The wiring: the handler that flags a model must reconcile from the same text.
+_r22_src = Path("llm_client.py").read_text(encoding="utf-8")
+_r22_fn = _r22_src[_r22_src.index("def _mark_model_daily_limited"):]
+_r22_fn = _r22_fn[:_r22_fn.index("_DEFAULT_RESET_HINT")]
+check("_mark_model_daily_limited parses the 429 it is handed",
+      "parse_tpd_usage(reason)" in _r22_fn)
+check("…and feeds it to the ledger rather than only logging it",
+      "reconcile_ledger_from_groq(" in _r22_fn)
+
+# End to end: the flag path itself must move the number.
+_r22_ledger([(_R22_NOW, 145967)])
+llm_client._mark_model_daily_limited("openai/gpt-oss-20b", _R22_REAL_429)
+check("flagging a model daily-limited reconciles the ledger as a side effect",
+      llm_client.get_daily_usage()["models"][
+          "openai/gpt-oss-20b"]["tokens_used"] >= 197323 - 60)
+
+# A reason with no daily figure must leave the ledger untouched.
+_r22_ledger([(_R22_NOW, 50_000)])
+llm_client._mark_model_daily_limited("openai/gpt-oss-20b", "daily quota")
+check("a reason carrying no counter changes nothing",
+      llm_client.get_daily_usage(_R22_NOW)["models"][
+          "openai/gpt-oss-20b"]["tokens_used"] == 50000)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
