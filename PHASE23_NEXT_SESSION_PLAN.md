@@ -291,7 +291,38 @@ Do these while waiting; each is free and each has cost real time before:
 
 ---
 
-# Part B — Quota work, when the refill lands (~22 h)
+# Part B — Quota work, when the refill lands
+
+> ## ▶ START HERE (a new session reading this: this is the entry point)
+>
+> Part A is done. **There is no useful no-quota work left in Phase 23** — what
+> remains can only be settled by a live build. Three commands, in order:
+>
+> ```bash
+> venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+> venv/Scripts/python.exe run_live_matrix.py --dry-run   # both models: "would start: yes"
+> venv/Scripts/python.exe run_live_matrix.py --rows 3    # ~30-45 min
+> ```
+>
+> **Measured 2026-08-31 (ninth session): ~21 h to both floors.** Fast model had
+> used ~296,900 of a 110,000 ceiling; heavy ~287,300 of 130,000. Recompute with
+> the snippet in Part 0 rather than trusting that — and read `--dry-run`
+> yourself even when it passes, because the ledger under-reports by ~51K.
+>
+> Three things that have each cost real time:
+>
+> 1. **Do not tail `server.log`** while a build runs — it is block-buffered.
+>    Poll `/jobs/{id}/status` (command in §B1).
+> 2. **Restart the server** after any edit to the agents, tools or
+>    `llm_client.py`. It runs `--no-reload` and holds the code it started with.
+> 3. **A red result is a hypothesis about the pipeline first.** That has been
+>    right every time in this phase. Do not spend a second row diagnosing it —
+>    use the 2-7K debugger loop in §B4.
+>
+> If the budget is short and you want work anyway: **Phase B2 (JWT auth) needs
+> no quota** — `PHASE23_PLAN.md` §B2 — but it belongs to the next phase and
+> will not close this one.
+
 
 ## B0. Pre-flight (5 minutes, no tokens)
 
