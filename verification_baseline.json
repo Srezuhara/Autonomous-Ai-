@@ -19,6 +19,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "9 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -85,6 +90,11 @@
           "the project's own test suite does not run: 1 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "9 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -158,6 +168,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "15 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -220,6 +235,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "15 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -279,6 +299,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "14 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -333,6 +358,11 @@
           "the project's own test suite does not run: 1 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "34 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -407,6 +437,38 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "35 module(s) checked name-by-name (0 skipped as open); 9 of the finding(s) are in test modules",
+        "findings": [
+          "`backend.ai_summaries.generate_ai_summaries` is read at line 13: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_summaries`. This raises when this test runs (the application itself is unaffected). Add `generate_ai_summaries` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.ai_summaries.generate_summary` is read at line 7: `backend.ai_summaries` defines generate_ai_summary, and no `generate_summary`. This raises when this test runs (the application itself is unaffected). Add `generate_summary` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.chart_generation.generate_bar_chart` is read at line 21: `backend.chart_generation` defines generate_chart, and no `generate_bar_chart`. This raises when this test runs (the application itself is unaffected). Add `generate_bar_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.chart_generation.generate_charts` is read at line 14: `backend.chart_generation` defines generate_chart, and no `generate_charts`. This raises when this test runs (the application itself is unaffected). Add `generate_charts` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.data_analysis.get_insights` is read at line 22: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `get_insights`. This raises when this test runs (the application itself is unaffected). Add `get_insights` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.data_analysis.load_data` is read at line 8: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `load_data`. This raises when this test runs (the application itself is unaffected). Add `load_data` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.main.main` is read at line 13: `backend.main` defines app, args, bar_chart, chart_data, data, insights, line_chart, origins, parser, pie_chart, summary, and no `main`. This raises when this test runs (the application itself is unaffected). Add `main` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.pdf_report.load_data` is read at line 13: `backend.pdf_report` defines generate_pdf_report, and no `load_data`. This raises when this test runs (the application itself is unaffected). Add `load_data` to `backend.pdf_report` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.routes.app` is read at line 5: `backend.routes` defines generate_report, router, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `backend.routes` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.ai_summaries import generate_ai_insights` at line 5 fails: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_insights`. This raises when the module is imported, so the application cannot start. Add `generate_ai_insights` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.ai_summaries import generate_ai_insights` at line 7 fails: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_insights`. This raises when the module is imported, so the application cannot start. Add `generate_ai_insights` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.ai_summaries import generate_ai_summaries` at line 13 fails: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_summaries`. This raises when the module is imported, so the application cannot start. Add `generate_ai_summaries` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_bar_chart` at line 3 fails: `backend.chart_generation` defines generate_chart, and no `generate_bar_chart`. This raises when the module is imported, so the application cannot start. Add `generate_bar_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_bar_chart` at line 5 fails: `backend.chart_generation` defines generate_chart, and no `generate_bar_chart`. This raises when the module is imported, so the application cannot start. Add `generate_bar_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_bar_chart` at line 6 fails: `backend.chart_generation` defines generate_chart, and no `generate_bar_chart`. This raises when the module is imported, so the application cannot start. Add `generate_bar_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_charts` at line 11 fails: `backend.chart_generation` defines generate_chart, and no `generate_charts`. This raises when the module is imported, so the application cannot start. Add `generate_charts` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_line_chart` at line 3 fails: `backend.chart_generation` defines generate_chart, and no `generate_line_chart`. This raises when the module is imported, so the application cannot start. Add `generate_line_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_line_chart` at line 5 fails: `backend.chart_generation` defines generate_chart, and no `generate_line_chart`. This raises when the module is imported, so the application cannot start. Add `generate_line_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_line_chart` at line 6 fails: `backend.chart_generation` defines generate_chart, and no `generate_line_chart`. This raises when the module is imported, so the application cannot start. Add `generate_line_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_pie_chart` at line 3 fails: `backend.chart_generation` defines generate_chart, and no `generate_pie_chart`. This raises when the module is imported, so the application cannot start. Add `generate_pie_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_pie_chart` at line 5 fails: `backend.chart_generation` defines generate_chart, and no `generate_pie_chart`. This raises when the module is imported, so the application cannot start. Add `generate_pie_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.chart_generation import generate_pie_chart` at line 6 fails: `backend.chart_generation` defines generate_chart, and no `generate_pie_chart`. This raises when the module is imported, so the application cannot start. Add `generate_pie_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.data_analysis import generate_summary` at line 2 fails: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `generate_summary`. This raises when the module is imported, so the application cannot start. Add `generate_summary` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.data_analysis import generate_summary` at line 4 fails: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `generate_summary`. This raises when the module is imported, so the application cannot start. Add `generate_summary` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.data_analysis import generate_summary` at line 5 fails: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `generate_summary`. This raises when the module is imported, so the application cannot start. Add `generate_summary` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.data_analysis import load_data` at line 10 fails: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `load_data`. This raises when the module is imported, so the application cannot start. Add `load_data` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -458,6 +520,13 @@
         "detail": "this project ships no test files",
         "findings": [],
         "status": "not_applicable"
+      },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [
+          "`from backend.services import DataService` at line 6 fails: `backend.services` defines generate_report_data, generate_weather_report, and no `DataService`. This raises when the module is imported, so the application cannot start. Add `DataService` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -513,6 +582,13 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "module_ref": {
+        "detail": "5 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [
+          "`from backend.services import get_weather` at line 25 fails: `backend.services` defines ReportService, and no `get_weather`. This raises when the module is imported, so the application cannot start. Add `get_weather` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -567,6 +643,11 @@
           "the project's own test suite does not run: 1 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "10 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -627,6 +708,15 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "25 module(s) checked name-by-name (0 skipped as open); 2 of the finding(s) are in test modules",
+        "findings": [
+          "`from ai_report_generator.backend.main import app` at line 3 fails: `ai_report_generator.backend.main` defines main, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `ai_report_generator.backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from ai_report_generator.backend.main import app` at line 3 fails: `ai_report_generator.backend.main` defines main, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `ai_report_generator.backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from ai_report_generator.backend.streamlit_ui import run_streamlit_ui` at line 15 fails: `ai_report_generator.backend.streamlit_ui` defines main, and no `run_streamlit_ui`. This raises when the module is imported, so the application cannot start. Add `run_streamlit_ui` to `ai_report_generator.backend.streamlit_ui` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -676,6 +766,27 @@
         "detail": "this project ships no test files",
         "findings": [],
         "status": "not_applicable"
+      },
+      "module_ref": {
+        "detail": "11 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [
+          "`from backend.ai_generated_summaries import generate_summary` at line 5 fails: `backend.ai_generated_summaries` defines generate_ai_summary, and no `generate_summary`. This raises when the module is imported, so the application cannot start. Add `generate_summary` to `backend.ai_generated_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import AiSummaryRequest` at line 1 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `AiSummaryRequest`. This raises when the module is imported, so the application cannot start. Add `AiSummaryRequest` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import AiSummaryRequest` at line 2 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `AiSummaryRequest`. This raises when the module is imported, so the application cannot start. Add `AiSummaryRequest` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import AiSummaryRequest` at line 3 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `AiSummaryRequest`. This raises when the module is imported, so the application cannot start. Add `AiSummaryRequest` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import AiSummaryResponse` at line 1 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `AiSummaryResponse`. This raises when the module is imported, so the application cannot start. Add `AiSummaryResponse` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import AiSummaryResponse` at line 2 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `AiSummaryResponse`. This raises when the module is imported, so the application cannot start. Add `AiSummaryResponse` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import PdfReportRequest` at line 2 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `PdfReportRequest`. This raises when the module is imported, so the application cannot start. Add `PdfReportRequest` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import ReportConfig` at line 2 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `ReportConfig`. This raises when the module is imported, so the application cannot start. Add `ReportConfig` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import ReportConfig` at line 3 fails: `backend.models` defines AIGeneratedSummary, AnalysisResult, ChartData, PDFReport, ReportData, and no `ReportConfig`. This raises when the module is imported, so the application cannot start. Add `ReportConfig` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import generate_ai_summary_request` at line 2 fails: `backend.services` defines generate_report_charts, generate_report_pdf, generate_report_summary, process_report_data, and no `generate_ai_summary_request`. This raises when the module is imported, so the application cannot start. Add `generate_ai_summary_request` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import generate_ai_summary_request` at line 3 fails: `backend.services` defines generate_report_charts, generate_report_pdf, generate_report_summary, process_report_data, and no `generate_ai_summary_request`. This raises when the module is imported, so the application cannot start. Add `generate_ai_summary_request` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import generate_analysis_result` at line 2 fails: `backend.services` defines generate_report_charts, generate_report_pdf, generate_report_summary, process_report_data, and no `generate_analysis_result`. This raises when the module is imported, so the application cannot start. Add `generate_analysis_result` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import generate_analysis_result` at line 3 fails: `backend.services` defines generate_report_charts, generate_report_pdf, generate_report_summary, process_report_data, and no `generate_analysis_result`. This raises when the module is imported, so the application cannot start. Add `generate_analysis_result` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import process_report_config` at line 2 fails: `backend.services` defines generate_report_charts, generate_report_pdf, generate_report_summary, process_report_data, and no `process_report_config`. This raises when the module is imported, so the application cannot start. Add `process_report_config` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import process_report_config` at line 3 fails: `backend.services` defines generate_report_charts, generate_report_pdf, generate_report_summary, process_report_data, and no `process_report_config`. This raises when the module is imported, so the application cannot start. Add `process_report_config` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -732,6 +843,14 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [
+          "`from backend.app import get_db` at line 20 fails: `backend.app` defines main, and no `get_db`. This raises when the module is imported, so the application cannot start. Add `get_db` to `backend.app` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import Report` at line 137 fails: `backend.models` defines ReportData, WeatherData, and no `Report`. This raises when the module is imported, so the application cannot start. Add `Report` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -783,6 +902,11 @@
         "detail": "this project ships no test files",
         "findings": [],
         "status": "not_applicable"
+      },
+      "module_ref": {
+        "detail": "5 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -838,6 +962,11 @@
           "the project's own test suite does not run: 1 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "9 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -907,6 +1036,15 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (0 skipped as open); 3 of the finding(s) are in test modules",
+        "findings": [
+          "`from backend.models import Base` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import Bookmark` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `Bookmark`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Bookmark` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import engine` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `engine`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `engine` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "imported backend",
         "findings": [
@@ -956,6 +1094,11 @@
       },
       "generated_tests": {
         "detail": "ran the project's own suite: 4 file(s), 9 passed",
+        "findings": [],
+        "status": "verified"
+      },
+      "module_ref": {
+        "detail": "11 module(s) checked name-by-name (0 skipped as open)",
         "findings": [],
         "status": "verified"
       },
@@ -1012,6 +1155,11 @@
           "the project ships 1 test file(s) but pytest collected 0 tests from them \u2014 the suite is inert"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "8 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "imported backend",
@@ -1073,6 +1221,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "13 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1128,6 +1281,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1180,6 +1338,13 @@
           "ERROR tests/test_renamer.py",
           "ERROR tests/test_routes.py - AttributeError: 'WindowsPath' object has no attr...",
           "the project's own test suite does not run: 3 of its tests error before executing"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "16 module(s) checked name-by-name (1 skipped as open); 1 of the finding(s) are in test modules",
+        "findings": [
+          "`from bulk_file_renamer.renamer import rename_files` at line 18 fails: `bulk_file_renamer.renamer` defines bulk_rename, compute_renames, discover_files, perform_renames, and no `rename_files`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `rename_files` to `bulk_file_renamer.renamer` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
         ],
         "status": "failed"
       },
@@ -1237,6 +1402,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1289,6 +1459,11 @@
           "the project's own test suite does not run: 1 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "5 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -1345,6 +1520,13 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "7 module(s) checked name-by-name (0 skipped as open); 1 of the finding(s) are in test modules",
+        "findings": [
+          "`from backend.main import app` at line 3 fails: `backend.main` defines no names at all, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "imported backend",
         "findings": [
@@ -1380,6 +1562,75 @@
     },
     "shape": "package"
   },
+  "inventory_system_3322017e": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "generated_tests": {
+        "detail": "pytest exit 2, 2 error",
+        "findings": [
+          "ERROR tests/test_models.py",
+          "ERROR tests/test_routers.py",
+          "the project's own test suite does not run: 2 of its tests error before executing"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "8 module(s) checked name-by-name (1 skipped as open); 1 of the finding(s) are in test modules",
+        "findings": [
+          "`backend.models.MovementType` is read at line 75: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `MovementType`. This raises when this test runs (the application itself is unaffected). Add `MovementType` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.models.ProductCreate` is read at line 68: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `ProductCreate`. This raises when the module is imported, so the application cannot start. Add `ProductCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.models.StockMovementCreate` is read at line 140: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `StockMovementCreate`. This raises when the module is imported, so the application cannot start. Add `StockMovementCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.models.SupplierCreate` is read at line 32: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `SupplierCreate`. This raises when the module is imported, so the application cannot start. Add `SupplierCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.models.WarehouseCreate` is read at line 104: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `WarehouseCreate`. This raises when the module is imported, so the application cannot start. Add `WarehouseCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: SyntaxError: from __future__ imports must occur at the beginning of the file (models.py, line 11) (at backend/main.py:20 in <module>)",
+        "findings": [
+          "the application does not start: SyntaxError: from __future__ imports must occur at the beginning of the file (models.py, line 11) (at backend/main.py:20 in <module>)"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "8 write route(s), 0 pydantic models",
+        "findings": [
+          "This API declares 8 route(s) that accept a request body (POST/PUT/PATCH) and not one pydantic model to parse it into. FastAPI cannot validate a body without a schema, and any handler annotated with a schema class is reading a name nothing defines. Add the pydantic request/response models the routes are written against \u2014 SQLAlchemy ORM classes are not a substitute and cannot be used as a FastAPI body annotation."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
   "inventory_system_90ee973f": {
     "checks": {
       "cli_smoke": {
@@ -1406,6 +1657,11 @@
           "the project's own test suite fails: 16 failed, 11 passed"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "15 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -1472,6 +1728,24 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "11 module(s) checked name-by-name (0 skipped as open); 7 of the finding(s) are in test modules",
+        "findings": [
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.routes import get_db` at line 44 fails: `backend.routes` defines router, and no `get_db`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `get_db` to `backend.routes` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import get_db` at line 26 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `get_db`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `get_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import get_db` at line 9 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `get_db`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `get_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import product_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `product_router`. This raises when the module is imported, so the application cannot start. Add `product_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import report_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `report_router`. This raises when the module is imported, so the application cannot start. Add `report_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import stock_movement_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `stock_movement_router`. This raises when the module is imported, so the application cannot start. Add `stock_movement_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import supplier_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `supplier_router`. This raises when the module is imported, so the application cannot start. Add `supplier_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`from backend.services import warehouse_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `warehouse_router`. This raises when the module is imported, so the application cannot start. Add `warehouse_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1527,6 +1801,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "14 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1581,6 +1860,11 @@
           "the project's own test suite does not run: 1 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "14 module(s) checked name-by-name (1 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -1641,6 +1925,11 @@
           "the project's own test suite does not run: 3 of its tests error before executing"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "18 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -1722,6 +2011,15 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "19 module(s) checked name-by-name (0 skipped as open); 3 of the finding(s) are in test modules",
+        "findings": [
+          "`backend.services.create_api_key` is read at line 13: `backend.services` defines Services, and no `create_api_key`. This raises when this test runs (the application itself is unaffected). Add `create_api_key` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.services.delete_api_key` is read at line 19: `backend.services` defines Services, and no `delete_api_key`. This raises when this test runs (the application itself is unaffected). Add `delete_api_key` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts.",
+          "`backend.services.get_api_keys` is read at line 7: `backend.services` defines Services, and no `get_api_keys`. This raises when this test runs (the application itself is unaffected). Add `get_api_keys` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1789,6 +2087,13 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "8 module(s) checked name-by-name (0 skipped as open); 1 of the finding(s) are in test modules",
+        "findings": [
+          "`from backend.main import app` at line 3 fails: `backend.main` defines no names at all, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what the endpoint accepts."
+        ],
+        "status": "failed"
+      },
       "package_smoke": {
         "detail": "imported backend",
         "findings": [
@@ -1838,6 +2143,11 @@
       },
       "generated_tests": {
         "detail": "this project ships no test files",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "module_ref": {
+        "detail": "this project has fewer than two python modules, so there are no cross-module references to check",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1898,6 +2208,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "28 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -1951,6 +2266,11 @@
           "the project's own test suite fails: 2 failed, 10 passed"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "11 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -2021,6 +2341,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "11 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -2083,6 +2408,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "13 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -2136,6 +2466,11 @@
           "the project's own test suite fails: 2 failed, 18 passed"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "14 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -2192,6 +2527,11 @@
         ],
         "status": "failed"
       },
+      "module_ref": {
+        "detail": "13 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
         "findings": [],
@@ -2242,6 +2582,11 @@
       },
       "generated_tests": {
         "detail": "this project ships no test files",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "module_ref": {
+        "detail": "this project has fewer than two python modules, so there are no cross-module references to check",
         "findings": [],
         "status": "not_applicable"
       },
@@ -2299,6 +2644,11 @@
           "the project's own test suite fails: 3 failed, 6 passed"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",
@@ -2364,6 +2714,11 @@
           "the project's own test suite fails: 8 failed, 1 passed"
         ],
         "status": "failed"
+      },
+      "module_ref": {
+        "detail": "9 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "package_smoke": {
         "detail": "this project is run, not imported; its own verifier covers it",

@@ -432,11 +432,70 @@ def find_model_definition(root: str, class_name: str) -> tuple:
     return "", ()
 
 
+
+#: The HTTP methods that carry a request body. A FastAPI app that accepts one
+#: needs a schema to parse it into; a read-only API legitimately needs none.
+_WRITE_METHODS = ("post", "put", "patch")
+
+
+def _write_routes(root: str) -> int:
+    """
+    How many body-taking route handlers this project declares.
+
+    Only used to decide whether "no pydantic models" is a shrug or a defect, so
+    it counts decorators and nothing else. Never raises.
+    """
+    count = 0
+    try:
+        for path, source in _project_sources(root).items():
+            try:
+                tree = ast.parse(source)
+            except Exception:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for dec in node.decorator_list:
+                    target = dec.func if isinstance(dec, ast.Call) else dec
+                    if (isinstance(target, ast.Attribute)
+                            and target.attr in _WRITE_METHODS):
+                        count += 1
+    except Exception:
+        return 0
+    return count
+
+
 def check_schema_attributes(root: str) -> VerificationOutcome:
     """The same check as a VerificationOutcome, for the verification surface."""
     report = check_project_attributes(root)
 
     if not report.models:
+        # "No pydantic models" is a complete answer for a CLI or a library. For
+        # a FastAPI app that accepts request bodies it is a red flag reported as
+        # a shrug, and row 3 is what that costs: `inventory_system_3322017e`
+        # declared 8 write routes and not one schema — `prompts/
+        # backend_developer.txt` asked for "a flat file with Pydantic classes
+        # only" and the model shipped SQLAlchemy ORM classes instead. This check
+        # then declined to run, because the models whose fields it would have
+        # checked were the very thing that was missing.
+        #
+        # Measured across the corpus before it was written: of 32 web_api
+        # builds, exactly one matches this condition, and it is row 3.
+        writes = _write_routes(root)
+        if writes:
+            return VerificationOutcome.failed(
+                "schema_attr",
+                [f"This API declares {writes} route(s) that accept a request "
+                 f"body (POST/PUT/PATCH) and not one pydantic model to parse "
+                 f"it into. FastAPI cannot validate a body without a schema, "
+                 f"and any handler annotated with a schema class is reading a "
+                 f"name nothing defines. Add the pydantic request/response "
+                 f"models the routes are written against — SQLAlchemy ORM "
+                 f"classes are not a substitute and cannot be used as a "
+                 f"FastAPI body annotation."],
+                detail=f"{writes} write route(s), 0 pydantic models",
+                evidence={"write_routes": writes, "pydantic_models": 0},
+            )
         return VerificationOutcome.not_applicable(
             "schema_attr",
             detail="this project declares no pydantic models",

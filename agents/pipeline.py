@@ -930,6 +930,7 @@ class Pipeline:
             from tools.feature_coverage import check_feature_coverage
             from tools.package_smoke import smoke_test_package
             from tools.schema_attr_check import check_schema_attributes
+            from tools.module_ref_check import check_module_refs
             from tools.generated_tests import run_generated_tests
             from tools.static_smoke import smoke_test_static
             from tools.verification import collect_findings
@@ -971,6 +972,13 @@ class Pipeline:
             # request body it could not synthesise, and the nullable column a
             # silenced repair writes NULL into without ever raising.
             ("schema_attr", check_schema_attributes),
+            # One level up from `schema_attr`: that one checks the *fields* of a
+            # class both files agree exists, this one checks that the name
+            # exists at all. Row 3 died on `models.SupplierCreate`, which
+            # `models.py` never defined — and `schema_attr` reported
+            # `not_applicable`, because the models whose fields it would have
+            # checked were the very thing that was missing.
+            ("module_ref", check_module_refs),
             # The suite the build ships. Row 2 shipped one in which every test
             # errored at fixture setup and was still recorded `verified: yes`,
             # because no other check executes the tests — a suite that cannot
@@ -1034,6 +1042,35 @@ class Pipeline:
             if works and outcome.check in self._MANUAL_WHEN_WORKING:
                 manual.extend(outcome.findings)
                 continue
+            # A check can also route *some* of its findings, when only part of
+            # what it reports is about the shipped suite rather than the
+            # product. `module_ref` is the case: an undefined name in
+            # `backend/routes.py` stops the application, and the identical
+            # defect in `tests/test_routes.py` stops only that test. Whole-check
+            # routing cannot express the difference, and getting it wrong either
+            # way is a real cost — hiding the first, or degrading a working
+            # build for the second.
+            partial = outcome.evidence.get("manual_findings") or []
+            if works and partial:
+                routed = [f for f in outcome.findings if f in set(partial)]
+                if routed:
+                    manual.extend(routed)
+                    kept = [f for f in outcome.findings if f not in set(partial)]
+                    from tools.verification import Status, VerificationOutcome
+                    if not kept:
+                        # Nothing left that counts against the build: the check
+                        # passes, and its findings live on as manual testing.
+                        outcome = VerificationOutcome.verified(
+                            outcome.check, detail=outcome.detail,
+                            shape=outcome.shape,
+                            evidence=dict(outcome.evidence),
+                        )
+                    else:
+                        outcome = VerificationOutcome(
+                            check=outcome.check, status=Status.FAILED,
+                            shape=outcome.shape, detail=outcome.detail,
+                            findings=kept, evidence=dict(outcome.evidence),
+                        )
             counted.append(outcome)
 
         self._manual_checks = manual

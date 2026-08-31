@@ -6155,6 +6155,274 @@ check("the structural repair pass runs it first",
 shutil.rmtree(_N34, ignore_errors=True)
 
 
+
+# ---- 48. A name the other file never defined --------------------------------
+# Row 3's actual blocker, and the defect nothing in the pipeline looked for:
+# `routes.py` referenced `models.SupplierCreate` in a `models.py` that defines
+# only ORM classes. Two-sided throughout, and the false positive this found on
+# the real corpus — a `try/except AttributeError` fallback in
+# `inventory_system_90ee973f` — has its own case below, because reporting it
+# would have told a working build it was broken.
+from tools.module_ref_check import (                                   # noqa: E402
+    check_project_module_refs as _ref48,
+    check_module_refs as _ref48o,
+)
+
+_R48 = Path(config.OUTPUT_DIR) / "_ref48_probe"
+
+
+def _mk_ref48(name: str, files: dict) -> str:
+    root = f"_ref48_probe/{name}"
+    d = Path(config.OUTPUT_DIR) / root
+    shutil.rmtree(d, ignore_errors=True)
+    for rel, text in files.items():
+        target = d / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return root
+
+
+def _names48(root: str) -> set:
+    return {f"{i.module}.{i.name}" for i in _ref48(root).issues}
+
+
+# The row 3 shape exactly: a package-relative import, the missing name read in
+# a function signature, in a file with no `from __future__ import annotations`.
+_row3 = _mk_ref48("row3", {
+    "backend/__init__.py": "",
+    "backend/models.py": (
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "class Base(DeclarativeBase): pass\n"
+        "class Supplier(Base): pass\n"
+    ),
+    "backend/routes.py": (
+        "from . import models\n"
+        "def create_supplier(supplier: models.SupplierCreate):\n"
+        "    return models.Supplier(**supplier.model_dump())\n"
+    ),
+})
+check("the name routes.py invents is reported",
+      _names48(_row3) == {"backend.models.SupplierCreate"},
+      f"got {_names48(_row3)}")
+check("...and the name that does exist is not",
+      "backend.models.Supplier" not in _names48(_row3))
+_o48 = _ref48o(_row3)
+check("...and it is fatal, because a signature is evaluated at import",
+      _o48.is_fatal, "a missing name read at import time must be fatal")
+check("...and the finding names what the module does define",
+      "Supplier" in _o48.findings[0] and "Base" in _o48.findings[0])
+
+# PEP 563 changes the answer: with the future import the annotation is a
+# string, so the module imports fine and only a call raises.
+_defer = _mk_ref48("defer", {
+    "backend/__init__.py": "",
+    "backend/models.py": "class Supplier: pass\n",
+    "backend/routes.py": (
+        "from __future__ import annotations\n"
+        "from . import models\n"
+        "def create(s: models.SupplierCreate): return s\n"
+    ),
+})
+check("a deferred annotation still reports the missing name",
+      _names48(_defer) == {"backend.models.SupplierCreate"})
+check("...but is not fatal, because the module still imports",
+      not _ref48o(_defer).is_fatal)
+
+# The false positive found on the real corpus. `inventory_system_90ee973f`
+# probes for a name it knows may be absent and supplies it. That code is
+# correct and its route serves.
+_guard = _mk_ref48("guard", {
+    "backend/__init__.py": "",
+    "backend/schemas.py": "class LowStockItem: pass\n",
+    "backend/routes.py": (
+        "from . import schemas\n"
+        "try:\n"
+        "    LowStockReport = schemas.LowStockReport\n"
+        "except AttributeError:\n"
+        "    class LowStockReport: pass\n"
+    ),
+})
+check("a read guarded by `except AttributeError` is not a defect",
+      _names48(_guard) == set(), f"got {_names48(_guard)}")
+
+_guard_imp = _mk_ref48("guard_imp", {
+    "backend/__init__.py": "",
+    "backend/schemas.py": "class A: pass\n",
+    "backend/main.py": (
+        "try:\n"
+        "    from .schemas import Fancy\n"
+        "except ImportError:\n"
+        "    Fancy = None\n"
+    ),
+})
+check("an import guarded by `except ImportError` is not a defect",
+      _names48(_guard_imp) == set(), f"got {_names48(_guard_imp)}")
+
+# The sibling-import convention the debugger's sys.path shim creates.
+_flat = _mk_ref48("flat", {
+    "backend/__init__.py": "",
+    "backend/services.py": "def get_stock(): pass\n",
+    "backend/routes.py": "import services\ndef r(): return services.get_price()\n",
+})
+check("a bare sibling import resolves, and its missing name is reported",
+      _names48(_flat) == {"backend.services.get_price"},
+      f"got {_names48(_flat)}")
+
+# Everything it must stay quiet about.
+_quiet = _mk_ref48("quiet", {
+    "backend/__init__.py": "",
+    "backend/helpers.py": (
+        "import sys\n"
+        "def real(): pass\n"
+        "if sys.version_info >= (3, 8):\n"
+        "    def conditional(): pass\n"
+        "else:\n"
+        "    conditional = None\n"
+        "try:\n"
+        "    import ujson as json\n"
+        "except ImportError:\n"
+        "    import json\n"
+        "for _n in ('a',):\n"
+        "    looped = _n\n"
+    ),
+    "backend/open_mod.py": "from os.path import *\ndef known(): pass\n",
+    "backend/main.py": (
+        "from . import helpers, open_mod\n"
+        "def a(): return helpers.real()\n"
+        "def b(): return helpers.conditional\n"
+        "def c(): return helpers.json\n"
+        "def d(): return helpers.looped\n"
+        "def e(): return open_mod.anything_at_all\n"
+        "def f(): return helpers.__name__\n"
+        "def g(): return getattr(helpers, 'whatever')\n"
+    ),
+})
+check("a conditionally-defined name is a definition",
+      "backend.helpers.conditional" not in _names48(_quiet))
+check("...so is one bound in a try/except fallback",
+      "backend.helpers.json" not in _names48(_quiet))
+check("...and one bound by a module-level loop",
+      "backend.helpers.looped" not in _names48(_quiet))
+check("a module doing `import *` is never used to report an absence",
+      "backend.open_mod.anything_at_all" not in _names48(_quiet))
+check("module dunders are not missing names",
+      "backend.helpers.__name__" not in _names48(_quiet))
+check("nothing is reported for the quiet project at all",
+      _names48(_quiet) == set(), f"got {_names48(_quiet)}")
+
+# A local that shadows the module binding is not evidence of anything.
+_shadow = _mk_ref48("shadow", {
+    "backend/__init__.py": "",
+    "backend/services.py": "class Services: pass\n",
+    "backend/routes.py": (
+        "from . import services\n"
+        "def r():\n"
+        "    services = Services()\n"
+        "    return services.get_api_keys()\n"
+    ),
+})
+check("a rebound local name is skipped, not guessed at",
+      _names48(_shadow) == set(), f"got {_names48(_shadow)}")
+
+# A package's submodules are attributes of the package.
+_subs = _mk_ref48("subs", {
+    "backend/__init__.py": "",
+    "backend/models.py": "class Supplier: pass\n",
+    "main.py": "import backend.models\ndef r(): return backend.models.Supplier\n",
+})
+check("a dotted path through a package resolves to the submodule",
+      _names48(_subs) == set(), f"got {_names48(_subs)}")
+
+# The rule §4.26 settled: a broken test suite is not a broken build.
+_testonly = _mk_ref48("testonly", {
+    "backend/__init__.py": "",
+    "backend/models.py": "class Bookmark: pass\n",
+    "tests/test_models.py": "from backend.models import Base\n",
+})
+_o_test = _ref48o(_testonly)
+check("a missing name in a test module is still reported",
+      len(_o_test.findings) == 1)
+check("...but never makes the build fatal",
+      not _o_test.is_fatal,
+      "a test that cannot import must not mark the application unusable")
+check("...and it is offered for manual routing instead",
+      _o_test.evidence.get("manual_findings") == _o_test.findings)
+check("...and the finding says the application is unaffected",
+      "unaffected" in _o_test.findings[0])
+
+# A source-file defect is never routed to manual testing.
+_srconly = _mk_ref48("srconly", {
+    "backend/__init__.py": "",
+    "backend/models.py": "class Bookmark: pass\n",
+    "backend/routes.py": "from .models import Base\n",
+})
+check("a missing name in the application is not routed to manual testing",
+      _ref48o(_srconly).evidence.get("manual_findings") == [])
+check("...and it is fatal", _ref48o(_srconly).is_fatal)
+
+# A one-module project has no cross-module reference to check, and saying
+# `verified` there would be the vacuous pass this phase exists to remove.
+_lone = _mk_ref48("lone", {"main.py": "print(1)\n"})
+check("a single-module project is not_applicable, not verified",
+      _ref48o(_lone).status.value == "not_applicable")
+
+check("module_ref is registered in the pipeline",
+      '("module_ref", check_module_refs)' in
+      Path("agents/pipeline.py").read_text(encoding="utf-8"))
+check("module_ref is a static check, never evidence the artifact works",
+      "module_ref" not in _EXEC42,
+      "a check that reads source must not count as executing it")
+
+shutil.rmtree(_R48, ignore_errors=True)
+
+
+# ---- 49. Zero schemas for an API that accepts bodies ------------------------
+# `schema_attr` answered `not_applicable — this project declares no pydantic
+# models` for a FastAPI build with 18 routes: a red flag reported as a shrug,
+# and the models were missing precisely because that was the defect. Measured
+# across the corpus before it was written: of 32 web_api builds, exactly one
+# matches, and it is row 3.
+_S49 = Path(config.OUTPUT_DIR) / "_s49_probe"
+
+
+def _mk_s49(name: str, routes: str) -> str:
+    root = f"_s49_probe/{name}"
+    d = Path(config.OUTPUT_DIR) / root
+    shutil.rmtree(d, ignore_errors=True)
+    (d / "backend").mkdir(parents=True)
+    (d / "backend" / "routes.py").write_text(routes, encoding="utf-8")
+    return root
+
+
+_writes49 = _mk_s49("writes", (
+    "from fastapi import APIRouter\n"
+    "router = APIRouter()\n"
+    "@router.post('/suppliers/')\n"
+    "def create(supplier): return supplier\n"
+    "@router.put('/suppliers/{i}')\n"
+    "def update(i, data): return data\n"
+))
+_o49 = _attr47o(_writes49)
+check("an API with write routes and no schemas is a finding, not a shrug",
+      _o49.status.value == "failed", f"got {_o49.status.value}")
+check("...and it counts them", _o49.evidence.get("write_routes") == 2)
+
+_reads49 = _mk_s49("reads", (
+    "from fastapi import APIRouter\n"
+    "router = APIRouter()\n"
+    "@router.get('/suppliers/')\n"
+    "def index(): return []\n"
+))
+check("a read-only API legitimately needs no schemas",
+      _attr47o(_reads49).status.value == "not_applicable")
+
+_none49 = _mk_s49("none", "def add(a, b):\n    return a + b\n")
+check("a project with no routes at all is still not_applicable",
+      _attr47o(_none49).status.value == "not_applicable")
+
+shutil.rmtree(_S49, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

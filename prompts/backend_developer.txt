@@ -177,6 +177,35 @@ main.py always does: from routes import router then app.include_router(router)
 
 MODELS RULE: models.py is a flat file with Pydantic classes only. No database code.
 
+Every name another file reads off models must EXIST in models.py. This is the
+one that killed a whole build: routes.py was written against
+
+    def create_supplier(supplier: models.SupplierCreate): ...
+    def create_product(product: models.ProductCreate): ...
+
+and models.py contained only SQLAlchemy ORM classes — Base, Supplier, Product,
+Warehouse — and not one of the four *Create schemas. Python raises AttributeError
+while routes.py is being imported, so every endpoint died, not just the writes.
+
+  ❌ WRONG:
+      # models.py
+      class Supplier(Base):              # an ORM class
+          __tablename__ = "supplier"
+
+  ✅ RIGHT:
+      # models.py
+      class SupplierCreate(BaseModel):   # what a POST/PUT body parses into
+          name: str
+          contact_email: str | None = None
+
+      class SupplierRead(SupplierCreate): # what response_model returns
+          id: int
+
+An ORM class cannot be used as a FastAPI body annotation or a response_model.
+Before you finish routes.py, read back every `models.X` you wrote and confirm
+models.py defines X. If a route accepts a JSON body, models.py has a schema for
+it — an API with POST/PUT routes and no Pydantic models is always wrong.
+
 IMPORTS: All backend/ files are siblings.
   from routes import router
   from models import WeatherData
