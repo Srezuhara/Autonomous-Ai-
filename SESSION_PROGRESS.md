@@ -1,9 +1,27 @@
 # Session Progress — start here
 
-**Last session: 2026-08-31 (Phase 23 — the seventh session, row 2 live).**
-`test_phase23.py` is **559/559**, up from 541. Row 2 was rebuilt and **passes
-the matrix criterion**; the session's most important result is not the row but
-what the row exposed about the quota ledger.
+**Last session: 2026-08-31 (Phase 23 — the seventh session).**
+`test_phase23.py` is **705/705**, up from 541. Row 2 was rebuilt and **passes
+the matrix criterion**, Phase B1 is done, and six defects were closed. The
+session's most important results are not the row but what it exposed.
+
+**The four findings worth carrying, in order of how much they change:**
+
+1. **The token ledger under-reports by ~51,000** — a quarter of the daily limit,
+   all optimistic. It records only calls that returned 2xx, so every 400, every
+   429-rejected attempt and every retry is invisible. The start floors were
+   therefore denominated in a unit that could not do their job. A 429 now
+   re-anchors the ledger to Groq's own figure. **Between 429s the number is
+   still optimistic: start a row with real margin over the floor, not just
+   above it.**
+2. **"Verified" meant "inspected", not "executed".** Half the checks never run
+   what they inspect. 27 of 41 builds had a verified static check and no
+   verified executing one, and two passed the row criterion on `sql_schema`
+   alone with nothing ever having run. `EXECUTING_CHECKS` now gates it.
+3. **A broken test suite is not a broken build** — the product decision, now
+   implemented end to end. See below.
+4. **34 of 41 saved builds ship a test suite that does not pass.** Nothing had
+   noticed, because nothing ran them as a user would.
 
 **The one-line version.** The token ledger only ever recorded calls that came
 back 2xx, so it under-reported `gpt-oss-20b` spend by ~51,000 tokens — a
@@ -193,6 +211,30 @@ took `max()` across models, so a row started whenever *either* was rich, while
 pass — is the one that runs out. There are two floors now, 90,000 fast and
 70,000 heavy, and `--dry-run` refuses per model against its own. The start that
 went wrong on 2026-08-30 (20b at 73,286) is now refused.
+
+### Next session — do this
+
+**Quota has refilled: `20b` ~121K, `120b` ~150K, and `--dry-run` says start.**
+But read `PHASE23_QUOTA_RUNBOOK.md` §0.-1 first: the ledger is optimistic
+between 429s, and 121K against a 90K floor is only ~31K of margin against an
+error that has been measured at ~51K. Row 3 is the next row in the order and
+costs ~87.5-140K with a high 20b share, so it is affordable but not comfortably.
+Either wait a few hours for more margin, or start it knowing the dual-model
+fallback may have to carry the tail.
+
+**Everything below has been validated against saved builds and NOTHING has run
+inside a live build.** That is what the next row is for:
+
+| Waiting on a live row | Where |
+|---|---|
+| The ledger reconciling from a real 429 | §4.22 |
+| `generated_tests` running inside the pipeline | §4.24 |
+| The unrepaired-defect re-scan | §4.25 |
+| Manual-check routing (a working build with a broken suite) | §4.26 |
+| The final re-audit reporting final state | §4.27 |
+| `test_blame` routing repair in anger | §4.30 |
+| `EXECUTING_CHECKS` gating a real verdict | §4.31 |
+| `static_smoke` on a freshly generated page | §4.32 |
 
 ### The order to work in
 
