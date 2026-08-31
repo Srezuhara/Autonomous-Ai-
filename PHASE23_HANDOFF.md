@@ -1,5 +1,9 @@
 # Phase 23 Handoff
 
+*Updated 2026-08-31 at the end of the eighth session, which spent no quota:
+it closed row 3's blocker and measured two more "obvious" fixes into the
+ground. Earlier note follows.*
+
 *Updated 2026-08-30 at the end of the sixth session. The fifth found that the
 pipeline was reporting success it had not earned, built verification for every
 build shape, and reached the first plain `done` in the project's history. The
@@ -12,6 +16,102 @@ current state. This file is the per-defect detail behind it, and
 
 Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
+
+---
+
+## 0.-3 The eighth session (2026-08-31) — row 3's blocker, and two non-changes
+
+Zero tokens. 765/765 tests. `SESSION_PROGRESS.md` §0.0–§0.2 is the summary;
+this is the per-defect detail.
+
+**§4.35 — a name the other file never defined.** New
+`tools/module_ref_check.py`, registered in `_verify_other_shapes` and in
+`verify_corpus.py` as `module_ref`. It reports a reference to a name that a
+project module does not define: `from X import Y` where `Y` is absent, and
+`mod.Name` where `mod` is a project module without a `Name`.
+
+Row 3 is the case it was written for. `backend/routes.py` reads
+`models.SupplierCreate` in a function signature, in a file with no
+`from __future__ import annotations`, so the annotation is evaluated eagerly and
+the module dies at import — the whole API, not one endpoint.
+
+What it will not say anything about, and why each one is load-bearing:
+
+| skipped | because |
+|---|---|
+| a module doing `from x import *`, `globals()[...]`, `setattr`, `__getattr__` | it can grow names the source does not show |
+| a file that does not parse | it may define anything; another check reports the parse failure |
+| an import spelling two files could both claim | resolution would be a guess |
+| a local rebound anywhere in the reading file | the binding no longer certainly names the module |
+| a read inside `try/except AttributeError` (or `ImportError`, or bare) | the author is probing on purpose |
+
+That last row is not a precaution, it is a **measured false positive**. The
+first corpus sweep reported `inventory_system_90ee973f`, whose `routes.py` opens
+
+    try:
+        LowStockReport = schemas.LowStockReport
+    except AttributeError:
+        class LowStockReport(BaseModel): ...
+
+reading a name that really is absent from `schemas.py` and then supplying it.
+The code is correct and the route serves. Reporting it would have told a working
+build it was broken and spent an LLM call "fixing" a fallback.
+
+A second gap was found by its own test rather than the corpus: a submodule
+reached through its package (`from . import open_mod`) was bound without ever
+consulting the open-module index, so a module doing `import *` was checked
+anyway. Both directions now go through one `resolve`.
+
+**The corroboration.** Of the 8 builds `module_ref` calls fatal, every one
+independently fails to boot under `runtime_smoke` or `cli_smoke`, and three of
+those runtime errors name the very same missing symbol. No static check in this
+repo has had better evidence behind it.
+
+**§4.36 — fatality is scoped to the application, and routing had to get
+finer.** A test module that cannot import is a broken suite; §4.26 settled that
+this is not a broken build. So `module_ref` never marks fatal from a test file,
+its test-file findings say in their own text that the application is unaffected,
+and it offers them for manual routing via `evidence["manual_findings"]`.
+
+`Pipeline._verify_other_shapes` now honours that per-finding. `_MANUAL_WHEN_WORKING`
+routes a whole check, and one check can now report both kinds — the same
+undefined name is fatal in `backend/routes.py` and advisory in
+`tests/test_routes.py`. Whole-check routing could only have hidden the first or
+degraded a working build for the second. When every finding is routed the
+outcome becomes `verified`; when only some are, the rest still count.
+
+**§4.37 — `schema_attr` stops shrugging.** A project with POST/PUT/PATCH routes
+and zero pydantic models is a `failed`, not a `not_applicable`. Measured before
+it was written: of 32 `web_api` builds in the corpus, exactly one matches, and
+it is row 3. A read-only API legitimately needs no schemas and still answers
+`not_applicable`.
+
+**§4.38 — the prompt states the contract it broke.** `MODELS RULE` in
+`prompts/backend_developer.txt` was one line ("models.py is a flat file with
+Pydantic classes only") against a failure mode that reads nothing like it. It
+now carries the shipped failure and a ❌/✅ pair, matching every other rule in
+that file, and says the thing the model actually got wrong: *every name another
+file reads off models must exist in models.py*, an ORM class cannot be a body
+annotation or a `response_model`, and an API with write routes and no Pydantic
+models is always wrong.
+
+### The two changes that were measured and dropped
+
+Both were on the open-defect list. Detail in `SESSION_PROGRESS.md` §0.1; the
+short version is that neither survived the corpus.
+
+**`feature_coverage`'s "distinctive word" tightening** would have flipped five
+features from covered to missing, and **four of the five flips are wrong** —
+"tag filtering" is implemented as `filter_bookmarks` (the normaliser does not
+strip `-ing`), "reverse a rename" as `undo_log` (a synonym), and two more on
+vocabulary the check never collects. The real finding is sharper than the one
+on the list: the check passes 5/5 corpus projects and **four of those passes are
+on the wrong word.** Fix the vocabulary and the normaliser before the threshold.
+
+**A `node --check` pass over generated JavaScript** finds 1 failure in 31 files,
+and it is a two-line placeholder the placeholder audit already covers. Not worth
+its false-positive surface (JSX in a `.js` file fails it legitimately).
+Executing a plain-JS frontend still needs a DOM and stays open.
 
 ---
 

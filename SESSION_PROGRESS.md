@@ -1,6 +1,159 @@
 # Session Progress — start here
 
-**Last session: 2026-08-31 (Phase 23 — the seventh session).**
+**Last session: 2026-08-31 (Phase 23 — the eighth session). Zero tokens spent.**
+`test_phase23.py` is **765/765**, up from 735. Row 3's actual blocker is closed,
+and two changes that looked obviously worth making were **measured and not
+shipped**, which is the more useful half of the session.
+
+## §0.0 What closed: the name the other file never defined
+
+Row 3 (`inventory_system_3322017e`) shipped `unusable`. `backend/routes.py` was
+written against `models.SupplierCreate`, `ProductCreate`, `WarehouseCreate` and
+`StockMovementCreate`; `backend/models.py` defined **none of them** — only
+SQLAlchemy ORM classes. Nothing in the pipeline looked for that. `schema_attr`
+answered `not_applicable — this project declares no pydantic models`, which for
+a FastAPI build with 18 routes is a red flag reported as a shrug: the models
+were missing, and their absence is exactly what made the check decline to run.
+
+Three things now:
+
+**`tools/module_ref_check.py` (`module_ref`)** reads it off the source. One
+level up from `schema_attr`: that one checks the *fields* of a class both files
+agree exists, this one checks that the name exists at all. It resolves both
+import conventions the pipeline produces — package-relative, and the flat
+sibling form the debugger's `sys.path` shim creates — and skips everything it
+cannot settle (a module doing `import *` or reaching through `globals()`, an
+unparseable file, a spelling two files could claim, a rebound local).
+
+**`schema_attr` no longer shrugs.** POST/PUT/PATCH routes and zero pydantic
+models is a finding. Measured first: of 32 `web_api` builds in the corpus,
+**exactly one matches, and it is row 3.**
+
+**`prompts/backend_developer.txt`** states the cross-file contract the model
+broke, with the failure that shipped, like every other rule in that file. The
+`MODELS RULE` was a single line; it is now the same shape as the RESPONSE MODEL
+and PYDANTIC VERSION rules beside it.
+
+### How much of that is actually evidence
+
+`module_ref` was run against all 41 saved builds before it was wired in.
+
+* It reports **13**. The first sweep contained **one false positive**:
+  `inventory_system_90ee973f` probes for a name it knows may be absent inside
+  `try/except AttributeError` and supplies it. That code is correct and its
+  route serves. A guarded read is now never a finding.
+* Of the **8** builds it calls fatal, **every one independently fails to boot**
+  under `runtime_smoke` or `cli_smoke` — and three of those runtime errors name
+  the very same missing symbol (`ReportConfig`, `supplier_router`,
+  `run_streamlit_ui`). That is the strongest corroboration a static check in
+  this repo has had.
+* Spot-checked by hand where the reasons differ: `ai_report_generator_cf00d934`
+  really does have `from app import get_db` against an `app.py` defining only
+  `main`; `ai_report_generator_941887e1`'s missing `get_weather` is a second,
+  real defect the runtime probe never reached because the app died earlier.
+
+**Fatality is scoped to the shipped application.** A test module that cannot
+import is a broken suite, and §4.26 settled that a broken suite is not a broken
+build. Those findings are reported, say in their own text that the application
+is unaffected, and are handed to the pipeline for manual routing.
+
+That needed a new mechanism: **per-finding manual routing**
+(`evidence["manual_findings"]`). `_MANUAL_WHEN_WORKING` routes whole checks, and
+one check can now report both kinds — an undefined name in `backend/routes.py`
+stops the application, the identical defect in `tests/test_routes.py` stops only
+that test. Whole-check routing could only have hidden the first or degraded a
+working build for the second.
+
+The corpus diff is the one intended `schema_attr` change and nothing else. The
+baseline is re-recorded.
+
+## §0.1 What was measured and deliberately NOT shipped
+
+Both of these were on the open-defect list and both looked obviously worth
+doing. Neither survived contact with the corpus. **Read this before picking
+either back up.**
+
+### `feature_coverage` — the tightening that would have broken four builds
+
+The known gap: it matches on *any* content word, so "email notifications when
+stock runs low" passes on a project with a `/low_stock/` route and no
+notifications. The obvious fix is to require a match on a word **not shared with
+another requested feature** — {email, notification} rather than {stock, low}.
+
+Measured against `corpus_intents.json`: five features flip from covered to
+missing, and **four of the five flips are wrong**:
+
+| feature | flips because | actually implemented as |
+|---|---|---|
+| "tag filtering" | "filtering" ∉ vocab | `filter_bookmarks` — `_normalise` does not strip `-ing` |
+| "reverse a rename" | "reverse" ∉ vocab | `undo_log`, `--undo-log` — a synonym |
+| "a frontend that lists bookmarks" | "frontend" ∉ vocab | `frontend/` — directory names are not in the vocabulary |
+| "adds a bookmark through a form" | "form" ∉ vocab | the page builds inputs without a literal `<form>` |
+
+So the tightening would convert a documented recall gap into four fresh false
+"you didn't build this" findings **on builds known to work** — precisely what
+that module's docstring exists to prevent.
+
+**The sharper statement of the defect**, which is what the next session should
+carry: `feature_coverage` reports 5/5 corpus projects verified, and **four of
+those passes are on the wrong word**. It is right by accident. The vocabulary
+and the normaliser have to be fixed *first* — `-ing` stripping, directory names,
+and something for synonyms — and only then can any tightening be trusted.
+
+The two safe halves (`-ing`, directory names) were written and then dropped as
+well: every corpus feature already passes, so they change **no verdict**, which
+makes them an unverifiable change justified by reasoning alone. That is the
+category this phase keeps getting burned by.
+
+### A JavaScript check — one hit, and it was a stub
+
+"A plain-JS frontend is never executed" is real: `frontend_debugger` and the
+tester's Vitest path both require `frontend/package.json`, which that shape
+lacks. Node 25 is on this machine, so `node --check` on every `.js` file was the
+cheap candidate.
+
+Measured across the corpus: **31 JS files, 1 failure**, and it is
+`llm_api_key_health_dashboard/frontend/App.js`, a two-line placeholder
+(`# Root React component`) that the placeholder audit already covers. A checker
+earning one already-known hit is not worth its false-positive surface — and it
+has one, since JSX in a `.js` file fails `node --check` legitimately.
+
+**Executing a plain-JS frontend still needs a DOM**, and a hand-rolled `document`
+shim would be a false-positive generator against exactly the code it is meant to
+check. This stays open, and it stays a browser-or-nothing problem.
+
+## §0.2 What is still open
+
+Unchanged from the seventh session except where noted:
+
+* **`feature_coverage`'s vocabulary is wrong before its threshold is** — see
+  above. This is now the top no-quota item.
+* **A plain-JS frontend is never executed** — measured, still open, needs a
+  browser.
+* `web_asset_check` skips URLs it cannot resolve confidently (recall gap).
+* `repair_guard`'s thresholds are judgment, not measurement.
+* The nine-condition `done` gate is reachable but unexamined.
+* `node_frontend` has no executing verifier.
+
+**And the part that is not on any list.** `module_ref`, the `schema_attr`
+change and the prompt tightening have all been validated against 41 saved
+builds and **none of them has run inside a live build.** Row 3 is the standing
+proof that this matters: both of its blockers were invisible to all 41. The
+corpus is free and it caught a real false positive again this session, but
+"nothing left to fix" remains a claim no amount of offline work can support.
+
+**The next row should be row 3 re-run.** It is the one build whose blockers are
+now all supposedly closed — the `__future__` shim (§4.33), the sibling imports
+(§4.34), and now the missing schemas — and it is the cheapest way to find out
+whether any of that is true.
+
+
+
+---
+
+## §0.3 The seventh session (2026-08-31)
+
+**Was the last session before the eighth.**
 `test_phase23.py` is **705/705**, up from 541. Row 2 was rebuilt and **passes
 the matrix criterion**, Phase B1 is done, and six defects were closed. The
 session's most important results are not the row but what it exposed.
