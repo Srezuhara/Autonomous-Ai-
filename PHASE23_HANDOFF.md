@@ -82,6 +82,61 @@ here.
 > from "Remaining Work", which says the application was executed and verified
 > and that these are the things the automated checks could not confirm.
 
+**§4.33 — the sys.path shim outranked `__future__`, and killed row 3.**
+Row 3 (`inventory_system_3322017e`) shipped **`unusable`** with its entire API
+unimportable. `backend/models.py` was generated *correctly*, with
+`from __future__ import annotations` on line 1. `Debugger._inject_syspath` then
+prepended its `sys.path` block above it, pushing the future import to line 10 —
+and Python refuses the file outright: *"from __future__ imports must occur at
+the beginning of the file"*. The generated code was right and the pipeline broke
+it, which is this phase's recurring lesson: **a red verification result is a
+hypothesis about the pipeline first.**
+
+`_inject_syspath` accounted for a shebang and a module docstring, but not for
+the one import the language requires to come first. It now finds the insertion
+point with `ast` — handling multi-line `from __future__ import (a,
+ b)` and
+repeated future imports — with a conservative line-scan fallback for files that
+do not parse, which is exactly when this runs. Six variants are tested; five of
+them were `SyntaxError` before.
+
+This could break **any** generated file using `from __future__ import
+annotations`, which modern generated Python uses constantly. It is the highest
+-value thing waiting on the next live row.
+
+### What row 3 proved, and what it cost
+
+Three of this session's changes fired live for the first time, all correctly:
+
+| | |
+|---|---|
+| **§4.22** ledger reconciliation | A real 429 arrived and re-anchored the ledger by **+102,730 tokens** |
+| **§4.31** `EXECUTING_CHECKS` | The only VERIFIED check was `feature_coverage`, which is *static* — correctly **not** counted as evidence the app works |
+| **§4.26** manual-check routing | Because nothing executed the artifact, the `generated_tests` failures were **counted against the build** rather than handed over as manual testing |
+
+`static_smoke` was correctly `not_applicable` (no HTML page), the phantom-defect
+count was **0**, and the `unusable` verdict fired instead of the build shipping
+as `done_with_context`. The driver recorded
+`verified: NO — failed: runtime_smoke; for manual testing: generated_tests`.
+
+**On the ledger, a number worth keeping.** The build's own accounting says it
+spent **19,031** tokens on `20b`; the ledger moved ~121K and the 429 added
+102,730. Those reconcile, which means the ~103K was **accumulated drift, not
+this row's spend**. The "121,484 left" that authorised the row was substantially
+wrong, and the fast model ran dry after ~19K of recorded consumption. Treat
+`--dry-run` as even weaker evidence than §0.-1 already says.
+
+### Still open from row 3
+
+`backend/main.py` mixes conventions for sibling modules — `from backend import
+models` (package) beside `from routes import router` (top-level) — and the
+top-level form is only possible because the shim puts `backend/` on `sys.path`.
+Loading `routes.py` outside its package then breaks its own
+`from . import models`. Repairing the `__future__` damage on a clone exposes
+this as the **second, independent** blocker. Not yet diagnosed as to whether the
+generator or a repair pass produced it; the comment above it in the generated
+file (`# Import project modules using absolute imports`) hints at a repair pass.
+
 **§4.32 — a static page had to be served to count as verified.**
 `§4.31` raised the obvious question: is `runtime_smoke` reaching everything it
 should? Measured, not assumed — and **it is**. Of the 30 builds with no verified

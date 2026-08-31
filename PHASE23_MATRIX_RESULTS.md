@@ -1,37 +1,44 @@
 # Phase 23 A2 — live matrix results
 
-*Run 2026-08-31T11:31:10*
+*Run 2026-08-31T15:07:45*
 
 Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done_with_context` with a downloadable ZIP, and every build that boots reports **0 5xx** from the runtime smoke test.
 
-**Result: 1 of 1 rows meet BOTH halves (matrix incomplete).** 1 shipped a valid ZIP.
+**Result: 1 of 2 rows meet BOTH halves (matrix incomplete).** 1 shipped a valid ZIP.
 
-> Both halves are now read from the API. The second one — did the artifact actually run — used to exist only as a line in the server log, so this file reported the first half and told the reader to grep for the rest. A row passes it when every check either verified the artifact or correctly did not apply, and at least one check executed it: four not-applicables are not evidence, and a check that never ran is a hole, not a pass.
+> Both halves are now read from the API. The second one — did the artifact actually run — used to exist only as a line in the server log, so this file reported the first half and told the reader to grep for the rest. A row passes it when every check either verified the artifact or correctly did not apply, and at least one check executed it: four not-applicables are not evidence, and a check that never ran is a hole, not a pass. `generated_tests` is reported but does not decide a row — it asks whether the suite the build *ships* runs, not whether the thing built works, and a build can serve every route it declares while its generated tests do not collect.
 
 | Row | Shape | Status | Verified | Tokens | Duration | Files | ZIP |
 |-----|-------|--------|----------|--------|----------|-------|-----|
-| 2 | medium FastAPI + JS frontend | `done_with_context` | yes | 173,307 | 1752s | 26 | yes |
+| 2 | medium FastAPI + JS frontend | `done_with_context` | yes | 173,307 | 1752s | 26 | yes *(earlier run)* |
+| 3 | complex / multi-entity | `unusable` | NO | 174,213 | 1457s | 17 | yes |
 
 ## Per-row detail
 
-### Row 2 — medium FastAPI + JS frontend
+### Row 3 — complex / multi-entity
 
-- build_id: `e045ca2d-dfc9-4799-b199-a14fae4501b7`
-- status: `done_with_context` — Build completed with 2 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
+- build_id: `3322017e-2f19-492f-94c2-3d02cd4d6b19`
+- status: `unusable` — The build completed and the code is downloadable, but it does not run: the application does not start: SyntaxError: from __future__ imports must occur at the beginning of the file (models.py, line 10) (at backend/main.py:19 in <module>). Every endpoint is unreachable.
 - progress: 100.0%
-- tokens by model: `{"openai/gpt-oss-20b": 100673, "openai/gpt-oss-120b": 72634}`
-- download: HTTP 200, application/zip, 23,911 bytes
+- tokens by model: `{"openai/gpt-oss-20b": 19031, "openai/gpt-oss-120b": 155182}`
+- download: HTTP 200, application/zip, 18,608 bytes
 - expected to boot: yes
-- build shape: web_api+static_frontend
-- smoke: 7/7 routes responded without a server error
-- verified: **yes** — verified by runtime_smoke, web_assets, feature_coverage, schema_attr
+- build shape: web_api
+- smoke: app failed to load: SyntaxError: from __future__ imports must occur at the beginning of the file (models.py, line 10) (at backend/main.py:19 in <module>)
+- verified: **NO** — failed: runtime_smoke; for manual testing: generated_tests
 
 | Check | Status | What it did |
 |---|---|---|
-| `runtime_smoke` | verified | 7/7 routes responded without a server error |
+| `runtime_smoke` | failed | the app at backend/main.py raises while being imported |
 | `cli_smoke` | not_applicable | this project declares no command-line entry point |
-| `web_assets` | verified | parsed 1 page(s), 3 frontend call(s) checked against 3 declared route(s) |
+| `web_assets` | not_applicable | this project ships no HTML page |
+| `static_smoke` | not_applicable | this project ships no HTML page |
 | `package_smoke` | not_applicable | this project is run, not imported; its own verifier covers it |
-| `feature_coverage` | verified | 4/4 requested feature(s) have supporting code (7 route(s), 19 function(s) across web_api+static_frontend) |
-| `schema_attr` | verified | 7 model(s) checked field-by-field (0 skipped as open) |
+| `feature_coverage` | verified | 6/6 requested feature(s) have supporting code (18 route(s), 24 function(s) across web_api) |
+| `schema_attr` | not_applicable | this project declares no pydantic models |
+| `generated_tests` | failed | pytest exit 2, 2 error |
 
+- 🚨 the application does not start: SyntaxError: from __future__ imports must occur at the beginning of the file (models.py, line 10) (at backend/main.py:19 in <module>). Every endpoint is unreachable.
+- 🚨 the project's own test suite does not run: 2 of its tests error before executing
+- 🚨 ERROR tests/test_models.py
+- 🚨 ERROR tests/test_routers.py

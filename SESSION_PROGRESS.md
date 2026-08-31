@@ -212,6 +212,22 @@ pass — is the one that runs out. There are two floors now, 90,000 fast and
 70,000 heavy, and `--dry-run` refuses per model against its own. The start that
 went wrong on 2026-08-30 (20b at 73,286) is now refused.
 
+### Row 3 ran, and the pipeline broke its own output
+
+`inventory_system_3322017e` shipped **`unusable`**: `models.py` was generated
+correctly with `from __future__ import annotations` first, and the debugger's
+`sys.path` shim was injected above it, which Python refuses. **Fixed** (§4.33) —
+the insertion point is found with `ast` now. This could break any generated file
+using `from __future__`, and it is the top thing the next live row must prove.
+
+Three changes fired live and correctly: the ledger reconciled from a real 429
+(**+102,730**), `EXECUTING_CHECKS` refused to count a static `feature_coverage`
+as evidence, and the test-suite findings were counted rather than excused
+because nothing had executed the artifact.
+
+A second blocker remains open: `main.py` mixes package and top-level imports for
+sibling modules. See `PHASE23_HANDOFF.md`.
+
 ### Next session — do this
 
 **Quota has refilled: `20b` ~121K, `120b` ~150K, and `--dry-run` says start.**

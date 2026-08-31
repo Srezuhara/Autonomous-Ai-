@@ -5946,6 +5946,101 @@ check("...and says what it actually looked for",
 shutil.rmtree(_S32, ignore_errors=True)
 
 
+# -- 4.33 The sys.path shim must not outrank __future__ -----------------------
+# Row 3 (2026-08-31) shipped `unusable` with its entire API unimportable.
+# backend/models.py was generated correctly with `from __future__ import
+# annotations` on line 1; `Debugger._inject_syspath` then prepended its sys.path
+# block ABOVE it, pushing the future import to line 10, and Python refuses the
+# file: "from __future__ imports must occur at the beginning of the file".
+# The generated code was right and the pipeline broke it -- which is why a red
+# verification result is a hypothesis about the pipeline first.
+
+import ast as _ast33                                               # noqa: E402
+from agents.debugger import Debugger as _Dbg33                     # noqa: E402
+
+_F33 = Path(tempfile.mkdtemp(prefix="future33_"))
+_F33_OUT = _F33 / "out"
+_F33_OUT.mkdir(parents=True)
+
+_F33_CASES = {
+    "plain_future":
+        "from __future__ import annotations\n\nimport os\nX = 1\n",
+    "docstring_then_future":
+        '"""Doc."""\nfrom __future__ import annotations\n\nimport os\n',
+    "shebang_doc_future":
+        '#!/usr/bin/env python\n"""Doc."""\n'
+        "from __future__ import annotations\nimport os\n",
+    "multiline_future":
+        "from __future__ import (annotations,\n"
+        "                        generator_stop)\n\nimport os\n",
+    "two_future_lines":
+        "from __future__ import annotations\n"
+        "from __future__ import generator_stop\n\nimport os\n",
+    "no_future":
+        '"""Doc."""\nimport os\nY = 2\n',
+}
+
+
+def _f33_inject(name, src):
+    proj = _F33_OUT / name
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / "m.py").write_text(src, encoding="utf-8")
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_F33_OUT)
+        _Dbg33.__new__(_Dbg33)._inject_syspath(f"{name}/m.py")
+    finally:
+        config.OUTPUT_DIR = real
+    return (proj / "m.py").read_text(encoding="utf-8")
+
+
+for _name, _src in _F33_CASES.items():
+    _out = _f33_inject(_name, _src)
+    try:
+        _ast33.parse(_out)
+        _parses, _why = True, ""
+    except SyntaxError as e:
+        _parses, _why = False, e.msg
+    check(f"the shim leaves `{_name}` importable", _parses, _why)
+    check(f"...and the shim was actually injected into `{_name}`",
+          "_sys.path.insert" in _out)
+
+# The exact shape row 3 died on: the shim must end up BELOW the future import.
+_r33 = _f33_inject("row3_shape",
+                   "from __future__ import annotations\n\nimport datetime\n")
+_r33_lines = [l for l in _r33.splitlines() if l.strip()]
+check("the future import still comes first, above the shim",
+      _r33_lines[0].startswith("from __future__"), _r33_lines[0][:60])
+check("...and the shim follows it rather than preceding it",
+      _r33.index("from __future__") < _r33.index("_sys.path.insert"))
+
+# A file that does not parse is exactly when this runs, so the fallback matters.
+_broken = _f33_inject(
+    "unparseable",
+    "from __future__ import annotations\ndef f(:\n    pass\n")
+check("an unparseable file still gets the shim below its future import",
+      _broken.index("from __future__") < _broken.index("_sys.path.insert"),
+      _broken[:80])
+
+# Re-injection must stay idempotent: the block is stripped and re-added, and it
+# must not migrate above the future import on the second pass.
+_again = _f33_inject("plain_future", _f33_inject(
+    "plain_future", _F33_CASES["plain_future"]))
+check("re-injecting does not move the shim above the future import",
+      _again.index("from __future__") < _again.index("_sys.path.insert"))
+check("...and does not duplicate the shim",
+      _again.count("_grandparent = ") == 1, str(_again.count("_grandparent = ")))
+
+# The helper itself, on input the line-scanner has to handle alone.
+check("the scanner stops at the first line that is not a future import",
+      _Dbg33._after_future_imports(
+          "from __future__ import annotations\nimport os\nfrom __future__ import x\n",
+          ["from __future__ import annotations\n", "import os\n",
+           "from __future__ import x\n"], 0) == 1)
+
+shutil.rmtree(_F33, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

@@ -859,6 +859,52 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 create_file(init, '"""Package init."""\n')
                 logger.info(f"  📦 Added __init__.py: {folder}/")
 
+    @staticmethod
+    def _after_future_imports(content: str, lines: list, insert_at: int) -> int:
+        """
+        The first line index at which code may be inserted.
+
+        Parsed with `ast` rather than scanned, because a `__future__` import can
+        span lines (`from __future__ import (annotations,
+ generator_stop)`)
+        and a regex that misses the closing paren inserts into the middle of a
+        statement. Falls back to a line scan when the file does not parse —
+        which is exactly when this runs, since it is repairing a broken build.
+        """
+        try:
+            import ast
+            tree = ast.parse(content)
+            last = 0
+            for node in tree.body:
+                if (isinstance(node, ast.ImportFrom)
+                        and node.module == "__future__"):
+                    last = max(last, getattr(node, "end_lineno", node.lineno))
+                elif isinstance(node, ast.Expr) and isinstance(
+                        getattr(node, "value", None), ast.Constant):
+                    continue  # the docstring, already accounted for
+                else:
+                    break  # `__future__` imports cannot follow real code
+            if last:
+                return max(insert_at, last)
+        except Exception:
+            pass
+
+        # Unparseable: scan conservatively. Only advance past lines that are
+        # plainly part of a __future__ import, and stop at the first thing that
+        # is not, so a broken file never has code inserted into a statement.
+        idx, depth = insert_at, 0
+        while idx < len(lines):
+            stripped = lines[idx].strip()
+            if depth == 0:
+                if not stripped.startswith("from __future__"):
+                    break
+            depth += lines[idx].count("(") - lines[idx].count(")")
+            idx += 1
+            if depth <= 0:
+                depth = 0
+                insert_at = idx
+        return insert_at
+
     def _inject_syspath(self, file_path: str) -> bool:
         try:
             content = read_file(file_path)
@@ -880,6 +926,19 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 while insert_at < len(lines) and '"""' not in lines[insert_at]:
                     insert_at += 1
                 insert_at += 1
+
+            # `from __future__ import ...` MUST be the first statement after the
+            # docstring — the interpreter refuses the file otherwise. Injecting
+            # above one turns a perfectly good module into
+            # `SyntaxError: from __future__ imports must occur at the beginning
+            # of the file`, and the app never imports.
+            #
+            # Row 3 (2026-08-31) died exactly here: `backend/models.py` was
+            # generated correctly with `from __future__ import annotations` on
+            # line 1, this block was prepended above it, and the build shipped
+            # `unusable` with the whole API unimportable. The generated code was
+            # right and the pipeline broke it.
+            insert_at = self._after_future_imports(content, lines, insert_at)
 
             new_content = (
                 "".join(lines[:insert_at])
