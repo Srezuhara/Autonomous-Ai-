@@ -151,7 +151,15 @@ offline suites still green.
 
 Five sub-phases, sequenced so each lands on the one before it.
 
-### B1. Persistence layer first — SQLAlchemy + Alembic (4.3)
+### B1. Persistence layer first — SQLAlchemy + Alembic (4.3) — **DONE 2026-08-31**
+
+> Implemented. `api_platform/db/` + `alembic/`, the seam held (zero call-site
+> changes), and the live database migrated with all 73 builds intact and stamped
+> at `0002_indexes`. Two departures from the text below, both deliberate and
+> explained in `PHASE23_HANDOFF.md`: timestamp columns are `String` rather than
+> `DateTime` (every consumer expects the ISO string it has always received), and
+> `QueuePool` applies to Postgres only — file-backed SQLite uses `NullPool`,
+> because a pool holds the file open and Windows then refuses to delete it.
 
 Auth needs a schema change, so migrations must exist before auth, not after.
 

@@ -14,6 +14,20 @@ the 90,000 floor at "151,303 left" and ran the fast model dry mid-tester. The
 into the ledger instead of into a log line. **Details and the two consequences
 for planning: `PHASE23_QUOTA_RUNBOOK.md` §0.-1.**
 
+### Phase B1 is done — persistence on SQLAlchemy + Alembic
+
+The no-quota work item from the runbook. `api_platform/db/` holds the models and
+engine, `alembic/` holds the revisions, and **no call site changed** — the
+function signatures in `api_platform/database.py` were the seam and they still
+are. The live database was migrated with every row intact (73 projects, 1,164
+files, 1,023 progress rows) and now carries the lookup indexes the old
+`ALTER TABLE ... except OperationalError` block could never add: a status poll
+now does an index search instead of scanning all 1,023 progress rows.
+`datetime.utcnow()` is gone from both `database.py` and `runner.py`.
+
+Detail, and the four decisions worth knowing about, in `PHASE23_HANDOFF.md`.
+**B2 (auth) is unblocked** — it needs a schema change, which is now a revision.
+
 ### Row 2 — the result the runbook asked for
 
 `bookmark_manager_e045ca2d`, `done_with_context` in 1752.5s, 173,307 tokens

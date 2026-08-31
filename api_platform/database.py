@@ -1,123 +1,211 @@
 """
-api_platform/database.py  (Phase 17 — token tracking columns)
-=============================================================
-Changes vs Phase 14:
-  - projects table gains 3 new columns:
-      prompt_tokens     INTEGER DEFAULT 0
-      completion_tokens INTEGER DEFAULT 0
-      total_tokens      INTEGER DEFAULT 0
-  - initialize_db() uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS so
-    existing databases are migrated automatically on server start.
-    SQLite does not support IF NOT EXISTS on ADD COLUMN, so we catch
-    OperationalError (column already exists) silently instead.
-  - list_projects() and get_project() both return the new fields.
-  - No other behaviour changes.
+api_platform/database.py  (Phase B1 — SQLAlchemy + Alembic behind the seam)
+===========================================================================
+The function signatures in this module are the seam the whole platform is
+written against: `runner.py`, all five route modules, `main.py` and three test
+suites call them, and none of those changed when the storage underneath did.
+Only the bodies here were reimplemented.
+
+What changed
+------------
+  - Storage is SQLAlchemy (`api_platform/db/`), not hand-written sqlite3.
+  - `DATABASE_URL` selects the backend. Unset, it is derived from `DB_PATH`
+    exactly as before, so the local workflow and the existing
+    `generated_projects/platform.db` are untouched. Postgres is opt-in.
+  - Schema changes are Alembic revisions. The old
+    `ALTER TABLE ... except OperationalError` block could add a column but never
+    rename, drop, backfill or re-type one, and left no record of what any given
+    database had been through. `initialize_db()` still reconciles legacy columns
+    on an unstamped database, because a database that predates Alembic has to be
+    brought up to the baseline before it can be stamped at it.
+  - `datetime.utcnow()` (deprecated in 3.12) is `datetime.now(timezone.utc)`.
+    The stored format is unchanged: a naive ISO-8601 string, so existing rows
+    and new ones sort and compare against each other exactly as before.
+
+What deliberately did NOT change
+--------------------------------
+  - Every function returns plain `dict`s with the same keys, in the same types.
+    `created_at` and friends stay ISO strings — see `db/models.py` for why
+    turning them into `datetime` objects would be a silent API change.
+  - `DB_PATH` remains a module-level name that can be reassigned. Three test
+    suites do exactly that, and the engine is resolved lazily so it keeps
+    working.
 """
 
+import logging
+import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+from sqlalchemy import delete, insert, select, text, update
+
+from api_platform.db import (
+    Base, BuildProgress, Project, ProjectFile, PROJECT_COLUMNS,
+    dispose_all, get_engine, session_scope,
+)
 
 try:
     from config import OUTPUT_DIR
 except ImportError:
     OUTPUT_DIR = "generated_projects"
 
+logger = logging.getLogger(__name__)
+
 DB_PATH = Path(OUTPUT_DIR) / "platform.db"
 
 
-def initialize_db():
-    """Create tables if they don't exist and migrate existing schemas."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with get_connection() as conn:
-        conn.executescript("""
-            PRAGMA journal_mode=WAL;
-            PRAGMA foreign_keys=ON;
+def _utcnow_iso() -> str:
+    """
+    Now, as the platform has always stored it.
 
-            CREATE TABLE IF NOT EXISTS projects (
-                build_id          TEXT PRIMARY KEY,
-                prompt            TEXT NOT NULL,
-                app_name          TEXT,
-                app_type          TEXT,
-                complexity        TEXT,
-                status            TEXT NOT NULL,
-                debug_score       TEXT,
-                review_score      REAL,
-                test_score        TEXT,
-                output_path       TEXT,
-                created_at        TIMESTAMP NOT NULL,
-                completed_at      TIMESTAMP,
-                duration_seconds  REAL,
-                prompt_tokens     INTEGER DEFAULT 0,
-                completion_tokens INTEGER DEFAULT 0,
-                total_tokens      INTEGER DEFAULT 0
-            );
+    `datetime.utcnow()` is deprecated from 3.12. Its replacement is
+    timezone-aware, and `.isoformat()` on an aware datetime appends "+00:00" —
+    which would make new rows sort and compare differently from the ~50 rows
+    already on disk. Dropping the tzinfo keeps the stored format identical.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
-            CREATE TABLE IF NOT EXISTS files (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                build_id  TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                file_type TEXT,
-                FOREIGN KEY (build_id) REFERENCES projects(build_id) ON DELETE CASCADE
-            );
 
-            CREATE TABLE IF NOT EXISTS build_progress (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                build_id  TEXT NOT NULL,
-                step      INTEGER NOT NULL,
-                step_name TEXT NOT NULL,
-                status    TEXT NOT NULL,
-                timestamp TIMESTAMP NOT NULL,
-                data      TEXT,
-                FOREIGN KEY (build_id) REFERENCES projects(build_id) ON DELETE CASCADE
-            );
-        """)
-        conn.commit()
+# ── Legacy reconciliation ─────────────────────────────────────────────────────
+# Columns added after the Phase 14 baseline, in the order they arrived. A
+# database created before Alembic may be missing any suffix of this list, and
+# has to be brought to the baseline before it can be stamped at it — stamping an
+# out-of-date database would tell Alembic a lie it never re-checks.
+_LEGACY_COLUMNS = [
+    ("prompt_tokens",     "INTEGER DEFAULT 0"),
+    ("completion_tokens", "INTEGER DEFAULT 0"),
+    ("total_tokens",      "INTEGER DEFAULT 0"),
+    ("completion_reason", "TEXT"),
+    ("progress_percent",  "REAL"),
+    ("tokens_by_model",   "TEXT"),
+    ("smoke_summary",     "TEXT"),
+    ("verification",      "TEXT"),
+    ("build_shape",       "TEXT"),
+]
 
-    # ── Migrate existing DB: add token columns if missing ─────────────────────
-    # SQLite ALTER TABLE ADD COLUMN raises OperationalError if column exists.
-    # We catch that silently so the server can start cleanly against old DBs.
-    new_columns = [
-        ("prompt_tokens",     "INTEGER DEFAULT 0"),
-        ("completion_tokens", "INTEGER DEFAULT 0"),
-        ("total_tokens",      "INTEGER DEFAULT 0"),
-        # Phase 21: why a build ended as done_with_context, and how far it got
-        # before remediation/quota interception took over.
-        ("completion_reason", "TEXT"),
-        ("progress_percent",  "REAL"),
-        # Phase 23: JSON {model: tokens}. The totals above cannot say which
-        # model's daily quota a build spent, which is what the token ledger
-        # needs to rebuild itself after a restart instead of estimating.
-        ("tokens_by_model",   "TEXT"),
-        # Whether the thing that was built actually works, and how we know.
-        #
-        # `smoke_summary` was set on BuildResult and read only by main.py's CLI
-        # table — it never reached the database or any API route. That is why
-        # run_live_matrix.py has to tell the operator to grep server.log, and
-        # why the matrix has never been able to evaluate the second half of its
-        # own pass criterion ("every build that boots reports 0 5xx").
-        ("smoke_summary",     "TEXT"),
-        # JSON list of VerificationOutcome dicts: which checks ran, on which
-        # shape, what they executed, what they found. A NOT_RUN entry here is
-        # the record that a build went unverified, which used to be
-        # indistinguishable from one that passed.
-        ("verification",      "TEXT"),
-        ("build_shape",       "TEXT"),
-    ]
-    with get_connection() as conn:
-        for col_name, col_def in new_columns:
+
+def _reconcile_legacy_columns(engine) -> list[str]:
+    """Add any baseline column an Alembic-less database is missing."""
+    added: list[str] = []
+    if engine.dialect.name != "sqlite":
+        return added
+    with engine.begin() as conn:
+        have = {
+            row[1] for row in conn.exec_driver_sql(
+                "PRAGMA table_info(projects)"
+            ).fetchall()
+        }
+        if not have:
+            return added
+        for name, ddl in _LEGACY_COLUMNS:
+            if name in have:
+                continue
             try:
-                conn.execute(
-                    f"ALTER TABLE projects ADD COLUMN {col_name} {col_def}"
+                conn.exec_driver_sql(
+                    f"ALTER TABLE projects ADD COLUMN {name} {ddl}"
                 )
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass  # column already exists — safe to ignore
+                added.append(name)
+            except Exception:
+                # Another process may have added it between the read and here.
+                pass
+    return added
+
+
+def _alembic_config(engine):
+    """The Alembic config, pointed at the database this process is using."""
+    try:
+        from alembic.config import Config
+    except Exception:
+        return None
+    ini = Path(__file__).resolve().parent.parent / "alembic.ini"
+    if not ini.is_file():
+        return None
+    cfg = Config(str(ini))
+    cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    cfg.attributes["connection"] = None
+    return cfg
+
+
+def _under_version_control(engine) -> bool:
+    try:
+        with engine.connect() as conn:
+            if engine.dialect.name == "sqlite":
+                row = conn.exec_driver_sql(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='alembic_version'"
+                ).fetchone()
+            else:
+                row = conn.exec_driver_sql(
+                    "SELECT to_regclass('alembic_version')"
+                ).fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
+def _migrate(engine) -> None:
+    """
+    Bring the database under Alembic, then up to head.
+
+    The ~50 live builds in `platform.db` must survive, so a database that
+    already carries the baseline schema is *stamped* at the baseline rather than
+    migrated to it — re-running the baseline would try to create tables that
+    hold real data. Only after that does it get the revisions that came later.
+
+    Both halves matter. Stamping alone leaves a database sitting at the
+    baseline forever; `create_all` cannot help, because it creates indexes only
+    for tables it creates, so the live database had none of the lookup indexes
+    revision 0002 adds.
+    """
+    try:
+        from alembic import command
+    except Exception:
+        return  # Alembic is optional at runtime; the schema is already correct.
+
+    cfg = _alembic_config(engine)
+    if cfg is None:
+        return
+
+    try:
+        if not _under_version_control(engine):
+            command.stamp(cfg, "0001_baseline")
+            logger.info(
+                "🗃️  Existing database stamped at the Alembic baseline"
+            )
+        command.upgrade(cfg, "head")
+    except Exception as e:
+        logger.warning(f"⚠️  Alembic migration skipped: {e}")
+
+
+def initialize_db():
+    """Create tables if they don't exist and bring an old schema up to date."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    engine = get_engine()
+
+    Base.metadata.create_all(engine)
+
+    added = _reconcile_legacy_columns(engine)
+    if added:
+        logger.info(
+            f"🗃️  Added {len(added)} legacy column(s) predating Alembic: "
+            f"{', '.join(added)}"
+        )
+
+    _migrate(engine)
 
 
 @contextmanager
 def get_connection():
+    """
+    A raw DBAPI connection, kept for anything that still wants one.
+
+    The platform's own code no longer uses this — every function below goes
+    through SQLAlchemy — but it was public, and a caller holding a
+    `sqlite3.Row`-shaped cursor should not break because the layer underneath
+    changed.
+    """
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
@@ -127,18 +215,20 @@ def get_connection():
         conn.close()
 
 
+def _as_dict(obj) -> dict:
+    """A mapped row as the plain dict every caller of this module expects."""
+    return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
+
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 def create_project(build_id: str, prompt: str) -> dict:
-    now = datetime.utcnow().isoformat()
-    with get_connection() as conn:
-        conn.execute(
-            """INSERT INTO projects (build_id, prompt, status, created_at,
-               prompt_tokens, completion_tokens, total_tokens)
-               VALUES (?, ?, 'pending', ?, 0, 0, 0)""",
-            (build_id, prompt, now),
-        )
-        conn.commit()
+    now = _utcnow_iso()
+    with session_scope() as s:
+        s.add(Project(
+            build_id=build_id, prompt=prompt, status="pending", created_at=now,
+            prompt_tokens=0, completion_tokens=0, total_tokens=0,
+        ))
     return {
         "build_id":  build_id,
         "prompt":    prompt,
@@ -148,46 +238,66 @@ def create_project(build_id: str, prompt: str) -> dict:
 
 
 def get_project(build_id: str) -> dict | None:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM projects WHERE build_id = ?", (build_id,)
-        ).fetchone()
-        return dict(row) if row else None
+    with session_scope() as s:
+        row = s.get(Project, build_id)
+        return _as_dict(row) if row else None
+
+
+#: The columns `list_projects` has always returned. It is a strict subset of the
+#: table — `prompt` aside, the heavy JSON blobs (verification, smoke_summary)
+#: are deliberately not in the list view.
+_LIST_COLUMNS = (
+    "build_id", "prompt", "app_name", "app_type", "complexity", "status",
+    "debug_score", "review_score", "test_score", "output_path",
+    "created_at", "completed_at", "duration_seconds",
+    "prompt_tokens", "completion_tokens", "total_tokens",
+    "completion_reason", "progress_percent", "tokens_by_model",
+)
 
 
 def list_projects(limit: int = 100, offset: int = 0) -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            """SELECT build_id, prompt, app_name, app_type, complexity, status,
-                      debug_score, review_score, test_score, output_path,
-                      created_at, completed_at, duration_seconds,
-                      prompt_tokens, completion_tokens, total_tokens,
-                      completion_reason, progress_percent, tokens_by_model
-               FROM projects ORDER BY created_at DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
-        return [dict(r) for r in rows]
+    cols = [getattr(Project, name) for name in _LIST_COLUMNS]
+    with session_scope() as s:
+        rows = s.execute(
+            select(*cols)
+            .order_by(Project.created_at.desc())
+            .limit(limit).offset(offset)
+        ).all()
+    return [dict(zip(_LIST_COLUMNS, r)) for r in rows]
 
 
 def update_project(build_id: str, **fields) -> bool:
     if not fields:
         return False
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [build_id]
-    with get_connection() as conn:
-        result = conn.execute(
-            f"UPDATE projects SET {set_clause} WHERE build_id = ?", values
+
+    # The previous implementation interpolated caller-supplied keys directly
+    # into the SET clause. Every real call passes a literal column name, so
+    # rejecting anything else costs nothing and closes the hole.
+    unknown = set(fields) - PROJECT_COLUMNS
+    if unknown:
+        raise ValueError(
+            f"update_project received column(s) that do not exist: "
+            f"{', '.join(sorted(unknown))}"
         )
-        conn.commit()
+
+    with session_scope() as s:
+        result = s.execute(
+            update(Project)
+            .where(Project.build_id == build_id)
+            .values(**fields)
+        )
         return result.rowcount > 0
 
 
 def delete_project(build_id: str) -> bool:
-    with get_connection() as conn:
-        result = conn.execute(
-            "DELETE FROM projects WHERE build_id = ?", (build_id,)
-        )
-        conn.commit()
+    with session_scope() as s:
+        # ON DELETE CASCADE covers files/build_progress, but only when the
+        # sqlite pragma is on — which `db/__init__` sets per connection. The
+        # explicit deletes make the behaviour independent of that, because a
+        # half-deleted build is worse than a slow one.
+        s.execute(delete(ProjectFile).where(ProjectFile.build_id == build_id))
+        s.execute(delete(BuildProgress).where(BuildProgress.build_id == build_id))
+        result = s.execute(delete(Project).where(Project.build_id == build_id))
         return result.rowcount > 0
 
 
@@ -196,21 +306,20 @@ def delete_project(build_id: str) -> bool:
 def add_project_file(
     build_id: str, file_path: str, file_type: str | None = None
 ):
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO files (build_id, file_path, file_type) VALUES (?, ?, ?)",
-            (build_id, file_path, file_type),
-        )
-        conn.commit()
+    with session_scope() as s:
+        s.add(ProjectFile(
+            build_id=build_id, file_path=file_path, file_type=file_type,
+        ))
 
 
 def get_project_files(build_id: str) -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, build_id, file_path, file_type FROM files WHERE build_id = ?",
-            (build_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+    cols = ("id", "build_id", "file_path", "file_type")
+    with session_scope() as s:
+        rows = s.execute(
+            select(*[getattr(ProjectFile, c) for c in cols])
+            .where(ProjectFile.build_id == build_id)
+        ).all()
+    return [dict(zip(cols, r)) for r in rows]
 
 
 # ── Build progress ────────────────────────────────────────────────────────────
@@ -222,22 +331,19 @@ def add_build_step(
     status:    str,
     data:      str | None = None,
 ):
-    now = datetime.utcnow().isoformat()
-    with get_connection() as conn:
-        conn.execute(
-            """INSERT INTO build_progress
-               (build_id, step, step_name, status, timestamp, data)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (build_id, step, step_name, status, now, data),
-        )
-        conn.commit()
+    with session_scope() as s:
+        s.add(BuildProgress(
+            build_id=build_id, step=step, step_name=step_name, status=status,
+            timestamp=_utcnow_iso(), data=data,
+        ))
 
 
 def get_build_progress(build_id: str) -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            """SELECT id, build_id, step, step_name, status, timestamp, data
-               FROM build_progress WHERE build_id = ? ORDER BY step ASC""",
-            (build_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+    cols = ("id", "build_id", "step", "step_name", "status", "timestamp", "data")
+    with session_scope() as s:
+        rows = s.execute(
+            select(*[getattr(BuildProgress, c) for c in cols])
+            .where(BuildProgress.build_id == build_id)
+            .order_by(BuildProgress.step.asc())
+        ).all()
+    return [dict(zip(cols, r)) for r in rows]

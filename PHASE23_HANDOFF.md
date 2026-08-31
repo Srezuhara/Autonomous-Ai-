@@ -91,6 +91,53 @@ in mind for the next re-scan-shaped change:
 - The existence check resolved against the CWD, not `OUTPUT_DIR`. That is the
   two-path trap that once turned every generated file into "does not parse".
 
+### Phase B1 done (2026-08-31) — persistence on SQLAlchemy + Alembic
+
+The plan's first sub-phase, and the one auth was blocked behind. Storage is
+SQLAlchemy (`api_platform/db/`), schema changes are Alembic revisions, and
+**nothing above the seam changed**: `runner.py`, all five route modules,
+`main.py` and three test suites call the same functions, which return the same
+dicts with the same keys and the same types. Only the bodies moved.
+
+| | |
+|---|---|
+| `api_platform/db/models.py` | `Project` / `ProjectFile` / `BuildProgress`, mirroring the DDL column for column |
+| `api_platform/db/__init__.py` | Lazy per-URL engines, `DATABASE_URL` or the current `DB_PATH` |
+| `alembic/versions/0001_baseline` | The schema as it stood at the end of Phase 23. Meant to be **stamped**, not run |
+| `alembic/versions/0002_indexes` | `build_id` on files and build_progress, `created_at` on projects |
+
+**The live database was migrated and every row survived**: 73 projects, 1,164
+files, 1,023 progress rows, now stamped at `0002_indexes`. A status poll's query
+plan reads `SEARCH build_progress USING INDEX ix_build_progress_build_id`
+where it used to be a full scan of all 1,023 rows.
+
+Four things worth carrying forward:
+
+- **`created_at` is `String`, not `DateTime`, deliberately.** Every writer stores
+  `.isoformat()` and every reader treats it as a string. Declaring `DateTime`
+  would make SQLAlchemy hand back `datetime` objects — a change to the type every
+  route returns, wearing the costume of a schema definition.
+- **File-backed SQLite uses `NullPool`.** A pool holds the file open, and on
+  Windows an open handle makes it undeletable; three suites point `DB_PATH` at a
+  temp database and delete it, and they failed with `PermissionError [WinError 32]`
+  the moment this pooled. SQLite gains nothing from pooling anyway. The
+  `pool_size=3` the plan asked for applies to Postgres, where it earns its keep.
+- **The engine resolves lazily, per URL.** An engine bound at import would ignore
+  a reassigned `DB_PATH` and quietly read and write the *real* `platform.db`
+  while the tests still passed — the worst available outcome.
+- **`stamp` and `upgrade` are both needed.** Stamping alone leaves a database at
+  the baseline forever, and `create_all` cannot help: it creates indexes only for
+  tables it creates, so the live database had none of them.
+
+`datetime.utcnow()` is gone from `database.py` and from `runner.py` (8 calls),
+replaced by `datetime.now(timezone.utc).replace(tzinfo=None)` — aware for the
+deprecation, naive on the way to disk so the ~1,000 existing timestamps still
+sort and compare against new ones.
+
+**B2 (JWT auth + multi-tenant isolation) is now unblocked**: it needs an
+`owner_id` column on `projects` and a `users` table, which is a revision now
+rather than another `ALTER TABLE ... except OperationalError`.
+
 ### Still open, found by row 2
 
 ~~A finding is recorded once and never re-read.~~ **Fixed, §4.25 above.**

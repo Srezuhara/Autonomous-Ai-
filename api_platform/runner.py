@@ -37,7 +37,7 @@ import logging
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -68,6 +68,18 @@ logger = logging.getLogger(__name__)
 DOWNLOADABLE_STATUSES = ("done", "done_with_context", "unusable")
 TERMINAL_STATUSES     = ("done", "done_with_context", "unusable",
                          "failed", "cancelled")
+
+
+def _utcnow() -> datetime:
+    """
+    Now, in UTC, as this module has always recorded it.
+
+    `_utcnow()` is deprecated from 3.12. Its replacement is aware, and
+    an aware `.isoformat()` appends "+00:00" -- which would make new rows sort
+    and compare differently from the ~1,000 timestamps already in the database.
+    Dropping the tzinfo keeps the stored format byte-identical.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _safe_text(value) -> str | None:
@@ -360,7 +372,7 @@ class JobRunner:
                 update_project(
                     build_id,
                     status       = "cancelled",
-                    completed_at = datetime.utcnow().isoformat(),
+                    completed_at = _utcnow().isoformat(),
                 )
                 logger.info(f"🚫 Cancelled queued build {build_id[:8]}")
                 return {"success": True, "reason": "cancelled_from_queue"}
@@ -445,7 +457,7 @@ class JobRunner:
             self._running.add(build_id)
 
         update_project(build_id, status="running")
-        start_time = datetime.utcnow()
+        start_time = _utcnow()
         logger.info(f"▶️  Starting build {build_id[:8]}")
 
         result         = None
@@ -515,14 +527,14 @@ class JobRunner:
         except Exception as tok_exc:
             logger.warning(f"[{build_id[:8]}] Could not collect token usage: {tok_exc}")
 
-        duration = (datetime.utcnow() - start_time).total_seconds()
+        duration = (_utcnow() - start_time).total_seconds()
 
         # ── Handle cancellation ───────────────────────────────────────────────
         if self.is_cancelled(build_id):
             update_project(
                 build_id,
                 status            = "cancelled",
-                completed_at      = datetime.utcnow().isoformat(),
+                completed_at      = _utcnow().isoformat(),
                 duration_seconds  = round(duration, 2),
                 prompt_tokens     = token_usage["prompt_tokens"],
                 completion_tokens = token_usage["completion_tokens"],
@@ -611,7 +623,7 @@ class JobRunner:
                 update_project(
                     build_id,
                     status            = "failed",
-                    completed_at      = datetime.utcnow().isoformat(),
+                    completed_at      = _utcnow().isoformat(),
                     duration_seconds  = round(duration, 2),
                     prompt_tokens     = token_usage["prompt_tokens"],
                     completion_tokens = token_usage["completion_tokens"],
@@ -686,7 +698,7 @@ class JobRunner:
                     debug_score       = debug_score,
                     test_score        = test_score,
                     output_path       = output_path,
-                    completed_at      = datetime.utcnow().isoformat(),
+                    completed_at      = _utcnow().isoformat(),
                     duration_seconds  = round(duration, 2),
                     prompt_tokens     = token_usage["prompt_tokens"],
                     completion_tokens = token_usage["completion_tokens"],
@@ -741,7 +753,7 @@ class JobRunner:
                 "step":      step,
                 "step_name": step_name,
                 "status":    status,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": _utcnow().isoformat(),
                 "data":      data,
             })
         except Exception:

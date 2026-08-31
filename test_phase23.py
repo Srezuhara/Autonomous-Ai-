@@ -5040,6 +5040,249 @@ check("the pipeline re-scans before assembling the issue list",
 shutil.rmtree(_R25, ignore_errors=True)
 
 
+# -- B1. Persistence: SQLAlchemy + Alembic behind the existing seam ------------
+# The whole point of B1 is that nothing above the seam changed. These tests
+# assert the seam holds (same signatures, same dict shapes, same string types),
+# that the ~50 live builds survive being brought under Alembic, and that the two
+# things the old hand-rolled ALTER block could never do -- add an index, and
+# record what a database has been through -- now work.
+
+import sqlite3 as _sq_b1                                       # noqa: E402
+import api_platform.database as _dbm                           # noqa: E402
+from api_platform.db import (                                  # noqa: E402
+    current_url as _cur_url, dispose_all as _dispose_b1, get_engine as _eng_b1,
+)
+from api_platform.db.models import (                           # noqa: E402
+    PROJECT_COLUMNS as _PCOLS, Project as _PModel,
+)
+
+_B1 = Path(tempfile.mkdtemp(prefix="b1_"))
+_b1_saved_db_path = _dbm.DB_PATH
+
+
+def _b1_use(name):
+    _dbm.DB_PATH = _B1 / name
+    _dispose_b1()
+    _dbm.initialize_db()
+    return _dbm.DB_PATH
+
+
+# --- a fresh database ---------------------------------------------------------
+_b1_db = _b1_use("fresh.db")
+
+_b1_created = _dbm.create_project("b1-a", "a prompt")
+check("create_project still returns the four keys its callers read",
+      set(_b1_created) == {"build_id", "prompt", "status", "created_at"},
+      str(sorted(_b1_created)))
+check("a new build is pending", _b1_created["status"] == "pending")
+check("created_at is still an ISO string, not a datetime",
+      isinstance(_b1_created["created_at"], str))
+check("...and is naive, so it sorts against the rows already on disk",
+      "+00:00" not in _b1_created["created_at"])
+
+_dbm.add_project_file("b1-a", "backend/main.py", "python")
+_dbm.add_build_step("b1-a", 1, "intent_analyzer", "done", '{"x": 1}')
+_dbm.update_project("b1-a", status="done", total_tokens=99, review_score=7.5)
+
+_b1_got = _dbm.get_project("b1-a")
+check("get_project returns every column, as a plain dict",
+      isinstance(_b1_got, dict) and set(_b1_got) == set(_PCOLS),
+      str(len(_b1_got)))
+check("an update round-trips", (_b1_got["status"], _b1_got["total_tokens"],
+                                _b1_got["review_score"]) == ("done", 99, 7.5))
+check("get_project on an unknown id is None, not an exception",
+      _dbm.get_project("nope") is None)
+
+_b1_files = _dbm.get_project_files("b1-a")
+check("get_project_files keeps its four keys",
+      set(_b1_files[0]) == {"id", "build_id", "file_path", "file_type"})
+_b1_prog = _dbm.get_build_progress("b1-a")
+check("get_build_progress keeps its seven keys",
+      set(_b1_prog[0]) ==
+      {"id", "build_id", "step", "step_name", "status", "timestamp", "data"})
+
+_b1_list = _dbm.list_projects()
+check("list_projects returns exactly the columns it always did",
+      set(_b1_list[0]) == set(_dbm._LIST_COLUMNS), str(sorted(_b1_list[0])))
+check("...and does not leak the heavy blobs into the list view",
+      "verification" not in _b1_list[0] and "smoke_summary" not in _b1_list[0])
+
+# Ordering is what the dashboard depends on.
+_dbm.create_project("b1-b", "later")
+check("list_projects is newest-first",
+      _dbm.list_projects()[0]["build_id"] == "b1-b")
+check("limit/offset still page",
+      len(_dbm.list_projects(limit=1)) == 1 and
+      _dbm.list_projects(limit=1, offset=1)[0]["build_id"] == "b1-a")
+
+# Deleting a build must take its children with it.
+_dbm.delete_project("b1-a")
+check("delete_project cascades to files and progress",
+      _dbm.get_project("b1-a") is None
+      and _dbm.get_project_files("b1-a") == []
+      and _dbm.get_build_progress("b1-a") == [])
+check("deleting a build that is not there reports False",
+      _dbm.delete_project("b1-a") is False)
+check("update_project with no fields is a no-op, as before",
+      _dbm.update_project("b1-b") is False)
+
+# The old implementation interpolated caller keys straight into a SET clause.
+try:
+    _dbm.update_project("b1-b", **{"status = 'x' --": "y"})
+    _b1_injected = True
+except ValueError:
+    _b1_injected = False
+check("a column name that does not exist is refused, not interpolated",
+      _b1_injected is False)
+
+# --- Alembic ------------------------------------------------------------------
+with _sq_b1.connect(str(_b1_db)) as _c:
+    _b1_ver = _c.execute("SELECT version_num FROM alembic_version").fetchone()
+    _b1_idx = {
+        t: {r[1] for r in _c.execute(f"PRAGMA index_list({t})")
+            if not r[1].startswith("sqlite_")}
+        for t in ("projects", "files", "build_progress")
+    }
+check("a fresh database is stamped at head, not left unversioned",
+      _b1_ver is not None and _b1_ver[0] == "0002_indexes", str(_b1_ver))
+check("the lookup indexes every status poll needs exist",
+      _b1_idx["files"] == {"ix_files_build_id"}
+      and _b1_idx["build_progress"] == {"ix_build_progress_build_id"}
+      and _b1_idx["projects"] == {"ix_projects_created_at"},
+      str(_b1_idx))
+
+# --- a database that predates Alembic ----------------------------------------
+# The case that matters: real rows, no alembic_version, and missing some of the
+# columns that arrived through the old ALTER block. It must be reconciled,
+# stamped and upgraded WITHOUT losing a row.
+_b1_legacy = _B1 / "legacy.db"
+with _sq_b1.connect(str(_b1_legacy)) as _c:
+    _c.executescript("""
+        CREATE TABLE projects (
+            build_id TEXT PRIMARY KEY, prompt TEXT NOT NULL, app_name TEXT,
+            app_type TEXT, complexity TEXT, status TEXT NOT NULL,
+            debug_score TEXT, review_score REAL, test_score TEXT,
+            output_path TEXT, created_at TIMESTAMP NOT NULL,
+            completed_at TIMESTAMP, duration_seconds REAL
+        );
+        CREATE TABLE files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, build_id TEXT NOT NULL,
+            file_path TEXT NOT NULL, file_type TEXT
+        );
+        CREATE TABLE build_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, build_id TEXT NOT NULL,
+            step INTEGER NOT NULL, step_name TEXT NOT NULL, status TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL, data TEXT
+        );
+        INSERT INTO projects (build_id, prompt, status, created_at)
+            VALUES ('old-1', 'from before', 'done', '2026-01-01T00:00:00');
+        INSERT INTO files (build_id, file_path) VALUES ('old-1', 'a.py');
+        INSERT INTO build_progress (build_id, step, step_name, status, timestamp)
+            VALUES ('old-1', 1, 'architect', 'done', '2026-01-01T00:00:00');
+    """)
+
+_dbm.DB_PATH = _b1_legacy
+_dispose_b1()
+_dbm.initialize_db()
+
+with _sq_b1.connect(str(_b1_legacy)) as _c:
+    _b1_rows = _c.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+    _b1_frows = _c.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    _b1_prows = _c.execute("SELECT COUNT(*) FROM build_progress").fetchone()[0]
+    _b1_cols = {r[1] for r in _c.execute("PRAGMA table_info(projects)")}
+    _b1_lver = _c.execute("SELECT version_num FROM alembic_version").fetchone()
+    _b1_lidx = {r[1] for r in _c.execute("PRAGMA index_list(files)")
+                if not r[1].startswith("sqlite_")}
+
+check("a pre-Alembic database keeps every row it had",
+      (_b1_rows, _b1_frows, _b1_prows) == (1, 1, 1),
+      f"{_b1_rows}/{_b1_frows}/{_b1_prows}")
+check("...and its old row is still readable through the seam",
+      _dbm.get_project("old-1")["prompt"] == "from before")
+check("...and gains every column that arrived after the Phase 14 baseline",
+      {"total_tokens", "tokens_by_model", "verification", "build_shape"}
+      <= _b1_cols, str(sorted(_b1_cols)))
+check("...and is brought all the way to head, not just stamped at the baseline",
+      _b1_lver is not None and _b1_lver[0] == "0002_indexes", str(_b1_lver))
+check("...and an index the old ALTER block could never add is now there",
+      _b1_lidx == {"ix_files_build_id"}, str(_b1_lidx))
+
+# Running it twice must be a no-op, because the server calls it on every start.
+_dbm.initialize_db()
+with _sq_b1.connect(str(_b1_legacy)) as _c:
+    _b1_again = _c.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+check("initialize_db is idempotent across restarts", _b1_again == 1)
+
+# --- the URL seam -------------------------------------------------------------
+_b1_env_saved = os.environ.get("DATABASE_URL")
+try:
+    os.environ["DATABASE_URL"] = "postgresql+psycopg://u:p@example:5432/db"
+    check("DATABASE_URL wins over DB_PATH", _cur_url().startswith("postgresql"))
+    os.environ["DATABASE_URL"] = ""
+    _dbm.DB_PATH = _B1 / "fresh.db"
+    check("...and with it unset the URL is still derived from DB_PATH",
+          _cur_url().startswith("sqlite:///") and
+          _cur_url().endswith("fresh.db"))
+finally:
+    if _b1_env_saved is None:
+        os.environ.pop("DATABASE_URL", None)
+    else:
+        os.environ["DATABASE_URL"] = _b1_env_saved
+
+# A file-backed SQLite engine must not hold the file open between calls: three
+# suites point DB_PATH at a temp database and then delete it, and a pool makes
+# that impossible on Windows.
+from sqlalchemy.pool import NullPool as _NullPool_b1              # noqa: E402
+_dispose_b1()
+_dbm.DB_PATH = _B1 / "poolcheck.db"
+check("a file-backed sqlite engine does not pool its connections",
+      isinstance(_eng_b1().pool, _NullPool_b1),
+      type(_eng_b1().pool).__name__)
+_b1_delete_me = _B1 / "poolcheck.db"
+_dbm.initialize_db()
+_dispose_b1()
+try:
+    _b1_delete_me.unlink()
+    _b1_unlinked = True
+except Exception:
+    _b1_unlinked = False
+check("...so the database file can still be deleted afterwards", _b1_unlinked)
+
+# The deprecated call this phase was also meant to remove. Asserted against the
+# parsed source rather than the text: both modules explain in a docstring why
+# the replacement drops its tzinfo, and a substring check cannot tell an
+# explanation from a call.
+import ast as _ast_b1                                              # noqa: E402
+
+
+def _b1_utcnow_calls(path):
+    tree = _ast_b1.parse(Path(path).read_text(encoding="utf-8"))
+    return [
+        n.lineno for n in _ast_b1.walk(tree)
+        if isinstance(n, _ast_b1.Call)
+        and isinstance(n.func, _ast_b1.Attribute)
+        and n.func.attr == "utcnow"
+    ]
+
+
+check("datetime.utcnow() is no longer called in the persistence layer",
+      _b1_utcnow_calls("api_platform/database.py") == [],
+      str(_b1_utcnow_calls("api_platform/database.py")))
+check("...replaced by the timezone-aware call",
+      "datetime.now(timezone.utc)" in
+      Path("api_platform/database.py").read_text(encoding="utf-8"))
+check("and it is no longer called in the runner either",
+      _b1_utcnow_calls("api_platform/runner.py") == [],
+      str(_b1_utcnow_calls("api_platform/runner.py")))
+check("the runner still stores a naive timestamp, so old rows still compare",
+      "replace(tzinfo=None)" in
+      Path("api_platform/runner.py").read_text(encoding="utf-8"))
+
+_dbm.DB_PATH = _b1_saved_db_path
+_dispose_b1()
+shutil.rmtree(_B1, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.
