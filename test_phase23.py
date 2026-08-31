@@ -5283,6 +5283,209 @@ _dispose_b1()
 shutil.rmtree(_B1, ignore_errors=True)
 
 
+# -- 4.26 A broken test suite is not a broken build ---------------------------
+# Row 2 serves 7/7 routes and ships a test suite that does not run. Counting
+# that as a verification failure would call a working build degraded; dropping
+# it would hide something real. It is routed to the user as manual testing, and
+# the check still records FAILED so the signal is not lost.
+
+from agents.pipeline import RemediationReport                    # noqa: E402
+
+_M26 = Path(tempfile.mkdtemp(prefix="manual26_"))
+_M26_OUT = _M26 / "out"
+_M26_OUT.mkdir(parents=True)
+
+
+def _m26_project(name):
+    """A project whose app is fine and whose shipped tests are not."""
+    root = _M26_OUT / name
+    (root / "tests").mkdir(parents=True, exist_ok=True)
+    (root / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    (root / "tests" / "test_calc.py").write_text(
+        "from calc import add\n"
+        "def test_broken():\n    raise RuntimeError('dead')\n",
+        encoding="utf-8",
+    )
+    return name
+
+
+def _m26_result(name):
+    r = type("R", (), {})()
+    r.architecture = {"root_folder": name, "files": [{"path": "calc.py"}]}
+    r.intent = {}
+    r.backend_files = []
+    r.frontend_files = []
+    r.verification_outcomes = []
+    r.build_shape = None
+    return r
+
+
+def _m26_run(name, smoke_outcome):
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_M26_OUT)
+        pl = Pipeline.__new__(Pipeline)
+        pl._smoke_outcome = smoke_outcome
+        res = _m26_result(name)
+        advisory = pl._verify_other_shapes(res)
+        return advisory, list(getattr(pl, "_manual_checks", [])), res
+    finally:
+        config.OUTPUT_DIR = real
+
+
+_m26_project("works")
+
+# The artifact was executed and found sound.
+_m26_adv, _m26_man, _m26_res = _m26_run(
+    "works",
+    _VO49.verified("runtime_smoke", detail="7/7 routes responded without a server error"),
+)
+check("a failing suite does not degrade a build that was shown to work",
+      _m26_adv == [], str(_m26_adv))
+check("...the findings are handed over as manual testing instead",
+      len(_m26_man) >= 1, str(_m26_man))
+check("...and the check still records FAILED, so the signal is not lost",
+      any(o["check"] == "generated_tests" and o["status"] == "failed"
+          for o in _m26_res.verification_outcomes),
+      str([(o["check"], o["status"]) for o in _m26_res.verification_outcomes]))
+
+# No positive evidence: now the same finding is corroborating, and must count.
+_m26_adv2, _m26_man2, _m26_res2 = _m26_run(
+    "works",
+    _VO49.failed("runtime_smoke", findings=["GET /x -> 500"],
+                 detail="the application does not start"),
+)
+check("with nothing showing the artifact works, a failing suite still counts",
+      len(_m26_adv2) >= 1, str(_m26_adv2))
+check("...and is not quietly moved to manual testing",
+      _m26_man2 == [], str(_m26_man2))
+
+# NOT_APPLICABLE is not evidence of working -- it is the absence of a question.
+_m26_adv3, _m26_man3, _ = _m26_run(
+    "works",
+    _VO49.not_applicable("runtime_smoke", detail="ships no web app"),
+)
+check("a not_applicable probe is not positive evidence, so the finding counts",
+      len(_m26_adv3) >= 1 and _m26_man3 == [],
+      f"advisory={len(_m26_adv3)} manual={len(_m26_man3)}")
+
+# A build carrying only manual checks must reach `done`, not done_with_context.
+_m26_rep = RemediationReport()
+_m26_rep.unresolved = []
+_m26_rep.manual_checks = list(_m26_man)
+_m26_rep.degraded = bool(_m26_rep.unresolved)
+check("manual checks alone do not mark a build degraded",
+      _m26_rep.degraded is False)
+
+check("only generated_tests is routed this way, not the checks that judge the app",
+      Pipeline._MANUAL_WHEN_WORKING == ("generated_tests",),
+      str(Pipeline._MANUAL_WHEN_WORKING))
+
+# The shipped document must separate the two, and say which is which.
+_m26_doc = Documenter.__new__(Documenter)
+_m26_text = _m26_doc._build_session_context(
+    app_name="x", root="works", intent={"features": []},
+    architecture={"root_folder": "works", "files": []},
+    backend_files=[], frontend_files=[], completed_steps=["documenter"],
+    pending_steps=[], reason="", quota_snapshot={}, remediation=_m26_rep,
+    progress_percent=100.0, debug_results=[], review_results=[],
+    test_results=[], error_detail="",
+)
+check("the handoff grows a 'Worth Checking By Hand' section",
+      "Worth Checking By Hand" in _m26_text)
+check("...carrying the test-suite finding",
+      "test suite" in _m26_text.split("Worth Checking By Hand", 1)[1][:600])
+check("...while Remaining Work reports nothing outstanding",
+      "_No outstanding issues were recorded._" in
+      _m26_text.split("Remaining Work", 1)[1].split("##", 1)[0])
+
+# And a build with nothing to check by hand must not grow an empty heading.
+_m26_clean = RemediationReport()
+_m26_clean.unresolved = []
+_m26_clean.manual_checks = []
+_m26_text2 = _m26_doc._build_session_context(
+    app_name="x", root="works", intent={"features": []},
+    architecture={"root_folder": "works", "files": []},
+    backend_files=[], frontend_files=[], completed_steps=["documenter"],
+    pending_steps=[], reason="", quota_snapshot={}, remediation=_m26_clean,
+    progress_percent=100.0, debug_results=[], review_results=[],
+    test_results=[], error_detail="",
+)
+check("a build with nothing to check by hand grows no empty section",
+      "Worth Checking By Hand" not in _m26_text2)
+
+shutil.rmtree(_M26, ignore_errors=True)
+
+
+# -- 4.27 The shipped document describes the final state, not a mid-build one --
+# `issues` and `diag_advisory` came from the diagnosis that ran BEFORE
+# remediation, and were reused verbatim at the end. That is how row 2 shipped a
+# checklist telling its reader to fix `bookmark.description` after the debugger
+# had already fixed it. The re-scan in 4.25 only helps if the diagnosis is
+# actually re-run.
+
+_f27 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+_f27_final = _f27.split("Re-run the whole diagnosis", 1)
+check("the final re-audit re-runs the diagnosis rather than reusing the first",
+      len(_f27_final) == 2, "the final re-audit still reuses diag_advisory")
+check("...and does so before assembling the report",
+      "issues, failed_paths, diag_advisory = self._diagnose(result)"
+      in _f27_final[1].split("report.unresolved", 1)[0])
+check("the re-diagnosis happens after the remediation loop, not inside it",
+      _f27.rindex("self._diagnose(result)") >
+      _f27.index("Remediation resolved all issues on pass"))
+check("the report still carries manual checks separately from unresolved",
+      "report.manual_checks = list(getattr(self, \"_manual_checks\", []) or [])"
+      in _f27)
+
+
+# -- 4.28 The row criterion follows the same rule as the pipeline -------------
+# A build that serves every route it declares must not fail its row because the
+# test suite it ships does not run. The check is still reported on every row.
+
+import run_live_matrix as _m28                                     # noqa: E402
+
+
+def _m28_rec(check, status):
+    return {"check": check, "status": status}
+
+
+_m28_working = {"verification": [
+    _m28_rec("runtime_smoke", "verified"), _m28_rec("web_assets", "verified"),
+    _m28_rec("cli_smoke", "not_applicable"),
+    _m28_rec("generated_tests", "failed"),
+]}
+_m28_ok, _m28_why = _m28.verification_verdict(_m28_working)
+check("a working app with a broken shipped suite passes its row",
+      _m28_ok is True, _m28_why)
+check("...and the row still says the suite needs manual testing",
+      "manual testing" in _m28_why and "generated_tests" in _m28_why, _m28_why)
+
+_m28_broken = {"verification": [
+    _m28_rec("runtime_smoke", "failed"), _m28_rec("generated_tests", "failed"),
+]}
+_m28_ok2, _m28_why2 = _m28.verification_verdict(_m28_broken)
+check("an app that does not run still fails its row",
+      _m28_ok2 is False and "runtime_smoke" in _m28_why2, _m28_why2)
+
+_m28_hole = {"verification": [
+    _m28_rec("runtime_smoke", "not_run"), _m28_rec("web_assets", "verified"),
+]}
+check("a check that never ran is still a hole, not a pass",
+      _m28.verification_verdict(_m28_hole)[0] is False)
+
+_m28_nothing = {"verification": [
+    _m28_rec("cli_smoke", "not_applicable"),
+    _m28_rec("generated_tests", "failed"),
+]}
+check("a row with no positive evidence still fails, suite aside",
+      _m28.verification_verdict(_m28_nothing)[0] is False)
+
+check("the excluded set is exactly the one the pipeline uses",
+      _m28.MANUAL_CHECKS == Pipeline._MANUAL_WHEN_WORKING,
+      f"{_m28.MANUAL_CHECKS} vs {Pipeline._MANUAL_WHEN_WORKING}")
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

@@ -278,6 +278,34 @@ Use the actual endpoint paths, env vars, and file names from the project files a
             todos.append("- [ ] Add a pytest suite under `tests/` — none was generated")
         todos_block = "\n".join(todos) or "_No outstanding issues were recorded._"
 
+        # ── 🧑\u200d🔬 Worth checking by hand ──────────────────────────────────
+        # Real findings that are NOT defects in the delivered application: the
+        # artifact was executed and works, but something it ships could not be
+        # verified automatically. A generated test suite that does not run is
+        # the case this exists for. Listing it under "Remaining work" would say
+        # the build is broken when it demonstrably is not; leaving it out
+        # entirely would hide something the user should know before trusting
+        # `pytest` in this project.
+        manual_items = []
+        if remediation is not None:
+            manual_items = self._drop_stale_issues(
+                getattr(remediation, "manual_checks", []) or [], root
+            )
+        if manual_items:
+            manual_block = (
+                "The application itself was executed and verified — these are "
+                "things the automated checks could not confirm for you, and "
+                "which are worth a few minutes by hand.\n\n"
+                + "\n".join(f"- [ ] {item}" for item in manual_items)
+            )
+        else:
+            manual_block = ""
+
+        manual_section = (
+            f"\n## 🧑\u200d🔬 Worth Checking By Hand\n\n{manual_block}\n"
+            if manual_block else ""
+        )
+
         remediation_block = self._format_remediation_block(remediation)
 
         env_template = (
@@ -348,7 +376,7 @@ Use the actual endpoint paths, env vars, and file names from the project files a
 ## 🛠️ Remaining Work
 
 {todos_block}
-
+{manual_section}
 {remediation_block}
 
 ---

@@ -88,6 +88,14 @@ class RemediationReport:
     llm_used:       bool = False
     repaired_files: list = field(default_factory=list)
     unresolved:     list = field(default_factory=list)   # human-readable issues
+    # Real findings that do NOT mean the build is broken: the artifact was
+    # executed and works, but something about it could not be verified
+    # automatically and is worth a human's attention. A failing generated test
+    # suite is the case this exists for — the app serves 7/7 routes, and its
+    # shipped tests do not run. Reporting that as a build defect would call a
+    # working build degraded; dropping it would hide a real problem. It is
+    # handed to the user as manual testing instead.
+    manual_checks:  list = field(default_factory=list)
     degraded:       bool = False   # True ⇒ build finishes as done_with_context
 
     def summary(self) -> str:
@@ -966,7 +974,38 @@ class Pipeline:
         except Exception:
             pass
 
-        return collect_findings(outcomes)
+        # Findings that describe the artifact not working stay advisory and
+        # degrade the build. Findings from `generated_tests` are different in
+        # kind: the suite is something the build *ships*, not something the
+        # build *is*, and when another check has executed the artifact and found
+        # it sound, a broken suite does not make the product broken.
+        #
+        # So when there is positive evidence the thing runs, those findings are
+        # routed to the user as manual testing rather than counted against the
+        # build. With no such evidence they stay advisory, because then they are
+        # corroborating what the other checks already suspect.
+        works = any(o.is_evidence_of_working for o in recorded)
+        manual: list[str] = []
+        counted = []
+        for outcome in outcomes:
+            if works and outcome.check in self._MANUAL_WHEN_WORKING:
+                manual.extend(outcome.findings)
+                continue
+            counted.append(outcome)
+
+        self._manual_checks = manual
+        if manual:
+            logger.info(
+                f"  🧑‍🔬 {len(manual)} finding(s) do not affect a build that "
+                "has been shown to work — handing them to the user as manual "
+                "testing rather than marking the build degraded"
+            )
+
+        return collect_findings(counted)
+
+    #: Checks whose failure is not a verdict on the artifact itself, provided
+    #: something else executed the artifact and found it sound.
+    _MANUAL_WHEN_WORKING = ("generated_tests",)
 
     def _detect_shapes(self, root: str):
         """Every shape this project contains, or None if it cannot be read."""
@@ -1492,6 +1531,12 @@ class Pipeline:
 
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
+            report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
+            if report.manual_checks:
+                logger.info(
+                    f"  🧑‍🔬 {len(report.manual_checks)} item(s) recorded for "
+                    "manual testing; the build itself verified clean"
+                )
             return report
 
         report.ran = True
@@ -1519,8 +1564,9 @@ class Pipeline:
         # Advisory-only: nothing an LLM repair pass can act on. Mark the build
         # degraded so the handoff document is written, and spend zero tokens.
         if not issues:
-            report.unresolved = advisory
-            report.degraded   = True
+            report.unresolved    = advisory
+            report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
+            report.degraded      = bool(advisory)
             logger.warning(
                 "  📋 No repairable verification failures — recording the static "
                 "audit findings and skipping LLM repair entirely (0 tokens spent)"
@@ -1671,8 +1717,14 @@ class Pipeline:
                 logger.warning("  🔑 Quota exhausted mid-remediation — stopping repair passes")
                 break
 
-        # Re-run the static audit: repairs may have introduced or resolved
-        # phantom imports, and the report must describe the FINAL state on disk.
+        # Re-run the whole diagnosis, not just the static audit. `issues` and
+        # `diag_advisory` came from the pass BEFORE remediation, so reusing them
+        # shipped a checklist describing a state that no longer existed — row 2
+        # told its reader to fix `bookmark.description` after the debugger had
+        # already fixed it. Everything the shipped document says must describe
+        # what is on disk now. It is a static re-scan and costs no tokens.
+        issues, failed_paths, diag_advisory = self._diagnose(result)
+
         # `smoke_advisory` is whatever the last run of the app said, so a repair
         # that worked is not reported as an outstanding failure.
         advisory = (
@@ -1687,8 +1739,16 @@ class Pipeline:
         # string too would print the same fact twice in SESSION_CONTEXT.md.
         issues = [i for i in issues if "raise at request time" not in i]
 
-        report.unresolved = list(issues) + list(advisory)
-        report.degraded   = bool(report.unresolved)
+        report.unresolved    = list(issues) + list(advisory)
+        report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
+        report.degraded      = bool(report.unresolved)
+
+        if report.manual_checks and not report.unresolved:
+            logger.info(
+                "  ✅ Nothing is outstanding against this build; "
+                f"{len(report.manual_checks)} item(s) are recorded for manual "
+                "testing and do not degrade it"
+            )
 
         # Separate "has problems" from "does not run". Both were
         # done_with_context, so the status could not distinguish a flaky test

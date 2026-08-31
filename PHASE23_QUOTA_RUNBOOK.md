@@ -150,12 +150,15 @@ Per row, beyond the driver's own verdict:
   defect.
 
 **A seventh check exists as of 2026-08-31: `generated_tests`.** It runs the
-suite the build ships. Expect it to FAIL: 34 of the 41 saved builds have a
-suite that does not pass, so a row that is otherwise perfect will still read
-`done_with_context`. Read it as "does the shipped suite run", not as a verdict
-on whether the app works — `runtime_smoke` answers that. Decide explicitly
-whether the row criterion counts it (see `PHASE23_HANDOFF.md` §4.24) rather
-than letting a red check erode the meaning of the criterion.
+suite the build ships, and it will usually FAIL — 34 of the 41 saved builds have
+a suite that does not pass. **It does not decide the row.** It asks whether the
+suite the build *ships* runs, not whether the thing built works, and those are
+different questions: a build can serve every route it declares while its
+generated tests do not collect. When another check has executed the artifact and
+found it sound, the findings go to the user as manual testing and the row still
+passes; with no such evidence they count against it. So a row reading
+`verified: yes — ...; for manual testing: generated_tests` is a pass, and the
+suite is still worth looking at.
 
 Then re-run the free corpus check, which now includes the new build:
 

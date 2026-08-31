@@ -67,13 +67,18 @@ than shipping the churn, and the debugger repaired the defect in the file that
    is legitimately `verified: yes` at the same time, because no check in the
    six-check record executes the generated test suite.
 
-**Both are now fixed** (`PHASE23_HANDOFF.md` §4.24-4.25), and the second fix
+**Both are now fixed** (`PHASE23_HANDOFF.md` §4.24-4.27), and the second fix
 turned up something larger: **34 of the 41 saved builds ship a test suite that
-does not pass.** Nothing had noticed because nothing ran them. That makes a
-product decision unavoidable — under the current matrix criterion this check
-turns almost every row red, including row 2. It is not marked fatal, so it does
-not claim the app is broken; it does mean rows will read `done_with_context`
-until the criterion is decided one way or the other.
+does not pass.** Nothing had noticed because nothing ran them.
+
+**The rule that follows from it: a broken test suite is not a broken build.**
+`generated_tests` is reported everywhere and decides nothing. When another check
+has executed the artifact and found it sound, its findings are handed to the
+user as manual testing — the shipped `SESSION_CONTEXT.md` grows a "Worth
+Checking By Hand" section — and the build finishes `done` with its row passing.
+With no positive evidence that the artifact works, they still count. And the
+shipped document now describes the **final** state: the last re-audit re-runs
+the whole diagnosis instead of reusing the one taken before remediation.
 
 
 **Last session: 2026-08-30, evening (Phase 23 — the zero-quota session).**

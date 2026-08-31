@@ -65,14 +65,28 @@ ships a `test_cli.py` that loads `parent.parent / "cli.py"` when the file is at
 `bulk_file_renamer/cli.py`. It fails in the user's checkout exactly as it fails
 here.
 
-> **A decision this forces, deliberately left open.** The matrix criterion is
-> "every check either verified the artifact or correctly did not apply". Under
-> that rule `generated_tests` turns almost every row red, including row 2, which
-> passed everything else. The check is **not** marked fatal — a failing suite
-> does not mean the artifact cannot run, and `_functional_verdict` stays narrow
-> — but it does contribute findings, so rows will read `done_with_context`.
-> Either the criterion counts this check or it tracks it separately; that is a
-> product call, not a bug, and it should be made rather than drifted into.
+> **That decision has been made (2026-08-31): a broken test suite is not a
+> broken build.** `generated_tests` is reported everywhere and decides nothing.
+> When another check has executed the artifact and found it sound, its findings
+> are routed to the user as **manual testing** rather than counted against the
+> build — so a build that serves 7/7 routes finishes `done`, not
+> `done_with_context`, and its row passes. With no such positive evidence the
+> findings stay advisory and still count, because then they corroborate what the
+> other checks already suspect.
+>
+> Three places implement the one rule, and a test asserts they agree:
+> `Pipeline._MANUAL_WHEN_WORKING` routes the findings,
+> `RemediationReport.manual_checks` carries them, and
+> `run_live_matrix.MANUAL_CHECKS` keeps them out of the row verdict. The shipped
+> `SESSION_CONTEXT.md` grows a **"Worth Checking By Hand"** section, separate
+> from "Remaining Work", which says the application was executed and verified
+> and that these are the things the automated checks could not confirm.
+
+**§4.27 — the shipped document described a mid-build state.** `issues` and
+`diag_advisory` came from the diagnosis that ran *before* remediation and were
+reused verbatim at the end, so the re-scan below only half-worked: the checklist
+still described the build as it had been, not as it shipped. The final re-audit
+now re-runs `_diagnose` in full. It is a static re-scan and costs no tokens.
 
 **§4.25 — a finding recorded once was never re-read.**
 `BackendDeveloper.rescan_unrepaired_defects` re-runs exactly the scans that
