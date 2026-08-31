@@ -5,6 +5,12 @@
 and two changes that looked obviously worth making were **measured and not
 shipped**, which is the more useful half of the session.
 
+> **The executable plan for the next two sessions is
+> [`PHASE23_NEXT_SESSION_PLAN.md`](PHASE23_NEXT_SESSION_PLAN.md).** Part A is
+> the no-quota work in priority order — it opens with a defect this session
+> introduced that would fail a *correct* live row. Part B is what to spend the
+> refill on. Quota was ~22 h out when it was written.
+
 ## §0.0 What closed: the name the other file never defined
 
 Row 3 (`inventory_system_3322017e`) shipped `unusable`. `backend/routes.py` was

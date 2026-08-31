@@ -102,6 +102,15 @@ alone needs 10.8h to reach its floor.
 
 ## 3. The order, and what each row is for
 
+> **Superseded on the row order (2026-08-31).**
+> [`PHASE23_NEXT_SESSION_PLAN.md`](PHASE23_NEXT_SESSION_PLAN.md) §B1 runs **row
+> 3 first**, not row 2. The table below was written before rows 2 and 3 were
+> fixed. Row 3 is now the single build whose every known blocker is supposedly
+> closed — the `__future__` shim (§4.33), the sibling imports (§4.34) and the
+> missing Pydantic schemas (§4.35-4.38) — and it is cheaper than row 2. Nothing
+> else in this file is superseded; §2, §4, §5 and §6 all still apply.
+
+
 Every item here is something **only a rebuild can prove**. Anything that can be
 verified against a saved project should be — see §6.
 
