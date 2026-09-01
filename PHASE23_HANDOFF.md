@@ -23,6 +23,94 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ---
 
+## 0.-5 The tenth session (2026-09-01) — row 3 ran, and failed
+
+**Row 3 is red. Phase 23 does not close.** Build `885804e4`, `unusable`,
+222,068 tokens (157,242 fast / 64,826 heavy), 1863s. Corpus after: one diff,
+the new build itself, no regressions.
+
+**Quota was never 21 hours out.** Part 0's snippet summed a hard rolling 24h
+window, the model `llm_client.py:531-548` discarded in favour of a leaky bucket.
+Its own output was the tell — 225,254 used against a 200,000 limit. Fixed in
+`1b8793c`. The row started the moment the bucket was read instead.
+
+### What the generator did
+
+`app/main.py` imports five routers under aliases, then ignores all five:
+
+```python
+from routers.suppliers import router as suppliers_router   # ...and 4 more
+...
+app.include_router(router)   # x5, the bare name, never bound
+```
+
+`NameError` at import: every endpoint unreachable, and all four test modules
+error on collection because they import `app.main`.
+
+### 0.-5.1 Remediation found the right file and repaired the wrong ones
+
+`app/main.py` was correctly identified three times over:
+
+- `failed_files` contains it (5th of 6)
+- `issues`: "1 file(s) raise at request time: .../app/main.py"
+- `advisory`: "the application does not start: NameError ... at app/main.py:36"
+
+Remediation then ran 2 passes, `degraded: true`, and repaired
+**`tests/test_suppliers.py` and `app/routers/suppliers.py`** — the first and
+last entries of `failed_files`, neither of them causal. `app/main.py` was never
+touched, so the four remaining failures were guaranteed to persist.
+
+**The budget went to the files the failure was reported *in*, not the file it
+was *caused by*.** Nothing ranks `failed_files` by causality, so one broken
+import poisoning four test modules presents as five problems, and the repairer
+spends itself on symptoms.
+
+### 0.-5.2 `module_ref` told the repairer to do the wrong thing
+
+The sharper defect: a verifier actively misleading a repair agent.
+`tools/module_ref_check.py:101-109` emits
+
+> "(the application itself is unaffected)"
+
+**purely on whether the *reading* module is a test file.** It has no knowledge
+of whether the *referenced* module is broken. Here `app.main` was dead, and this
+went into the remediation advisory:
+
+> "`app.main.router` is read at line 9 ... This raises when the test module is
+> imported, so this test cannot run **(the application itself is unaffected)**.
+> **Add `router` to `app.main`** — do NOT delete the reference or point it at a
+> different name..."
+
+Both halves are wrong here. The application was not unaffected; it was the
+broken thing. And the correct repair is precisely what the text forbids — point
+the references at the different names `main.py` had already imported. The
+comment above that branch cites §4.26 as its justification, which is how a rule
+that is right in general became a false statement in a specific case.
+
+**Same shape as §4.39:** `in_test` describes where a name is *read*. It was used
+to conclude where the defect *is*. Different questions; 42 saved builds never
+separated them.
+
+### 0.-5.3 The §B2 assertions, honestly
+
+| Assertion | Result |
+|---|---|
+| `module_ref` is `verified` | **NO** — `failed`, but legitimately: the app really is broken. Not the old phantom `*Create` findings. |
+| `schema_attr` reports, and is not `not_applicable` | **PASS** — `verified`, 14 models field-by-field, 0 skipped. §4.37 holds live. |
+| A write endpoint returns 201 | **NOT REACHED** — the app never started. |
+| Zero `not_run` | **PASS** — no `not_run` outcomes. |
+| `grep -c "does not parse"` is 0 | **PASS**, but read it from the build record: `server.log` was 26 lines (block-buffered), so grepping *it* is vacuous. |
+| Test-only routing reads as a pass | **Correctly did NOT apply** — `module_ref` had one test-module finding *and* real app findings; per-finding routing kept the row red. §4.39 behaved. |
+
+### 0.-5.4 Cost
+
+**222,068 tokens against a planned ~87-98K** — more than double; the fast model
+went 29,653 → 150,944 in one row. The overrun is remediation: two passes plus a
+degraded third across six files. Budget future rows on this figure, not the
+2026-08-30 one.
+
+---
+
 ## 0.-4 The ninth session (2026-08-31) — Part A of the plan, complete
 
 Zero tokens. **820/820** tests, up from 765. Every no-quota item in
