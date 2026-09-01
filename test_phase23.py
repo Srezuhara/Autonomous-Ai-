@@ -7029,6 +7029,84 @@ check("...but not when `router` is already defined, which would drop one",
 shutil.rmtree(_W56, ignore_errors=True)
 
 
+# ── §4.45 The tester wrote a test for a test ────────────────────────────────
+#
+# Row 3 shipped `tests/test_test_suppliers.py`. Remediation repaired the failing
+# `tests/test_suppliers.py`, `_retest_files` handed the repaired paths back to
+# `Tester.run()`, and `_discover_testable_files` accepted it — the file has a
+# `def` in it, so it looked testable. The result cost LLM calls to write and
+# then errored on collection, which counted against `generated_tests` and drove
+# further repair.
+#
+# Both directions: a test must not be a subject, and every real source file must
+# still be one.
+
+_W57 = Path(tempfile.mkdtemp(prefix="testerfilter57_"))
+_W57_OUT = _W57 / "out"
+_W57_OUT.mkdir(parents=True)
+
+from agents.tester import Tester as _Tst57, _is_already_a_test as _iat57
+
+_tst57 = _Tst57()
+
+_SRC57 = "def handler():\n    return 1\n"
+
+
+def _discover57(rels: list) -> set:
+    """Run the real _discover_testable_files over files written to disk."""
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W57_OUT)
+        for rel in rels:
+            t = _W57_OUT / rel
+            t.parent.mkdir(parents=True, exist_ok=True)
+            t.write_text(_SRC57, encoding="utf-8")
+        return set(_tst57._discover_testable_files(list(rels)))
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# The exact shape that produced test_test_suppliers.py.
+_got57 = _discover57([
+    "app/main.py",
+    "app/routers/suppliers.py",
+    "tests/test_suppliers.py",
+])
+check("a repaired test module is not itself given a test",
+      "tests/test_suppliers.py" not in _got57, str(_got57))
+check("...while the real source files are still tested",
+      {"app/main.py", "app/routers/suppliers.py"} <= _got57, str(_got57))
+
+# A helper beside the tests is not a subject either — and TESTABLE_FILES would
+# otherwise claim it by bare name, before any content check.
+_helpers57 = _discover57(["tests/models.py", "tests/factories.py", "backend/models.py"])
+check("a file under tests/ is skipped even when TESTABLE_FILES names it",
+      "tests/models.py" not in _helpers57, str(_helpers57))
+check("...and so is an ordinary helper beside the tests",
+      "tests/factories.py" not in _helpers57, str(_helpers57))
+check("...but the identically named real source is still tested",
+      "backend/models.py" in _helpers57, str(_helpers57))
+
+# pytest's own naming convention, outside a tests/ directory.
+_named57 = _discover57(["app/test_utils.py", "app/utils_test.py", "app/utils.py"])
+check("pytest's test_*.py convention is honoured outside tests/",
+      "app/test_utils.py" not in _named57, str(_named57))
+check("...as is *_test.py",
+      "app/utils_test.py" not in _named57, str(_named57))
+check("...without taking the source file next to them",
+      "app/utils.py" in _named57, str(_named57))
+
+# A directory whose name merely CONTAINS "test" is not a tests directory.
+check("`latest/` is not a tests directory",
+      not _iat57("latest/models.py"))
+check("...nor is a file merely containing 'test' in its name",
+      not _iat57("app/latest_report.py"))
+check("windows separators are understood too",
+      _iat57("app\\tests\\test_x.py"))
+
+shutil.rmtree(_W57, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

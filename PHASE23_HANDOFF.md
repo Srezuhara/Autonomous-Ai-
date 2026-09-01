@@ -148,6 +148,42 @@ knows ("a finding about the test module, not about the application"). Corpus
 effect: **28 findings reworded, 28 NEW/GONE pairs on identical
 `(project, reference, line)`, zero verdict changes.**
 
+### 0.-5.2a The tester wrote a test for a test
+
+Row 3 also shipped `tests/test_test_suppliers.py`. Remediation repaired the
+failing `tests/test_suppliers.py`; `_retest_files` handed the repaired paths
+straight back to `Tester.run()`; and `_discover_testable_files` accepted one —
+the file has a `def` in it, so it looked testable. It excluded `__*`,
+`config.py` and `conftest.py`, but nothing said "this is already a test".
+
+It cost twice: LLM calls to write something worthless, and a **spurious failing
+test file** — it errored on collection with `TypeError: 'mappingproxy' object
+...`, which was one of the five errors counted against `generated_tests` and so
+drove further repair. It fires on any build where remediation repairs a test
+module, which is the common case.
+
+**Fixed** with `_is_already_a_test()`, placed *before* the `TESTABLE_FILES`
+name match — that match claims a file by bare name and would otherwise take
+`tests/models.py`. It follows pytest's own convention (`test_*.py`, `*_test.py`)
+plus the directory, since a helper beside the tests is not a subject either.
+
+**Verified.** 12 new tests (§4.45), suite **840/840**. Falsified by disabling
+just the filter and re-running discovery on the row 3 shape:
+
+```
+WITHOUT fix: app/main.py, app/routers/suppliers.py, tests/models.py, tests/test_suppliers.py
+WITH fix   : app/main.py, app/routers/suppliers.py
+```
+
+A directory merely *containing* "test" (`latest/`) is not a tests directory, and
+that is asserted rather than assumed.
+
+**The corpus says nothing here, and that is not a pass** — it verifies finished
+projects and never invokes the tester, exactly as it never invokes
+`_preflight_fix` (§0.-5.1a). Two defects in one session that the corpus cannot
+see by construction is the pattern worth carrying forward: **the corpus covers
+verifiers, not the agents that write and repair code.**
+
 ### 0.-5.3 The §B2 assertions, honestly
 
 | Assertion | Result |

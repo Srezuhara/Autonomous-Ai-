@@ -73,6 +73,30 @@ TEST_PRIORITY = {
 def _test_priority(path: str) -> int:
     return TEST_PRIORITY.get(Path(path).name.lower(), 10)
 
+
+def _is_already_a_test(file_path: str) -> bool:
+    """True for a file that IS a test, and so is not a subject for one.
+
+    Row 3 (2026-09-01) shipped `tests/test_test_suppliers.py` — a test the
+    tester generated for `tests/test_suppliers.py`. Remediation repairs a
+    failing test module, `_retest_files` hands the repaired paths straight
+    back to `run()`, and nothing here said no: the file has a `def` in it,
+    so it looked testable. It cost LLM calls to write and then errored on
+    collection (`TypeError: 'mappingproxy' object ...`), which counted
+    against `generated_tests` and drove further repair.
+
+    Matching pytest's own convention (`python_files = test_*.py`) plus the
+    directory, because a helper sitting beside the tests is not a subject
+    either — and `TESTABLE_FILES` would otherwise claim `tests/models.py`
+    by name alone."""
+    parts = [q.lower() for q in Path(str(file_path).replace("\\", "/")).parts]
+    if not parts:
+        return False
+    if any(q in {"tests", "test"} for q in parts[:-1]):
+        return True
+    name = parts[-1]
+    return name.startswith("test_") or name.endswith("_test.py")
+
 # Errors that are acceptable at import-check time — file is still testable
 _IMPORT_CHECK_IGNORABLE = [
     "uvicorn",
@@ -228,6 +252,10 @@ class Tester(BaseAgent):
                 continue
             name = Path(fp).name
             if name.startswith("__") or name in {"config.py", "conftest.py"}:
+                continue
+            # Must precede the TESTABLE_FILES match below, which claims a file
+            # by bare name and would take `tests/models.py`.
+            if _is_already_a_test(fp):
                 continue
             if name in TESTABLE_FILES:
                 candidates.append(fp)
