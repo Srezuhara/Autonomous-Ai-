@@ -144,6 +144,129 @@ for _p in [_here, _parent, _grandparent]:
         _sys.path.insert(0, _p)
 """
 
+def _statement_lines(source: str, start_pattern: str) -> set:
+    """1-based line numbers of the statement `start_pattern` opens.
+
+    A binding does not "use" itself, so its own lines must be excluded before
+    asking whether anything else reads it. Spans the whole statement, because
+    `create_engine(` is routinely multi-line — the very shape Phase 22 had to
+    fix in `_comment_out_statement`.
+    """
+    lines = source.splitlines()
+    out: set = set()
+    for i, line in enumerate(lines):
+        if not re.match(start_pattern, line):
+            continue
+        depth = line.count("(") - line.count(")")
+        out.add(i + 1)
+        j = i
+        while depth > 0 and j + 1 < len(lines):
+            j += 1
+            depth += lines[j].count("(") - lines[j].count(")")
+            out.add(j + 1)
+    return out
+
+
+def _name_is_used(source: str, name: str, ignore_lines: set = frozenset()) -> bool:
+    """Does `name` still appear as a load anywhere outside the given lines?
+
+    Two repair rules delete or comment out a binding: the `services.py`
+    sibling-import stripper, and the `engine = create_engine(...)` disabler.
+    Neither asked whether anything still referenced the name, and both were
+    measured breaking working builds on 2026-09-01 by `tools/verify_repairs.py`:
+
+      * `llm_api_key_dashboard` (9 files) and `bookmark_manager_a3ca5c18` (3) —
+        `from auth import Token` removed while `Token` was still used.
+      * `ai_pdf_reader` (2) — `engine = create_engine(...)` commented out with
+        `SessionLocal = sessionmaker(bind=engine)` on the very next line.
+
+    Removing a binding that is still read cannot help any build: it converts a
+    possible problem into a certain `NameError`. AST where the file parses, a
+    word-boundary regex where it does not — this runs on files mid-repair, which
+    is exactly when they may not parse.
+    """
+    import ast as _ast
+
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError:
+        for i, line in enumerate(source.splitlines(), 1):
+            if i in ignore_lines:
+                continue
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if re.search(rf"\b{re.escape(name)}\b", line):
+                return True
+        return False
+
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Name) and node.id == name:
+            if isinstance(node.ctx, _ast.Load) and node.lineno not in ignore_lines:
+                return True
+        elif isinstance(node, _ast.Attribute):
+            base = node.value
+            if (isinstance(base, _ast.Name) and base.id == name
+                    and node.lineno not in ignore_lines):
+                return True
+    return False
+
+
+def _syspath_block(rel_path: str) -> str:
+    """The sys.path shim, with its walk-up clamped to the project's own root.
+
+    `SYSPATH_BLOCK` above is fixed at three levels — `_here`, `_parent`,
+    `_grandparent` — which is right for `<project>/backend/x.py` and wrong for a
+    file at the project root. There, `_grandparent` is **the AI builder's own
+    repo root**, and the shim inserts it at `sys.path[0]`.
+
+    That is not a theoretical contamination. Measured 2026-09-01 by
+    `tools/verify_repairs.py`: `inventory_system_f3dbcc61` has a root
+    `__init__.py`, so importing `tests.test_main` executed it first, put
+    `C:\...\Aiautonomous` at the front of the path, and
+    `from main import app` resolved to **the builder's own `main.py`** instead of
+    the project's `backend/main.py`. Seven files, every one of them correct.
+    Any generated module whose name collides with one of ours — `main`,
+    `config`, `tools`, `agents` — was resolvable to our copy.
+
+    `run_python` appends the project's sibling source dirs at LOW priority
+    precisely so the file's own directory wins; a shim that inserts an outside
+    directory at position 0 defeats that.
+
+    So: emit only as many levels as stay inside the project. Depth 0 (a file at
+    the root) gets `_here` alone; the three-level form is unchanged for anything
+    nested two deep or more, which is where it was doing its job.
+    """
+    parts = Path(str(rel_path).replace("\\", "/")).parts
+    # parts[0] is the project folder and parts[-1] the filename, so what is left
+    # is how far the file's own directory sits below the project root.
+    depth = max(0, len(parts) - 2)
+    levels = min(3, depth + 1)
+
+    lines = [
+        "import sys as _sys, os as _os",
+        "_here = _os.path.dirname(_os.path.abspath(__file__))",
+    ]
+    if levels > 1:
+        lines.append("_parent = _os.path.dirname(_here)")
+    if levels > 2:
+        lines.append("_grandparent = _os.path.dirname(_parent)")
+    names = ["_here", "_parent", "_grandparent"][:levels]
+    # NOT reversed. The loop inserts at position 0, so the project root does end
+    # up ahead of the file's own directory — which looks backwards, and reversing
+    # it was tried on 2026-09-01 and dropped: it fixed nothing (the one file it
+    # was aimed at still resolved the same way, because `run_python` inserts the
+    # project root ahead of `backend/` before this ever runs) and it made 34
+    # files non-idempotent. A change that moves no verdict in the right
+    # direction and regresses another measure is not an improvement.
+    lines += [
+        f"for _p in [{', '.join(names)}]:",
+        "    if _p not in _sys.path:",
+        "        _sys.path.insert(0, _p)",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 _ALL_BLOCKED_PACKAGES: frozenset[str] = frozenset(
     p.lower().replace("-", "_")
     for p in (WINDOWS_BUILD_BLOCKLIST | HEAVY_PACKAGES_TIMEOUT_BLOCKLIST)
@@ -541,6 +664,28 @@ class Debugger(BaseAgent):
                     and module not in ("models",)
                     and not line.lstrip().startswith("from .")
                 ):
+                    # Only if nothing still reads what the import binds.
+                    # Deleting a used name turns a possible circular import into
+                    # a certain NameError — 12 of the 21 files this rule was
+                    # measured breaking on 2026-09-01.
+                    bound = []
+                    if from_match:
+                        bound = [
+                            a.split(" as ")[-1].strip()
+                            for a in from_match.group(2).split(",")
+                        ]
+                    elif import_match:
+                        bound = [import_match.group(1)]
+                    bound = [b for b in bound if b.isidentifier()]
+                    line_no = content.splitlines(keepends=True).index(line) + 1 \
+                        if line in content.splitlines(keepends=True) else 0
+                    still_used = any(
+                        _name_is_used(content, b, ignore_lines={line_no})
+                        for b in bound
+                    )
+                    if still_used:
+                        new_lines.append(line)
+                        continue
                     changed = True
                     fixes.append(f"{fp}: removed service-layer import of {module}")
                     continue
@@ -983,13 +1128,24 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             # i.e. a SyntaxError. A live build shipped exactly that in
             # tests/test_backend.py, and the debugger then burned its whole retry
             # budget failing to fix a file it had broken itself.
-            for pattern in (
-                r'^engine\s*=\s*create_engine',
-                r'^Session\s*=\s*sessionmaker',
-                r'^Base\.metadata\.create_all',
+            # Commenting out `engine = create_engine(...)` while
+            # `SessionLocal = sessionmaker(bind=engine)` sits on the next line
+            # guarantees a NameError. `ai_pdf_reader` shipped exactly that, and
+            # the import check has an OperationalError bypass anyway, so leaving
+            # a live connection alone costs nothing here.
+            for name, pattern in (
+                ("engine",  r'^engine\s*=\s*create_engine'),
+                ("Session", r'^Session\s*=\s*sessionmaker'),
+                (None,      r'^Base\.metadata\.create_all'),
             ):
+                if name and _name_is_used(
+                    content, name,
+                    ignore_lines=_statement_lines(content, pattern),
+                ):
+                    continue
                 content = self._comment_out_statement(content, pattern)
-            fixes.append("disabled module-level DB connection")
+            if content != original:
+                fixes.append("disabled module-level DB connection")
 
         project_dir = self._get_project_dir(file_path)
         if project_dir:
@@ -1202,7 +1358,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
             new_content = (
                 "".join(lines[:insert_at])
-                + SYSPATH_BLOCK + "\n"
+                + _syspath_block(file_path) + "\n"
                 + "".join(lines[insert_at:])
             )
             # Nothing to do is not the same as work done. Rewriting a file whose

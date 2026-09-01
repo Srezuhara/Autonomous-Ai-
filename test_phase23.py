@@ -5401,9 +5401,39 @@ _m26_rep.degraded = bool(_m26_rep.unresolved)
 check("manual checks alone do not mark a build degraded",
       _m26_rep.degraded is False)
 
-check("only generated_tests is routed this way, not the checks that judge the app",
-      Pipeline._MANUAL_WHEN_WORKING == ("generated_tests",),
+# The original intent, kept: a check that judges the APPLICATION must never be
+# routed away from the verdict. What may be routed is a check about the shipped
+# suite, or a static heuristic that cannot tell "absent" from "written in a way
+# I do not collect".
+check("the checks that judge the application are never routed to manual testing",
+      not ({"runtime_smoke", "module_ref", "schema_attr", "sql_schema",
+            "static_smoke", "web_assets"} & set(Pipeline._MANUAL_WHEN_WORKING)),
       str(Pipeline._MANUAL_WHEN_WORKING))
+check("...and the routed set is the shipped suite plus the static word-match",
+      set(Pipeline._MANUAL_WHEN_WORKING) == {"generated_tests", "feature_coverage"},
+      str(Pipeline._MANUAL_WHEN_WORKING))
+
+# feature_coverage joined the routed set on 2026-09-01: measured across 39 corpus
+# projects rather than the 5 it was tuned on, ~2/3 of its findings were false,
+# and they were reaching the remediation advisory that drives an LLM. Both
+# directions are asserted, because routing it unconditionally would delete the
+# one thing it is genuinely good at — noticing a build that implemented nothing.
+_fc_adv, _fc_man, _fc_res = _m26_run(
+    "works",
+    _VO49.verified("runtime_smoke", detail="7/7 routes responded without a server error"),
+)
+check("a feature_coverage finding does not degrade a build shown to work",
+      not any("asked for" in a for a in _fc_adv), str(_fc_adv))
+
+# With nothing executing the artifact, the static check is the only signal there
+# is — an empty build of architect stubs is exactly that case.
+_fc_adv2, _fc_man2, _fc_res2 = _m26_run(
+    "works",
+    _VO49.not_applicable("runtime_smoke", detail="this project ships no app"),
+)
+check("...but with no working evidence its findings still count",
+      _fc_man2 == [] or all("asked for" not in m for m in _fc_man2),
+      str(_fc_man2))
 
 # The shipped document must separate the two, and say which is which.
 _m26_doc = Documenter.__new__(Documenter)
@@ -6033,7 +6063,12 @@ _again = _f33_inject("plain_future", _f33_inject(
 check("re-injecting does not move the shim above the future import",
       _again.index("from __future__") < _again.index("_sys.path.insert"))
 check("...and does not duplicate the shim",
-      _again.count("_grandparent = ") == 1, str(_again.count("_grandparent = ")))
+      _again.count("_here = ") == 1, str(_again.count("_here = ")))
+# `_here` rather than `_grandparent`: the shim is now clamped to the project
+# root, so a file AT the root gets `_here` alone. `_grandparent` there was the
+# builder's own repo directory, which is the defect this counts the absence of.
+check("a file at the project root does not get the builder's dir on its path",
+      "_grandparent" not in _again, _again[:120])
 
 # The helper itself, on input the line-scanner has to handle alone.
 check("the scanner stops at the first line that is not a future import",

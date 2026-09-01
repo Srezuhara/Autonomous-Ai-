@@ -3,7 +3,12 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
+        "tests/test_bookmarks.py",
         "tests/test_models.py",
         "tests/test_services.py"
       ],
@@ -21,7 +26,12 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
+        "tests/test_bookmarks.py",
         "tests/test_models.py",
         "tests/test_services.py"
       ],
@@ -39,11 +49,18 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_products.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
+        "tests/test_stock.py",
+        "tests/test_suppliers.py",
         "tests/test_test_suppliers.py"
       ],
       "structural_imports": [
@@ -59,11 +76,18 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_products.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
+        "tests/test_stock.py",
+        "tests/test_suppliers.py",
         "tests/test_test_suppliers.py"
       ],
       "structural_imports": [
@@ -79,11 +103,18 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_product.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
+        "tests/test_stock_report.py",
+        "tests/test_supplier.py",
         "tests/test_test_supplier.py"
       ],
       "rewrite_dotted_imports": [
@@ -103,16 +134,27 @@
         "__init__.py",
         "backend/__init__.py",
         "backend/auth.py",
+        "backend/biometric.py",
         "backend/inference.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/ocr.py",
         "backend/ocr_model.py",
+        "backend/routes.py",
         "backend/routes/__init__.py",
+        "backend/search.py",
         "backend/services.py",
+        "backend/summarization.py",
+        "backend/summarize.py",
         "backend/summarizer.py",
+        "backend/vault.py",
         "cli/__init__.py",
         "cli/main.py",
+        "cli_tool.py",
         "database/__init__.py",
         "database/db.py",
         "database/index.py",
+        "database/models.py",
         "frontend/__init__.py",
         "frontend/search_service.py",
         "models/__init__.py",
@@ -123,10 +165,8 @@
         "search/search.py",
         "security/__init__.py",
         "security/biometric_auth.py",
-        "tests/__init__.py"
-      ],
-      "preflight_fix": [
-        "database/db.py"
+        "tests/__init__.py",
+        "tests/test_main.py"
       ],
       "rewrite_dotted_imports": [
         "backend/routes.py",
@@ -146,10 +186,6 @@
       {
         "error": "ImportError: cannot import name 'extract_text' from 'ocr' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\_repair_probe_ai_pdf_reader\\ocr\\__init__.py)",
         "file": "backend/search.py"
-      },
-      {
-        "error": "NameError: name 'engine' is not defined",
-        "file": "database/db.py"
       }
     ],
     "not_idempotent": []
@@ -159,10 +195,13 @@
       "inject_syspath": [
         "__init__.py",
         "backend/__init__.py",
+        "backend/ai_generated_summaries.py",
         "backend/ai_summaries.py",
         "backend/app.py",
         "backend/chart_generation.py",
+        "backend/cli.py",
         "backend/data_analysis.py",
+        "backend/data_import.py",
         "backend/main.py",
         "backend/models.py",
         "backend/pdf_report.py",
@@ -194,9 +233,6 @@
         "backend/chart_generation.py",
         "backend/data_analysis.py",
         "backend/pdf_report.py",
-        "backend/services.py"
-      ],
-      "structural_imports": [
         "backend/services.py"
       ]
     },
@@ -240,7 +276,11 @@
   "ai_report_generator_941887e1": {
     "changed": {
       "inject_syspath": [
-        "backend/__init__.py"
+        "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py"
       ]
     },
     "clean_before": 4,
@@ -252,6 +292,10 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
         "tests/test_models.py",
         "tests/test_routes.py",
@@ -277,9 +321,6 @@
         "ai_report_generator/tests/test_routes.py",
         "ai_report_generator/tests/test_services.py",
         "ai_report_generator/tests/test_streamlit_ui.py"
-      ],
-      "structural_imports": [
-        "ai_report_generator/backend/services.py"
       ]
     },
     "clean_before": 19,
@@ -318,6 +359,15 @@
       ],
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/ai_summaries.py",
+        "backend/app.py",
+        "backend/chart_generation.py",
+        "backend/data_analysis.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/report_generation.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/test_models.py"
       ],
       "structural_imports": [
@@ -362,7 +412,12 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
+        "tests/test_bookmarks.py",
         "tests/test_models.py",
         "tests/test_services.py"
       ],
@@ -380,7 +435,12 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
+        "backend/services.py",
         "tests/__init__.py",
+        "tests/test_bookmarks.py",
         "tests/test_models.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
@@ -393,27 +453,19 @@
     },
     "clean_before": 9,
     "files": 11,
-    "harm": [
-      {
-        "error": "NameError: name 'BookmarkCreate' is not defined",
-        "file": "backend/routes.py"
-      },
-      {
-        "error": "NameError: name 'BookmarkCreate' is not defined",
-        "file": "backend/services.py"
-      },
-      {
-        "error": "NameError: name 'BookmarkCreate' is not defined",
-        "file": "tests/test_services.py"
-      }
-    ],
+    "harm": [],
     "not_idempotent": []
   },
   "bookmark_manager_c95501b4": {
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
+        "tests/test_main.py",
         "tests/test_models.py",
         "tests/test_routes.py",
         "tests/test_schemas.py"
@@ -454,7 +506,12 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
+        "tests/test_api.py",
         "tests/test_main.py",
         "tests/test_models.py",
         "tests/test_routes.py",
@@ -470,6 +527,13 @@
   "bulk_file_renamer_912f9b22": {
     "changed": {
       "inject_syspath": [
+        "bulk_file_renamer/__init__.py",
+        "bulk_file_renamer/cli.py",
+        "bulk_file_renamer/logger.py",
+        "bulk_file_renamer/main.py",
+        "bulk_file_renamer/renamer.py",
+        "bulk_file_renamer/undo_log.py",
+        "tests/__init__.py",
         "tests/test_cli.py",
         "tests/test_logger.py",
         "tests/test_main.py",
@@ -490,10 +554,20 @@
   "bulk_file_renamer_ab57297e": {
     "changed": {
       "inject_syspath": [
+        "bulk_file_renamer/__init__.py",
+        "bulk_file_renamer/cli.py",
+        "bulk_file_renamer/log.py",
+        "bulk_file_renamer/main.py",
+        "bulk_file_renamer/models.py",
+        "bulk_file_renamer/renamer.py",
+        "bulk_file_renamer/routes.py",
+        "bulk_file_renamer/services.py",
+        "bulk_file_renamer/undo.py",
         "tests/__init__.py",
         "tests/test_cli.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_renamer.py",
         "tests/test_routes.py",
         "tests/test_services.py"
       ],
@@ -517,6 +591,11 @@
       ],
       "inject_syspath": [
         "bulk_rename_cli/__init__.py",
+        "bulk_rename_cli/cli.py",
+        "bulk_rename_cli/main.py",
+        "bulk_rename_cli/preview.py",
+        "bulk_rename_cli/renamer.py",
+        "bulk_rename_cli/tests.py",
         "tests/test_cli.py",
         "tests/test_main.py",
         "tests/test_preview.py",
@@ -534,7 +613,10 @@
   "bulk_rename_tool_fa7533e1": {
     "changed": {
       "inject_syspath": [
-        "tests/__init__.py"
+        "bulk_rename_tool/__init__.py",
+        "bulk_rename_tool/main.py",
+        "tests/__init__.py",
+        "tests/test_main.py"
       ]
     },
     "clean_before": 1,
@@ -630,8 +712,13 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
         "backend/models.py",
-        "tests/__init__.py"
+        "backend/routes.py",
+        "backend/services.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_routers.py"
       ],
       "structural_imports": [
         "backend/main.py",
@@ -647,12 +734,21 @@
   "inventory_system_885804e4": {
     "changed": {
       "inject_syspath": [
+        "app/__init__.py",
+        "app/database.py",
+        "app/main.py",
+        "app/models.py",
         "app/routers/__init__.py",
+        "app/schemas.py",
+        "tests/__init__.py",
         "tests/test_database.py",
         "tests/test_models.py",
+        "tests/test_products.py",
         "tests/test_schemas.py",
+        "tests/test_stock_movements.py",
         "tests/test_suppliers.py",
-        "tests/test_test_suppliers.py"
+        "tests/test_test_suppliers.py",
+        "tests/test_warehouses.py"
       ]
     },
     "clean_before": 14,
@@ -664,11 +760,18 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_products.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
+        "tests/test_stock.py",
+        "tests/test_suppliers.py",
         "tests/test_test_suppliers.py"
       ],
       "structural_imports": [
@@ -695,12 +798,6 @@
         "tests/test_suppliers.py",
         "tests/test_warehouses.py"
       ],
-      "preflight_fix": [
-        "tests/test_products.py",
-        "tests/test_stock_movements.py",
-        "tests/test_suppliers.py",
-        "tests/test_warehouses.py"
-      ],
       "rewrite_dotted_imports": [
         "backend/main.py",
         "backend/routes.py",
@@ -722,12 +819,18 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
         "backend/routers/__init__.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
+        "tests/test_crud.py",
         "tests/test_main.py",
         "tests/test_models.py",
         "tests/test_routes.py",
-        "tests/test_schemas.py"
+        "tests/test_schemas.py",
+        "tests/test_stock.py"
       ],
       "rewrite_dotted_imports": [
         "tests/test_crud.py"
@@ -742,11 +845,18 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_product.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
+        "tests/test_stock_report.py",
+        "tests/test_supplier.py",
         "tests/test_test_supplier.py"
       ],
       "rewrite_dotted_imports": [
@@ -765,12 +875,21 @@
       "inject_syspath": [
         "__init__.py",
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
+        "run.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
+        "tests/test_products.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
-        "tests/test_test_suppliers.py"
+        "tests/test_stock_movements.py",
+        "tests/test_suppliers.py",
+        "tests/test_test_suppliers.py",
+        "tests/test_warehouses.py"
       ],
       "rewrite_dotted_imports": [
         "tests/test_products.py",
@@ -781,45 +900,25 @@
     },
     "clean_before": 17,
     "files": 17,
-    "harm": [
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_main.py"
-      },
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_products.py"
-      },
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_routes.py"
-      },
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_stock_movements.py"
-      },
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_suppliers.py"
-      },
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_test_suppliers.py"
-      },
-      {
-        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
-        "file": "tests/test_warehouses.py"
-      }
-    ],
+    "harm": [],
     "not_idempotent": []
   },
   "llm_api_key_dashboard": {
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/alerts.py",
+        "backend/auth.py",
+        "backend/groq_api.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
         "tests/test_alerts.py",
+        "tests/test_api.py",
         "tests/test_auth.py",
+        "tests/test_database.py",
         "tests/test_groq_api.py",
         "tests/test_main.py",
         "tests/test_models.py",
@@ -828,51 +927,11 @@
       ],
       "rewrite_dotted_imports": [
         "tests/test_api.py"
-      ],
-      "structural_imports": [
-        "backend/services.py"
       ]
     },
     "clean_before": 18,
     "files": 18,
-    "harm": [
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "backend/alerts.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "backend/main.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "backend/routes.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "backend/services.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "tests/test_alerts.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "tests/test_api.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "tests/test_main.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "tests/test_routes.py"
-      },
-      {
-        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
-        "file": "tests/test_services.py"
-      }
-    ],
+    "harm": [],
     "not_idempotent": []
   },
   "llm_api_key_health_dashboard": {
@@ -912,6 +971,7 @@
         "backend/models.py",
         "backend/routes.py",
         "backend/services.py",
+        "backend/tests.py",
         "simple_calculator/__init__.py",
         "simple_calculator/calculator.py",
         "simple_calculator/cli.py",
@@ -919,6 +979,8 @@
         "simple_calculator/models.py",
         "simple_calculator/routes.py",
         "simple_calculator/services.py",
+        "simple_calculator/test_calculator.py",
+        "simple_calculator/test_cli.py",
         "simple_calculator/tests.py",
         "tests/__init__.py",
         "tests/test_calculator.py",
@@ -932,7 +994,6 @@
       "structural_imports": [
         "backend/tests.py",
         "simple_calculator/__init__.py",
-        "simple_calculator/services.py",
         "simple_calculator/test_cli.py"
       ]
     },
@@ -947,6 +1008,10 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
@@ -962,6 +1027,11 @@
   "task_manager_3d57d0b8": {
     "changed": {
       "inject_syspath": [
+        "backend/__init__.py",
+        "backend/crud.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
         "tests/__init__.py",
         "tests/test_crud.py",
         "tests/test_main.py",
@@ -981,11 +1051,16 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/schemas.py",
         "tests/__init__.py",
         "tests/test_main.py",
         "tests/test_models.py",
         "tests/test_routes.py",
         "tests/test_schemas.py",
+        "tests/test_tasks.py",
         "tests/test_test_tasks.py"
       ],
       "rewrite_dotted_imports": [
@@ -1004,6 +1079,10 @@
       ],
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "backend/tests/__init__.py",
         "frontend/src/tests/__init__.py",
         "tests/test_main.py",
@@ -1024,6 +1103,11 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/cli.py",
+        "backend/integration_test.py",
+        "backend/main.py",
+        "backend/routes.py",
+        "backend/test_coverage.py",
         "tests/__init__.py",
         "tests/test_cli.py",
         "tests/test_integration_test.py",
@@ -1049,7 +1133,12 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
         "tests/__init__.py",
+        "tests/test_api.py",
         "tests/test_main.py",
         "tests/test_models.py",
         "tests/test_routes.py",
@@ -1068,6 +1157,9 @@
     "changed": {
       "inject_syspath": [
         "backend/__init__.py",
+        "backend/db.py",
+        "backend/main.py",
+        "backend/routes.py",
         "tests/__init__.py",
         "tests/test_db.py",
         "tests/test_main.py",

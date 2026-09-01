@@ -23,6 +23,112 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ---
 
+## 0.-8 The 21 harmed files, fixed — and one that is not
+
+`tools/verify_repairs.py` reported 21 corpus files that imported cleanly and
+stopped importing after the deterministic repairs. **21 -> 1.** Each was bisected
+rather than guessed at; the priority was backend soundness, with frontend
+verification explicitly out of scope.
+
+### 0.-8.1 The shim was putting *this repo* on generated code's import path
+
+The worst of the three, and it had nothing to do with the symptom.
+
+`SYSPATH_BLOCK` is fixed at three levels — `_here`, `_parent`, `_grandparent`.
+That is right for `<project>/backend/x.py`. For a file at the **project root**,
+`_grandparent` is `<OUTPUT_DIR>/..` — **the AI builder's own repo root** — and
+the shim inserts it at `sys.path[0]`.
+
+`inventory_system_f3dbcc61` has a root `__init__.py`, so importing
+`tests.test_main` executed it first, put `C:\...\Aiautonomous` at the front of
+the path, and `from main import app` resolved to **our `main.py`** rather than
+the project's `backend/main.py`. Seven files, every one of them correct code.
+
+The general form is worse than the instance: **any generated module whose name
+collides with one of ours — `main`, `config`, `tools`, `agents`, `llm_client` —
+was resolvable to our copy**, in every project with a root-level `.py`.
+
+Fixed by `_syspath_block(rel_path)`, which emits only as many levels as stay
+inside the project: depth 0 gets `_here` alone, and the three-level form is
+unchanged from two deep down, which is where it was doing its job.
+
+### 0.-8.2 Two rules removed a binding without checking its uses
+
+- the `services.py` sibling-import stripper deleted `from auth import Token`
+  while `Token` was still referenced — `llm_api_key_dashboard` (9),
+  `bookmark_manager_a3ca5c18` (3);
+- `_preflight_fix` commented out `engine = create_engine(...)` and left
+  `SessionLocal = sessionmaker(bind=engine)` on the next line — `ai_pdf_reader`.
+
+Both now ask first, through a shared `_name_is_used()` — AST where the file
+parses, a word-boundary scan where it does not, because this runs on files
+mid-repair. Removing a binding that is still read cannot help any build: it
+converts a *possible* problem into a *certain* `NameError`.
+
+### 0.-8.3 One fix tried and dropped, which is the point of measuring
+
+The shim inserts at position 0 while iterating `[_here, _parent]`, so the
+project root ends up **ahead** of the file's own directory — the reverse of
+what `run_python` carefully arranges. Reversing it is obviously right and it was
+wrong: the single file it was aimed at resolved identically (`run_python` puts
+the project root ahead of `backend/` before the shim ever runs) and **34 files
+became non-idempotent.** Reverted, with the measurement recorded in the code so
+the next reader does not spend the same hour.
+
+### 0.-8.4 Still open: 1 file
+
+`ai_pdf_reader/backend/search.py`. `from ai_pdf_reader.backend.ocr import
+extract_text` is flattened to `from ocr import extract_text`, which collides
+with a root `ocr/` **package** whose `__init__.py` does not re-export it. The
+flattening rule checks that `ocr` is a sibling of the importing file — it is,
+`backend/ocr.py` — but not that the flat name is unambiguous project-wide.
+Recorded in `repair_baseline.json`; not guessed at.
+
+### 0.-8.5 `feature_coverage` is routed, not tightened and not widened
+
+Widening the vocabulary was **measured before being written**: module file
+stems, called attribute names (`pd.read_csv`), and JS/JSX declarations, against
+all 34 findings.
+
+| candidate | findings it would fix |
+|---|---|
+| module stems | **0** |
+| called attributes | 3 |
+| JS declarations | 3 |
+| all three together | **6 of 34** |
+
+So it is not a tuning problem, and no vocabulary change ships. What made this
+urgent is where the findings *go*: a `failed` verifier feeds the remediation
+advisory, which drives an LLM — roughly 23 false findings would spend real
+tokens telling the repairer to build what already exists, the same misdirection
+§0.-5.2 fixed in `module_ref`.
+
+**`feature_coverage` joins `_MANUAL_WHEN_WORKING`.** When something *executed*
+the artifact and found it sound, its findings are handed to the reader instead
+of counted — the §4.26 mechanism, unchanged. When nothing executed it, they
+still count, and they must: `bookmark_manager_de756d20` is an empty build of
+architect stubs, and a static check is then the only signal there is. Both
+directions are tested.
+
+`run_live_matrix.MANUAL_CHECKS` was updated in the same change. A test already
+pins the two lists equal — §4.39 is exactly what happens when the record and its
+consumer disagree.
+
+### 0.-8.6 Verification
+
+| | |
+|---|---|
+| `test_phase23.py` | **854/854** |
+| `verify_repairs.py` | **1 file harmed, down from 21**; 46 targets, 8 non-idempotent |
+| `verify_corpus.py --baseline` | **no change** — no verifier regressed |
+
+Two debugging clones (`_pristine_f3`, `_bisect_f3`) leaked into
+`generated_projects/` during the bisect and were probed as if they were corpus
+members. Removed, and dropped from the baseline before recording — a probe
+measuring its own scratch space is how a corpus stops being evidence.
+
+---
+
 ## 0.-7 The non-quota plan, executed — a harness for the half nothing tested
 
 Row 3's two defects both sat in the same blind spot, and it is worth stating

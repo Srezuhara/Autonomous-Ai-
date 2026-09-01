@@ -1133,7 +1133,27 @@ class Pipeline:
 
     #: Checks whose failure is not a verdict on the artifact itself, provided
     #: something else executed the artifact and found it sound.
-    _MANUAL_WHEN_WORKING = ("generated_tests",)
+    #:
+    #: `feature_coverage` joined this list on 2026-09-01, measured rather than
+    #: assumed. It is a static word-match: it asks whether any meaningful word
+    #: of a requested feature appears in a name the artifact exposes. Run across
+    #: 39 corpus projects instead of the 5 it had been tuned on, **roughly two
+    #: thirds of its findings were false** — "read CSV/Excel data" reported
+    #: missing from a project calling `pd.read_csv`, "drag-and-drop boards"
+    #: reported missing from a React app that implements them in JSX. Widening
+    #: the vocabulary was measured too (module stems, called attributes, JS
+    #: declarations) and fixed only 6 of 34, so this is not a tuning problem.
+    #:
+    #: Those findings used to reach the remediation advisory, which drives an
+    #: LLM — spending real tokens telling the repairer to build what already
+    #: exists, the same misdirection §0.-5.2 fixed in `module_ref`. Routed here,
+    #: they become a note to the reader whenever something actually executed the
+    #: artifact and found it sound.
+    #:
+    #: When nothing executed it, they still count, and they should: an empty
+    #: build of architect stubs (`bookmark_manager_de756d20`) has no working
+    #: evidence, and a static check is then the only signal there is.
+    _MANUAL_WHEN_WORKING = ("generated_tests", "feature_coverage")
 
     def _hand_over_test_suite_findings(
         self, issues: list, advisory: list

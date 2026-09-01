@@ -329,7 +329,12 @@ def run_row(entry: dict) -> dict:
 # ── The second half of the criterion ──────────────────────────────────────────
 
 #: Checks that are reported but do not decide a row. See `verification_verdict`.
-MANUAL_CHECKS = ("generated_tests",)
+#:
+#: Must match `Pipeline._MANUAL_WHEN_WORKING`. §4.39 is what happens when the
+#: record and the thing reading it disagree: a check the pipeline had routed to
+#: manual testing still read as `failed` here, and would have failed a working
+#: row. `feature_coverage` was added to both on 2026-09-01.
+MANUAL_CHECKS = ("generated_tests", "feature_coverage")
 
 #: Checks that RUN the artifact rather than reading it. Imported so this file
 #: and the pipeline cannot drift into two different ideas of what counts as
