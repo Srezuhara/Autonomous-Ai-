@@ -908,13 +908,48 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         original = content
         filename = Path(file_path).name
 
-        if filename == "routes.py" and re.search(r'\bweather_router\s*=\s*APIRouter', content):
+        if (
+            filename == "routes.py"
+            and re.search(r'\bweather_router\s*=\s*APIRouter', content)
+            # Only when the name is free. If `routes.py` already defines its
+            # own `router`, this rename puts two routers on one name and the
+            # later binding silently wins — the same single-router assumption
+            # that broke main.py below.
+            and not re.search(r'^router\s*=\s*APIRouter', content, re.MULTILINE)
+        ):
             content = re.sub(r'\bweather_router\b', 'router', content)
             fixes.append("renamed weather_router → router")
 
         if filename == "main.py":
             new = re.sub(r'from routes import \w*router\w*', 'from routes import router', content)
-            new = re.sub(r'app\.include_router\(\w*router\w*\)', 'app.include_router(router)', new)
+            # Collapsing every `include_router(X)` to `include_router(router)`
+            # is only correct in the single-router layout this rule was written
+            # for: `routes.py` exports one `router`, and the rename above has
+            # just made that its name. A multi-entity build does the opposite —
+            # `from routers.suppliers import router as suppliers_router`, once
+            # per entity — and rewriting those aliases to a bare `router`
+            # discards four of five distinct names and leaves one bound nowhere.
+            #
+            # That is not hypothetical: it is how row 3 died on 2026-09-01. This
+            # rule turned correct generated code into `app.include_router(router)`
+            # five times over, reported it as "fixed router import name", and then
+            # re-applied itself after every LLM repair the guard had accepted — so
+            # the debugger spent three attempts, two passes and two remediation
+            # passes re-fixing a file this function re-broke each time.
+            # 222,068 tokens, no progress, and the build shipped unusable.
+            #
+            # So rewrite a name only when it cannot already resolve: this file
+            # does not bind it, and it does bind `router`.
+            bound = top_level_symbols(new)
+            if "router" in bound:
+                def _collapse(m: 're.Match') -> str:
+                    return (
+                        m.group(0) if m.group(1) in bound
+                        else 'app.include_router(router)'
+                    )
+                new = re.sub(
+                    r'app\.include_router\((\w*router\w*)\)', _collapse, new
+                )
             if new != content:
                 content = new
                 fixes.append("fixed router import name")

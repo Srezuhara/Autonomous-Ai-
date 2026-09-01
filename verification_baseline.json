@@ -440,15 +440,15 @@
       "module_ref": {
         "detail": "35 module(s) checked name-by-name (0 skipped as open); 9 of the finding(s) are in test modules",
         "findings": [
-          "`backend.ai_summaries.generate_ai_summaries` is read at line 13: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_summaries`. This raises when this test runs (the application itself is unaffected). Add `generate_ai_summaries` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.ai_summaries.generate_summary` is read at line 7: `backend.ai_summaries` defines generate_ai_summary, and no `generate_summary`. This raises when this test runs (the application itself is unaffected). Add `generate_summary` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.chart_generation.generate_bar_chart` is read at line 21: `backend.chart_generation` defines generate_chart, and no `generate_bar_chart`. This raises when this test runs (the application itself is unaffected). Add `generate_bar_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.chart_generation.generate_charts` is read at line 14: `backend.chart_generation` defines generate_chart, and no `generate_charts`. This raises when this test runs (the application itself is unaffected). Add `generate_charts` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.data_analysis.get_insights` is read at line 22: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `get_insights`. This raises when this test runs (the application itself is unaffected). Add `get_insights` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.data_analysis.load_data` is read at line 8: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `load_data`. This raises when this test runs (the application itself is unaffected). Add `load_data` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.main.main` is read at line 13: `backend.main` defines app, args, bar_chart, chart_data, data, insights, line_chart, origins, parser, pie_chart, summary, and no `main`. This raises when this test runs (the application itself is unaffected). Add `main` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.pdf_report.load_data` is read at line 13: `backend.pdf_report` defines generate_pdf_report, and no `load_data`. This raises when this test runs (the application itself is unaffected). Add `load_data` to `backend.pdf_report` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.routes.app` is read at line 5: `backend.routes` defines generate_report, router, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `backend.routes` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.ai_summaries.generate_ai_summaries` is read at line 13: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_summaries`. This raises when this test runs (a finding about the test module, not about the application). Add `generate_ai_summaries` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.ai_summaries.generate_summary` is read at line 7: `backend.ai_summaries` defines generate_ai_summary, and no `generate_summary`. This raises when this test runs (a finding about the test module, not about the application). Add `generate_summary` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.chart_generation.generate_bar_chart` is read at line 21: `backend.chart_generation` defines generate_chart, and no `generate_bar_chart`. This raises when this test runs (a finding about the test module, not about the application). Add `generate_bar_chart` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.chart_generation.generate_charts` is read at line 14: `backend.chart_generation` defines generate_chart, and no `generate_charts`. This raises when this test runs (a finding about the test module, not about the application). Add `generate_charts` to `backend.chart_generation` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.data_analysis.get_insights` is read at line 22: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `get_insights`. This raises when this test runs (a finding about the test module, not about the application). Add `get_insights` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.data_analysis.load_data` is read at line 8: `backend.data_analysis` defines analyze_correlations, analyze_data, analyze_trends, and no `load_data`. This raises when this test runs (a finding about the test module, not about the application). Add `load_data` to `backend.data_analysis` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.main.main` is read at line 13: `backend.main` defines app, args, bar_chart, chart_data, data, insights, line_chart, origins, parser, pie_chart, summary, and no `main`. This raises when this test runs (a finding about the test module, not about the application). Add `main` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.pdf_report.load_data` is read at line 13: `backend.pdf_report` defines generate_pdf_report, and no `load_data`. This raises when this test runs (a finding about the test module, not about the application). Add `load_data` to `backend.pdf_report` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.routes.app` is read at line 5: `backend.routes` defines generate_report, router, and no `app`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `app` to `backend.routes` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from backend.ai_summaries import generate_ai_insights` at line 5 fails: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_insights`. This raises when the module is imported, so the application cannot start. Add `generate_ai_insights` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from backend.ai_summaries import generate_ai_insights` at line 7 fails: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_insights`. This raises when the module is imported, so the application cannot start. Add `generate_ai_insights` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from backend.ai_summaries import generate_ai_summaries` at line 13 fails: `backend.ai_summaries` defines generate_ai_summary, and no `generate_ai_summaries`. This raises when the module is imported, so the application cannot start. Add `generate_ai_summaries` to `backend.ai_summaries` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
@@ -711,8 +711,8 @@
       "module_ref": {
         "detail": "25 module(s) checked name-by-name (0 skipped as open); 2 of the finding(s) are in test modules",
         "findings": [
-          "`from ai_report_generator.backend.main import app` at line 3 fails: `ai_report_generator.backend.main` defines main, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `ai_report_generator.backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from ai_report_generator.backend.main import app` at line 3 fails: `ai_report_generator.backend.main` defines main, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `ai_report_generator.backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from ai_report_generator.backend.main import app` at line 3 fails: `ai_report_generator.backend.main` defines main, and no `app`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `app` to `ai_report_generator.backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from ai_report_generator.backend.main import app` at line 3 fails: `ai_report_generator.backend.main` defines main, and no `app`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `app` to `ai_report_generator.backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from ai_report_generator.backend.streamlit_ui import run_streamlit_ui` at line 15 fails: `ai_report_generator.backend.streamlit_ui` defines main, and no `run_streamlit_ui`. This raises when the module is imported, so the application cannot start. Add `run_streamlit_ui` to `ai_report_generator.backend.streamlit_ui` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
         ],
         "status": "failed"
@@ -1039,9 +1039,9 @@
       "module_ref": {
         "detail": "12 module(s) checked name-by-name (0 skipped as open); 3 of the finding(s) are in test modules",
         "findings": [
-          "`from backend.models import Base` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.models import Bookmark` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `Bookmark`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Bookmark` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.models import engine` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `engine`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `engine` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+          "`from backend.models import Base` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `Base`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.models import Bookmark` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `Bookmark`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `Bookmark` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.models import engine` at line 18 fails: `backend.models` defines BookmarkBase, BookmarkCreate, BookmarkRead, BookmarkUpdate, and no `engine`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `engine` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
         ],
         "status": "failed"
       },
@@ -1344,7 +1344,7 @@
       "module_ref": {
         "detail": "16 module(s) checked name-by-name (1 skipped as open); 1 of the finding(s) are in test modules",
         "findings": [
-          "`from bulk_file_renamer.renamer import rename_files` at line 18 fails: `bulk_file_renamer.renamer` defines bulk_rename, compute_renames, discover_files, perform_renames, and no `rename_files`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `rename_files` to `bulk_file_renamer.renamer` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+          "`from bulk_file_renamer.renamer import rename_files` at line 18 fails: `bulk_file_renamer.renamer` defines bulk_rename, compute_renames, discover_files, perform_renames, and no `rename_files`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `rename_files` to `bulk_file_renamer.renamer` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
         ],
         "status": "failed"
       },
@@ -1523,7 +1523,7 @@
       "module_ref": {
         "detail": "7 module(s) checked name-by-name (0 skipped as open); 1 of the finding(s) are in test modules",
         "findings": [
-          "`from backend.main import app` at line 3 fails: `backend.main` defines no names at all, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+          "`from backend.main import app` at line 3 fails: `backend.main` defines no names at all, and no `app`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `app` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
         ],
         "status": "failed"
       },
@@ -1586,7 +1586,7 @@
       "module_ref": {
         "detail": "8 module(s) checked name-by-name (1 skipped as open); 1 of the finding(s) are in test modules",
         "findings": [
-          "`backend.models.MovementType` is read at line 75: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `MovementType`. This raises when this test runs (the application itself is unaffected). Add `MovementType` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.models.MovementType` is read at line 75: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `MovementType`. This raises when this test runs (a finding about the test module, not about the application). Add `MovementType` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`backend.models.ProductCreate` is read at line 68: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `ProductCreate`. This raises when the module is imported, so the application cannot start. Add `ProductCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`backend.models.StockMovementCreate` is read at line 140: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `StockMovementCreate`. This raises when the module is imported, so the application cannot start. Add `StockMovementCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`backend.models.SupplierCreate` is read at line 32: `backend.models` defines Base, Product, StockMovement, Supplier, Warehouse, and no `SupplierCreate`. This raises when the module is imported, so the application cannot start. Add `SupplierCreate` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
@@ -1612,6 +1612,72 @@
           "This API declares 8 route(s) that accept a request body (POST/PUT/PATCH) and not one pydantic model to parse it into. FastAPI cannot validate a body without a schema, and any handler annotated with a schema class is reading a name nothing defines. Add the pydantic request/response models the routes are written against \u2014 SQLAlchemy ORM classes are not a substitute and cannot be used as a FastAPI body annotation."
         ],
         "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "inventory_system_885804e4": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "generated_tests": {
+        "detail": "pytest exit 2, 5 error",
+        "findings": [
+          "ERROR tests/test_products.py - NameError: name 'router' is not defined",
+          "ERROR tests/test_stock_movements.py - NameError: name 'router' is not defined",
+          "ERROR tests/test_suppliers.py - NameError: name 'router' is not defined",
+          "ERROR tests/test_test_suppliers.py - TypeError: 'mappingproxy' object does no...",
+          "ERROR tests/test_warehouses.py - NameError: name 'router' is not defined",
+          "the project's own test suite does not run: 5 of its tests error before executing"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "17 module(s) checked name-by-name (4 skipped as open); 1 of the finding(s) are in test modules",
+        "findings": [
+          "`app.main.router` is read at line 9: `app.main` defines allow_origins, app, lifespan, and no `router`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `router` to `app.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+        ],
+        "status": "failed"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app failed to load: NameError: name 'router' is not defined (at app/main.py:36 in <module>)",
+        "findings": [
+          "the application does not start: NameError: name 'router' is not defined (at app/main.py:36 in <module>)"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "14 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
       },
       "sql_schema": {
         "detail": "this project contains no SQL to check",
@@ -1731,13 +1797,13 @@
       "module_ref": {
         "detail": "11 module(s) checked name-by-name (0 skipped as open); 7 of the finding(s) are in test modules",
         "findings": [
-          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.routes import get_db` at line 44 fails: `backend.routes` defines router, and no `get_db`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `get_db` to `backend.routes` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.services import get_db` at line 26 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `get_db`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `get_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`from backend.services import get_db` at line 9 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `get_db`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `get_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.models import Base` at line 8 fails: `backend.models` defines LowStockReportItem, Product, ProductBase, ProductCreate, StockLevelItem, StockMovement, StockMovementBase, StockMovementCreate, Supplier, SupplierBase, SupplierCreate, Warehouse, WarehouseBase, WarehouseCreate, and no `Base`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `Base` to `backend.models` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.routes import get_db` at line 44 fails: `backend.routes` defines router, and no `get_db`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `get_db` to `backend.routes` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.services import get_db` at line 26 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `get_db`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `get_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`from backend.services import get_db` at line 9 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `get_db`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `get_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from backend.services import product_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `product_router`. This raises when the module is imported, so the application cannot start. Add `product_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from backend.services import report_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `report_router`. This raises when the module is imported, so the application cannot start. Add `report_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
           "`from backend.services import stock_movement_router` at line 2 fails: `backend.services` defines get_product_stock, get_warehouse_stock, low_stock_report, record_stock_movement, supplier_product_summary, and no `stock_movement_router`. This raises when the module is imported, so the application cannot start. Add `stock_movement_router` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
@@ -2014,9 +2080,9 @@
       "module_ref": {
         "detail": "19 module(s) checked name-by-name (0 skipped as open); 3 of the finding(s) are in test modules",
         "findings": [
-          "`backend.services.create_api_key` is read at line 13: `backend.services` defines Services, and no `create_api_key`. This raises when this test runs (the application itself is unaffected). Add `create_api_key` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.services.delete_api_key` is read at line 19: `backend.services` defines Services, and no `delete_api_key`. This raises when this test runs (the application itself is unaffected). Add `delete_api_key` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
-          "`backend.services.get_api_keys` is read at line 7: `backend.services` defines Services, and no `get_api_keys`. This raises when this test runs (the application itself is unaffected). Add `get_api_keys` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+          "`backend.services.create_api_key` is read at line 13: `backend.services` defines Services, and no `create_api_key`. This raises when this test runs (a finding about the test module, not about the application). Add `create_api_key` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.delete_api_key` is read at line 19: `backend.services` defines Services, and no `delete_api_key`. This raises when this test runs (a finding about the test module, not about the application). Add `delete_api_key` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_api_keys` is read at line 7: `backend.services` defines Services, and no `get_api_keys`. This raises when this test runs (a finding about the test module, not about the application). Add `get_api_keys` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
         ],
         "status": "failed"
       },
@@ -2090,7 +2156,7 @@
       "module_ref": {
         "detail": "8 module(s) checked name-by-name (0 skipped as open); 1 of the finding(s) are in test modules",
         "findings": [
-          "`from backend.main import app` at line 3 fails: `backend.main` defines no names at all, and no `app`. This raises when the test module is imported, so this test cannot run (the application itself is unaffected). Add `app` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+          "`from backend.main import app` at line 3 fails: `backend.main` defines no names at all, and no `app`. This raises when the test module is imported, so this test cannot run (a finding about the test module, not about the application). Add `app` to `backend.main` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
         ],
         "status": "failed"
       },

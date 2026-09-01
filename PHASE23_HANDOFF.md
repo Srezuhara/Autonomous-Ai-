@@ -34,9 +34,10 @@ window, the model `llm_client.py:531-548` discarded in favour of a leaky bucket.
 Its own output was the tell — 225,254 used against a 200,000 limit. Fixed in
 `1b8793c`. The row started the moment the bucket was read instead.
 
-### What the generator did
+### The symptom
 
-`app/main.py` imports five routers under aliases, then ignores all five:
+`app/main.py` shipped importing five routers under aliases and then ignoring all
+five:
 
 ```python
 from routers.suppliers import router as suppliers_router   # ...and 4 more
@@ -47,49 +48,105 @@ app.include_router(router)   # x5, the bare name, never bound
 `NameError` at import: every endpoint unreachable, and all four test modules
 error on collection because they import `app.main`.
 
-### 0.-5.1 Remediation found the right file and repaired the wrong ones
+**The generator did not write this.** That was the obvious reading and it is
+wrong — the pipeline's own deterministic "repair" produced it. See §0.-5.1a.
 
-`app/main.py` was correctly identified three times over:
+### 0.-5.1 ~~Remediation found the right file and repaired the wrong ones~~
 
-- `failed_files` contains it (5th of 6)
-- `issues`: "1 file(s) raise at request time: .../app/main.py"
-- `advisory`: "the application does not start: NameError ... at app/main.py:36"
+> **WITHDRAWN — this was wrong, and it was my hypothesis, not a measurement.**
+> I claimed the repair budget was spent in `failed_files` order and that nothing
+> ranked the list by causality. Reading `agents/pipeline.py:1818` disproves it:
+> `self.debugger.run(failed_paths, ...)` is handed **every** failing path, so
+> `app/main.py` got the full budget — three attempts, a second pass, and two
+> remediation passes. Ordering was never the problem.
+>
+> Kept rather than deleted because the correction is the point: the record
+> *looked* exactly like a prioritisation bug, and the fix for a prioritisation
+> bug would have changed nothing. See [[a-checker-is-a-hypothesis]] — it applies
+> to a diagnosis as readily as to a verifier.
 
-Remediation then ran 2 passes, `degraded: true`, and repaired
-**`tests/test_suppliers.py` and `app/routers/suppliers.py`** — the first and
-last entries of `failed_files`, neither of them causal. `app/main.py` was never
-touched, so the four remaining failures were guaranteed to persist.
+### 0.-5.1a The actual root cause: a deterministic "fix" that was the defect
 
-**The budget went to the files the failure was reported *in*, not the file it
-was *caused by*.** Nothing ranks `failed_files` by causality, so one broken
-import poisoning four test modules presents as five problems, and the repairer
-spends itself on symptoms.
+`agents/debugger.py::_preflight_fix` carried a single-router rule from the
+`weather_router` era:
 
-### 0.-5.2 `module_ref` told the repairer to do the wrong thing
+```python
+if filename == "main.py":
+    new = re.sub(r'from routes import \w*router\w*', 'from routes import router', content)
+    new = re.sub(r'app\.include_router\(\w*router\w*\)', 'app.include_router(router)', new)
+```
 
-The sharper defect: a verifier actively misleading a repair agent.
-`tools/module_ref_check.py:101-109` emits
+The second substitution rewrites **every** `include_router(<alias>)` to
+`include_router(router)`. A multi-entity build imports one router per entity
+under distinct aliases, so this collapses five distinct names into one that is
+bound nowhere — and reports it as `"fixed router import name"`.
+
+Proven directly, at zero token cost: feed it correct multi-router code and it
+emits exactly the file that killed row 3.
+
+**It did the damage twice.**
+
+1. `_preflight_fix` runs over every file in `Debugger.run()` *before* any
+   debugging, so the generator's correct output was broken before it was ever
+   checked. The `NameError` was manufactured by the pipeline.
+2. `_debug_file` calls `self._preflight_fix(file_to_fix)` **immediately after**
+   `create_file(file_to_fix, fixed)`. So each accepted LLM repair was written
+   and then reverted in the next statement. Reproduced live: three writes per
+   attempt — `1206 chars` (the correct fix), then `1146`, then `1147`, the
+   broken original. `repair_guard` had **accepted** the fix both times
+   (`RATIO_LOG: [(True, 1.0514, 1147, 1206), ...]`).
+
+That is where 222,068 tokens went: the debugger re-fixing a file this function
+re-broke after every success.
+
+**Fixed.** The collapse now only rewrites a name that cannot already resolve —
+the file does not bind it, and it does bind `router`:
+
+```python
+bound = top_level_symbols(new)
+if "router" in bound:
+    ... rewrite only names not in `bound`
+```
+
+The `routes.py` half carried the same assumption and now skips the rename when
+`router` is already defined, which would otherwise put two routers on one name.
+
+**Verified:**
+
+- 8 new tests (§4.44). **5 of them fail against the old code**; the other 3
+  encode the behaviour that must *not* regress and pass in both directions.
+- Suite **829/829**. Corpus re-recorded and clean.
+- End to end on the real broken file, with the real debugger and a real LLM
+  call: **`success: False` after 3 attempts and 3,252 tokens → `success: True`
+  on attempt 2 for 1,711 tokens**, with all five aliases restored. That verdict
+  change is the evidence; the corpus alone could not have supplied it, because
+  the corpus verifies finished projects and never invokes `_preflight_fix`.
+
+**The lesson, and it is new:** every previous defect in this phase was a
+verifier reporting something false. This one was a *repair* silently undoing a
+correct fix — invisible to the corpus by construction, invisible to 829 tests,
+and indistinguishable in the build record from "the LLM could not fix it". The
+only thing that found it was watching the file being written three times.
+
+### 0.-5.2 `module_ref` also misdescribed it — real, but not the cause
+
+Secondary, and downgraded from what I first wrote: this misled the repair agent,
+it did not kill the row. `tools/module_ref_check.py` emitted
 
 > "(the application itself is unaffected)"
 
-**purely on whether the *reading* module is a test file.** It has no knowledge
-of whether the *referenced* module is broken. Here `app.main` was dead, and this
-went into the remediation advisory:
+**purely on whether the *reading* module is a test file**, with no knowledge of
+whether the *referenced* module is broken. On row 3 that sentence went into the
+remediation advisory while `app.main` was dead, next to "Add `router` to
+`app.main` — do NOT ... point it at a different name", which is the opposite of
+this defect's correct repair.
 
-> "`app.main.router` is read at line 9 ... This raises when the test module is
-> imported, so this test cannot run **(the application itself is unaffected)**.
-> **Add `router` to `app.main`** — do NOT delete the reference or point it at a
-> different name..."
-
-Both halves are wrong here. The application was not unaffected; it was the
-broken thing. And the correct repair is precisely what the text forbids — point
-the references at the different names `main.py` had already imported. The
-comment above that branch cites §4.26 as its justification, which is how a rule
-that is right in general became a false statement in a specific case.
-
-**Same shape as §4.39:** `in_test` describes where a name is *read*. It was used
-to conclude where the defect *is*. Different questions; 42 saved builds never
-separated them.
+**Fixed narrowly.** The routing is untouched — `in_test` still gates fatality
+(`module_ref_check.py:682`) and manual routing, which is §4.26 and is right. Only
+the false health claim is gone; the finding now scopes itself to what the checker
+knows ("a finding about the test module, not about the application"). Corpus
+effect: **28 findings reworded, 28 NEW/GONE pairs on identical
+`(project, reference, line)`, zero verdict changes.**
 
 ### 0.-5.3 The §B2 assertions, honestly
 

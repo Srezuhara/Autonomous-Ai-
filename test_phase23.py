@@ -6351,8 +6351,12 @@ check("...but never makes the build fatal",
       "a test that cannot import must not mark the application unusable")
 check("...and it is offered for manual routing instead",
       _o_test.evidence.get("manual_findings") == _o_test.findings)
-check("...and the finding says the application is unaffected",
-      "unaffected" in _o_test.findings[0])
+check("...and the finding scopes itself to the test module",
+      "not about the application" in _o_test.findings[0],
+      _o_test.findings[0])
+check("...without asserting the application is healthy, which it cannot know",
+      "the application itself is unaffected" not in _o_test.findings[0],
+      _o_test.findings[0])
 
 # A source-file defect is never routed to manual testing.
 _srconly = _mk_ref48("srconly", {
@@ -6907,6 +6911,122 @@ check("a dynamic template is still skipped, not guessed at",
       str(_findings55(_dyn55)))
 
 shutil.rmtree(_W55, ignore_errors=True)
+
+
+# ── §4.44 The preflight rule that collapsed five routers onto one name ─────
+#
+# Row 3 (2026-09-01) shipped `unusable` with `NameError: name 'router' is not
+# defined` at main.py:36. The generator was not at fault. `_preflight_fix`
+# rewrote every `app.include_router(<alias>)` to `app.include_router(router)`,
+# a single-router assumption from the `weather_router` era, and then re-applied
+# itself after each LLM repair the guard had already accepted — so the debugger
+# re-fixed a file this function re-broke, three attempts and four passes deep.
+# 222,068 tokens, no progress.
+#
+# Both directions matter here: the rule must go quiet on the multi-router shape
+# AND still do the job it was added for.
+
+_W56 = Path(tempfile.mkdtemp(prefix="preflight56_"))
+_W56_OUT = _W56 / "out"
+_W56_OUT.mkdir(parents=True)
+
+from agents.debugger import Debugger as _Dbg56
+
+_dbg56 = _Dbg56()
+
+
+def _preflight56(rel: str, src: str) -> str:
+    """Run the real _preflight_fix over `src`, returning what it left on disk."""
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W56_OUT)
+        target = _W56_OUT / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(src, encoding="utf-8")
+        _dbg56._preflight_fix(rel)
+        return target.read_text(encoding="utf-8")
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# The defect, reproduced exactly: five routers, five distinct aliases.
+_multi56 = (
+    "from fastapi import FastAPI\n"
+    "from routers.suppliers import router as suppliers_router\n"
+    "from routers.products import router as products_router\n"
+    "app = FastAPI()\n"
+    "app.include_router(suppliers_router)\n"
+    "app.include_router(products_router)\n"
+)
+_out56 = _preflight56("a/main.py", _multi56)
+
+check("multi-router main.py survives preflight unchanged",
+      _out56 == _multi56, _out56)
+check("...so no alias is collapsed to a name nothing binds",
+      "app.include_router(router)" not in _out56, _out56)
+check("...and every distinct router is still included",
+      "include_router(suppliers_router)" in _out56
+      and "include_router(products_router)" in _out56, _out56)
+
+# The other direction: the rule still fixes what it was written for.
+_single56 = _preflight56(
+    "b/main.py",
+    "from fastapi import FastAPI\n"
+    "from routes import router\n"
+    "app = FastAPI()\n"
+    "app.include_router(weather_router)\n",
+)
+check("an include_router() name this file never binds is still collapsed",
+      "app.include_router(router)" in _single56 and "weather_router" not in _single56,
+      _single56)
+
+_imp56 = _preflight56(
+    "c/main.py",
+    "from fastapi import FastAPI\n"
+    "from routes import weather_router\n"
+    "app = FastAPI()\n"
+    "app.include_router(weather_router)\n",
+)
+check("`from routes import weather_router` is still normalised to `router`",
+      "from routes import router" in _imp56
+      and "app.include_router(router)" in _imp56, _imp56)
+
+# A bound alias and an unbound one in the same file must be told apart.
+_mixed56 = _preflight56(
+    "d/main.py",
+    "from fastapi import FastAPI\n"
+    "from routes import router\n"
+    "from admin import router as admin_router\n"
+    "app = FastAPI()\n"
+    "app.include_router(admin_router)\n"
+    "app.include_router(ghost_router)\n",
+)
+check("a bound alias survives while an unbound sibling is collapsed",
+      "app.include_router(admin_router)" in _mixed56
+      and "app.include_router(router)" in _mixed56
+      and "ghost_router" not in _mixed56, _mixed56)
+
+# The routes.py half carried the same assumption one line up.
+_routes56 = _preflight56(
+    "e/routes.py",
+    "from fastapi import APIRouter\n"
+    "weather_router = APIRouter()\n",
+)
+check("routes.py still renames a lone weather_router to router",
+      "router = APIRouter()" in _routes56 and "weather_router" not in _routes56,
+      _routes56)
+
+_taken56 = _preflight56(
+    "f/routes.py",
+    "from fastapi import APIRouter\n"
+    "router = APIRouter()\n"
+    "weather_router = APIRouter()\n",
+)
+check("...but not when `router` is already defined, which would drop one",
+      "router = APIRouter()" in _taken56 and "weather_router = APIRouter()" in _taken56,
+      _taken56)
+
+shutil.rmtree(_W56, ignore_errors=True)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

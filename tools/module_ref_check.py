@@ -100,13 +100,24 @@ class RefIssue:
         )
         if self.in_test:
             # A test module that cannot import is a broken suite, not a broken
-            # application — the distinction §4.26 exists to preserve. Say so in
-            # the finding, so nobody reads it as the app being dead.
+            # application — the distinction §4.26 exists to preserve, and the
+            # routing below still depends on it.
+            #
+            # What this no longer does is assert that the application is FINE.
+            # `in_test` says where the name is READ; it says nothing about the
+            # health of the module being read. On row 3 (2026-09-01) the text
+            # read "the application itself is unaffected" while `app.main` was
+            # dead of a NameError, and that sentence went into the remediation
+            # advisory that drives an LLM — alongside "Add `router` to
+            # `app.main`", which was the wrong repair for a file whose real
+            # defect was that it ignored five aliases it had already imported.
+            # Scope the claim to what this checker actually knows.
             when = ("when the test module is imported, so this test cannot run "
-                    "(the application itself is unaffected)"
+                    "(a finding about the test module, not about the "
+                    "application)"
                     if self.at_import_time
-                    else "when this test runs (the application itself is "
-                         "unaffected)")
+                    else "when this test runs (a finding about the test "
+                         "module, not about the application)")
         else:
             when = ("when the module is imported, so the application cannot "
                     "start" if self.at_import_time
