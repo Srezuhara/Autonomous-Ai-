@@ -1,0 +1,1082 @@
+{
+  "_blame_probe": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/services.py",
+        "tests/test_bookmarks.py"
+      ]
+    },
+    "clean_before": 6,
+    "files": 9,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "_live_verify_row2_final": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/services.py",
+        "tests/test_bookmarks.py"
+      ]
+    },
+    "clean_before": 9,
+    "files": 9,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "_live_verify_row3_control": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_suppliers.py"
+      ],
+      "structural_imports": [
+        "backend/routes.py"
+      ]
+    },
+    "clean_before": 14,
+    "files": 14,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "_live_verify_row3_definitions": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_suppliers.py"
+      ],
+      "structural_imports": [
+        "backend/routes.py"
+      ]
+    },
+    "clean_before": 14,
+    "files": 14,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "_live_verify_row3b": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_supplier.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_product.py",
+        "tests/test_stock_report.py",
+        "tests/test_supplier.py"
+      ]
+    },
+    "clean_before": 13,
+    "files": 14,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_pdf_reader": {
+    "changed": {
+      "inject_syspath": [
+        "__init__.py",
+        "backend/__init__.py",
+        "backend/auth.py",
+        "backend/inference.py",
+        "backend/ocr_model.py",
+        "backend/routes/__init__.py",
+        "backend/services.py",
+        "backend/summarizer.py",
+        "cli/__init__.py",
+        "cli/main.py",
+        "database/__init__.py",
+        "database/db.py",
+        "database/index.py",
+        "frontend/__init__.py",
+        "frontend/search_service.py",
+        "models/__init__.py",
+        "models/summarization.py",
+        "ocr/__init__.py",
+        "ocr/ocr.py",
+        "search/__init__.py",
+        "search/search.py",
+        "security/__init__.py",
+        "security/biometric_auth.py",
+        "tests/__init__.py"
+      ],
+      "preflight_fix": [
+        "database/db.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/routes.py",
+        "backend/search.py",
+        "backend/vault.py",
+        "cli_tool.py",
+        "ocr/ocr.py"
+      ],
+      "structural_imports": [
+        "backend/summarization.py",
+        "backend/vault.py"
+      ]
+    },
+    "clean_before": 26,
+    "files": 36,
+    "harm": [
+      {
+        "error": "ImportError: cannot import name 'extract_text' from 'ocr' (C:\\programes\\comppython\\Aiautonomous\\generated_projects\\_repair_probe_ai_pdf_reader\\ocr\\__init__.py)",
+        "file": "backend/search.py"
+      },
+      {
+        "error": "NameError: name 'engine' is not defined",
+        "file": "database/db.py"
+      }
+    ],
+    "not_idempotent": []
+  },
+  "ai_report_generator": {
+    "changed": {
+      "inject_syspath": [
+        "__init__.py",
+        "backend/__init__.py",
+        "backend/ai_summaries.py",
+        "backend/app.py",
+        "backend/chart_generation.py",
+        "backend/data_analysis.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/pdf_report.py",
+        "backend/pdf_report_generation.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "backend/streamlit_ui.py",
+        "frontend/__init__.py",
+        "frontend/app.py",
+        "tests/__init__.py",
+        "tests/test_ai_generated_summaries.py",
+        "tests/test_ai_summaries.py",
+        "tests/test_app.py",
+        "tests/test_chart_generation.py",
+        "tests/test_cli.py",
+        "tests/test_data_analysis.py",
+        "tests/test_data_import.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_pdf_report.py",
+        "tests/test_pdf_report_generation.py",
+        "tests/test_routes.py",
+        "tests/test_services.py",
+        "tests/test_streamlit_ui.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/ai_summaries.py",
+        "backend/app.py",
+        "backend/chart_generation.py",
+        "backend/data_analysis.py",
+        "backend/pdf_report.py",
+        "backend/services.py"
+      ],
+      "structural_imports": [
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 18,
+    "files": 33,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_report_generator_7bb61c1e": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/ai_summary_generator.py",
+        "backend/chart_generation.py",
+        "backend/data_analysis.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/pdf_report_generator.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "frontend/__init__.py",
+        "frontend/app.py",
+        "tests/__init__.py"
+      ],
+      "preflight_fix": [
+        "backend/routes.py",
+        "backend/services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "frontend/app.py"
+      ],
+      "structural_imports": [
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 7,
+    "files": 12,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_report_generator_941887e1": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py"
+      ]
+    },
+    "clean_before": 4,
+    "files": 5,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_report_generator_99c7dfed": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py"
+      ]
+    },
+    "clean_before": 7,
+    "files": 9,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_report_generator_c60361c0": {
+    "changed": {
+      "inject_syspath": [
+        "ai_report_generator/__init__.py",
+        "ai_report_generator/backend/__init__.py",
+        "ai_report_generator/tests/__init__.py",
+        "ai_report_generator/tests/test_ai_generated_summaries.py",
+        "ai_report_generator/tests/test_chart_generation.py",
+        "ai_report_generator/tests/test_data_analysis.py",
+        "ai_report_generator/tests/test_main.py",
+        "ai_report_generator/tests/test_pdf_report_generation.py",
+        "ai_report_generator/tests/test_routes.py",
+        "ai_report_generator/tests/test_services.py",
+        "ai_report_generator/tests/test_streamlit_ui.py"
+      ],
+      "structural_imports": [
+        "ai_report_generator/backend/services.py"
+      ]
+    },
+    "clean_before": 19,
+    "files": 23,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_report_generator_cd4eb626": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/ai_generated_summaries.py",
+        "backend/app.py",
+        "backend/chart_generation.py",
+        "backend/data_analysis.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/pdf_report_generation.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "tests/__init__.py"
+      ],
+      "structural_imports": [
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 4,
+    "files": 11,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "ai_report_generator_cf00d934": {
+    "changed": {
+      "ensure_init": [
+        "tests/__init__.py"
+      ],
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/test_models.py"
+      ],
+      "structural_imports": [
+        "backend/routes.py",
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 3,
+    "files": 11,
+    "harm": [],
+    "not_idempotent": [
+      "tests/__init__.py"
+    ]
+  },
+  "ai_report_generator_d715e3f9": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py"
+      ],
+      "preflight_fix": [
+        "backend/services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/main.py",
+        "backend/routes.py",
+        "backend/services.py"
+      ],
+      "structural_imports": [
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 2,
+    "files": 5,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "bookmark_manager_2323e41f": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/services.py",
+        "tests/test_bookmarks.py"
+      ]
+    },
+    "clean_before": 6,
+    "files": 9,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "bookmark_manager_a3ca5c18": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_services.py"
+      ],
+      "structural_imports": [
+        "backend/routes.py",
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 9,
+    "files": 11,
+    "harm": [
+      {
+        "error": "NameError: name 'BookmarkCreate' is not defined",
+        "file": "backend/routes.py"
+      },
+      {
+        "error": "NameError: name 'BookmarkCreate' is not defined",
+        "file": "backend/services.py"
+      },
+      {
+        "error": "NameError: name 'BookmarkCreate' is not defined",
+        "file": "tests/test_services.py"
+      }
+    ],
+    "not_idempotent": []
+  },
+  "bookmark_manager_c95501b4": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_main.py"
+      ]
+    },
+    "clean_before": 10,
+    "files": 10,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "bookmark_manager_de756d20": {
+    "changed": {
+      "ensure_init": [
+        "__init__.py"
+      ],
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "run.py",
+        "tests/__init__.py",
+        "tests/test_main.py"
+      ]
+    },
+    "clean_before": 8,
+    "files": 8,
+    "harm": [],
+    "not_idempotent": [
+      "__init__.py"
+    ]
+  },
+  "bookmark_manager_e045ca2d": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py",
+        "tests/test_test_api.py"
+      ]
+    },
+    "clean_before": 12,
+    "files": 12,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "bulk_file_renamer_912f9b22": {
+    "changed": {
+      "inject_syspath": [
+        "tests/test_cli.py",
+        "tests/test_logger.py",
+        "tests/test_main.py",
+        "tests/test_renamer.py",
+        "tests/test_undo_log.py"
+      ],
+      "structural_imports": [
+        "bulk_file_renamer/cli.py",
+        "bulk_file_renamer/main.py",
+        "bulk_file_renamer/renamer.py"
+      ]
+    },
+    "clean_before": 9,
+    "files": 12,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "bulk_file_renamer_ab57297e": {
+    "changed": {
+      "inject_syspath": [
+        "tests/__init__.py",
+        "tests/test_cli.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py"
+      ],
+      "structural_imports": [
+        "bulk_file_renamer/cli.py",
+        "bulk_file_renamer/main.py",
+        "bulk_file_renamer/renamer.py",
+        "bulk_file_renamer/services.py",
+        "bulk_file_renamer/undo.py"
+      ]
+    },
+    "clean_before": 12,
+    "files": 16,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "bulk_rename_cli": {
+    "changed": {
+      "ensure_init": [
+        "tests/__init__.py"
+      ],
+      "inject_syspath": [
+        "bulk_rename_cli/__init__.py",
+        "tests/test_cli.py",
+        "tests/test_main.py",
+        "tests/test_preview.py",
+        "tests/test_renamer.py",
+        "tests/test_tests.py"
+      ]
+    },
+    "clean_before": 11,
+    "files": 11,
+    "harm": [],
+    "not_idempotent": [
+      "tests/__init__.py"
+    ]
+  },
+  "bulk_rename_tool_fa7533e1": {
+    "changed": {
+      "inject_syspath": [
+        "tests/__init__.py"
+      ]
+    },
+    "clean_before": 1,
+    "files": 4,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "current_time_service_acde5070": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "tests/__init__.py",
+        "tests/test_main.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/services.py",
+        "tests/test_main.py"
+      ]
+    },
+    "clean_before": 6,
+    "files": 7,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "fixture:multi_model_pkg": {
+    "changed": {
+      "ensure_init": [
+        "__init__.py"
+      ],
+      "inject_syspath": [
+        "main.py",
+        "models/__init__.py",
+        "models/product.py",
+        "models/supplier.py"
+      ],
+      "rewrite_dotted_imports": [
+        "models/__init__.py"
+      ]
+    },
+    "clean_before": 4,
+    "files": 4,
+    "harm": [],
+    "not_idempotent": [
+      "__init__.py"
+    ]
+  },
+  "fixture:multi_router": {
+    "changed": {
+      "ensure_init": [
+        "__init__.py"
+      ],
+      "inject_syspath": [
+        "main.py",
+        "routers/__init__.py",
+        "routers/products.py",
+        "routers/suppliers.py",
+        "routers/warehouses.py"
+      ]
+    },
+    "clean_before": 5,
+    "files": 5,
+    "harm": [],
+    "not_idempotent": [
+      "__init__.py"
+    ]
+  },
+  "fixture:single_router_legacy": {
+    "changed": {
+      "ensure_init": [
+        "__init__.py"
+      ],
+      "inject_syspath": [
+        "main.py",
+        "routes.py"
+      ],
+      "preflight_fix": [
+        "main.py",
+        "routes.py"
+      ]
+    },
+    "clean_before": 2,
+    "files": 2,
+    "harm": [],
+    "not_idempotent": [
+      "__init__.py"
+    ]
+  },
+  "inventory_system_3322017e": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/models.py",
+        "tests/__init__.py"
+      ],
+      "structural_imports": [
+        "backend/main.py",
+        "backend/routes.py",
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 2,
+    "files": 8,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_885804e4": {
+    "changed": {
+      "inject_syspath": [
+        "app/routers/__init__.py",
+        "tests/test_database.py",
+        "tests/test_models.py",
+        "tests/test_schemas.py",
+        "tests/test_suppliers.py",
+        "tests/test_test_suppliers.py"
+      ]
+    },
+    "clean_before": 14,
+    "files": 20,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_90ee973f": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_suppliers.py"
+      ],
+      "structural_imports": [
+        "backend/routes.py"
+      ]
+    },
+    "clean_before": 14,
+    "files": 14,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_9600d11d": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routers/__init__.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "tests/__init__.py",
+        "tests/test_products.py",
+        "tests/test_stock_movements.py",
+        "tests/test_suppliers.py",
+        "tests/test_warehouses.py"
+      ],
+      "preflight_fix": [
+        "tests/test_products.py",
+        "tests/test_stock_movements.py",
+        "tests/test_suppliers.py",
+        "tests/test_warehouses.py"
+      ],
+      "rewrite_dotted_imports": [
+        "backend/main.py",
+        "backend/routes.py",
+        "tests/test_products.py",
+        "tests/test_stock_movements.py",
+        "tests/test_suppliers.py",
+        "tests/test_warehouses.py"
+      ],
+      "structural_imports": [
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 5,
+    "files": 11,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_e6a1da32": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/routers/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_crud.py"
+      ]
+    },
+    "clean_before": 12,
+    "files": 13,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_e9eac7be": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_supplier.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_product.py",
+        "tests/test_stock_report.py",
+        "tests/test_supplier.py"
+      ]
+    },
+    "clean_before": 13,
+    "files": 14,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_f3dbcc61": {
+    "changed": {
+      "inject_syspath": [
+        "__init__.py",
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_suppliers.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_products.py",
+        "tests/test_stock_movements.py",
+        "tests/test_suppliers.py",
+        "tests/test_warehouses.py"
+      ]
+    },
+    "clean_before": 17,
+    "files": 17,
+    "harm": [
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_main.py"
+      },
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_products.py"
+      },
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_routes.py"
+      },
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_stock_movements.py"
+      },
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_suppliers.py"
+      },
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_test_suppliers.py"
+      },
+      {
+        "error": "ImportError: cannot import name 'app' from 'main' (C:\\programes\\comppython\\Aiautonomous\\main.py)",
+        "file": "tests/test_warehouses.py"
+      }
+    ],
+    "not_idempotent": []
+  },
+  "llm_api_key_dashboard": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_alerts.py",
+        "tests/test_auth.py",
+        "tests/test_groq_api.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_api.py"
+      ],
+      "structural_imports": [
+        "backend/services.py"
+      ]
+    },
+    "clean_before": 18,
+    "files": 18,
+    "harm": [
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "backend/alerts.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "backend/main.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "backend/routes.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "backend/services.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "tests/test_alerts.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "tests/test_api.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "tests/test_main.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "tests/test_routes.py"
+      },
+      {
+        "error": "NameError: name 'Token' is not defined. Did you mean: 'open'?",
+        "file": "tests/test_services.py"
+      }
+    ],
+    "not_idempotent": []
+  },
+  "llm_api_key_health_dashboard": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/groq_api.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "tests/__init__.py",
+        "tests/test_api.py",
+        "tests/test_frontend.py"
+      ]
+    },
+    "clean_before": 7,
+    "files": 8,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "project": {
+    "changed": {},
+    "clean_before": 0,
+    "files": 0,
+    "harm": [],
+    "not_idempotent": [],
+    "note": "no debuggable .py files"
+  },
+  "simple_calculator": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/calculator.py",
+        "backend/cli.py",
+        "backend/error_handler.py",
+        "backend/main.py",
+        "backend/models.py",
+        "backend/routes.py",
+        "backend/services.py",
+        "simple_calculator/__init__.py",
+        "simple_calculator/calculator.py",
+        "simple_calculator/cli.py",
+        "simple_calculator/main.py",
+        "simple_calculator/models.py",
+        "simple_calculator/routes.py",
+        "simple_calculator/services.py",
+        "simple_calculator/tests.py",
+        "tests/__init__.py",
+        "tests/test_calculator.py",
+        "tests/test_cli.py",
+        "tests/test_main.py",
+        "tests/test_routes.py",
+        "tests/test_test_calculator.py",
+        "tests/test_test_cli.py",
+        "tests/tests.py"
+      ],
+      "structural_imports": [
+        "backend/tests.py",
+        "simple_calculator/__init__.py",
+        "simple_calculator/services.py",
+        "simple_calculator/test_cli.py"
+      ]
+    },
+    "clean_before": 7,
+    "files": 27,
+    "harm": [],
+    "not_idempotent": [
+      "simple_calculator/__init__.py"
+    ]
+  },
+  "task_manager": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py"
+      ]
+    },
+    "clean_before": 10,
+    "files": 10,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "task_manager_3d57d0b8": {
+    "changed": {
+      "inject_syspath": [
+        "tests/__init__.py",
+        "tests/test_crud.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py"
+      ],
+      "structural_imports": [
+        "backend/__init__.py"
+      ]
+    },
+    "clean_before": 10,
+    "files": 10,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "task_manager_7167454c": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py",
+        "tests/test_test_tasks.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_tasks.py"
+      ]
+    },
+    "clean_before": 12,
+    "files": 12,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "test_coverage_improver": {
+    "changed": {
+      "ensure_init": [
+        "tests/__init__.py"
+      ],
+      "inject_syspath": [
+        "backend/__init__.py",
+        "backend/tests/__init__.py",
+        "frontend/src/tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py",
+        "tests/test_test_main.py"
+      ]
+    },
+    "clean_before": 13,
+    "files": 13,
+    "harm": [],
+    "not_idempotent": [
+      "tests/__init__.py"
+    ]
+  },
+  "test_coverage_tool": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_cli.py",
+        "tests/test_integration_test.py",
+        "tests/test_main.py",
+        "tests/test_routes.py",
+        "tests/test_test_coverage.py"
+      ]
+    },
+    "clean_before": 12,
+    "files": 12,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "todo_app": {
+    "changed": {},
+    "clean_before": 0,
+    "files": 0,
+    "harm": [],
+    "not_idempotent": [],
+    "note": "no debuggable .py files"
+  },
+  "todo_app_4fe8055a": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_services.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_api.py"
+      ]
+    },
+    "clean_before": 11,
+    "files": 11,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "todo_app_fb3e4b24": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_db.py",
+        "tests/test_main.py",
+        "tests/test_routes.py"
+      ]
+    },
+    "clean_before": 8,
+    "files": 8,
+    "harm": [],
+    "not_idempotent": []
+  }
+}

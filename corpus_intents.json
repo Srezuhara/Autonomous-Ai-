@@ -1,14 +1,12 @@
 {
-  "_comment": "Requested features for the corpus anchors, so tools/verify_corpus.py can exercise feature_coverage. The database stores projects.prompt but never the feature list the intent analyser produced, so without this the check answers 'not applicable' for every build and proves nothing. Feature wording is taken from the matrix prompts in run_live_matrix.py.",
-
-  "inventory_system_90ee973f": {
+  "_comment": "Requested features for the corpus anchors, so tools/verify_corpus.py can exercise feature_coverage. The database stores projects.prompt but never the feature list the intent analyser produced, so without this the check answers 'not applicable' for every build and proves nothing. Feature wording is taken from the matrix prompts in run_live_matrix.py.  Widened 2026-09-01 from the prompts platform.db already stores (projects.prompt), by hand rather than by running the LLM IntentAnalyzer, so feature_coverage is exercised on the whole corpus instead of five anchors. NOTE: 43 projects share only 13 DISTINCT prompts, so this widens the number of artifacts checked far more than it widens the feature vocabulary.",
+  "_live_verify_row2_final": {
     "features": [
-      "CRUD for Supplier",
-      "CRUD for Product",
-      "CRUD for StockMovement",
-      "CRUD for Warehouse",
-      "stock level queries per warehouse",
-      "a low-stock report endpoint"
+      "full CRUD for bookmarks",
+      "tag filtering",
+      "a frontend that lists bookmarks",
+      "adds a bookmark through a form",
+      "filters by tag"
     ]
   },
   "_live_verify_row3b": {
@@ -19,6 +17,131 @@
       "CRUD for Warehouse",
       "stock level queries per warehouse",
       "a low-stock report endpoint"
+    ]
+  },
+  "ai_pdf_reader": {
+    "features": [
+      "real-time global search",
+      "on-device OCR",
+      "AI summaries",
+      "biometric vault protection"
+    ]
+  },
+  "ai_report_generator": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_7bb61c1e": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_941887e1": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_99c7dfed": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_c60361c0": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_cd4eb626": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_cf00d934": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "ai_report_generator_d715e3f9": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "bookmark_manager_2323e41f": {
+    "features": [
+      "create a bookmark",
+      "list bookmarks",
+      "update a bookmark",
+      "delete a bookmark",
+      "a bookmark has a title, URL and tag"
+    ]
+  },
+  "bookmark_manager_a3ca5c18": {
+    "features": [
+      "create a bookmark",
+      "list bookmarks",
+      "update a bookmark",
+      "delete a bookmark",
+      "a bookmark has a title, URL and tag"
+    ]
+  },
+  "bookmark_manager_c95501b4": {
+    "features": [
+      "create a bookmark",
+      "list bookmarks",
+      "update a bookmark",
+      "delete a bookmark",
+      "a bookmark has a title, URL and tag"
+    ]
+  },
+  "bookmark_manager_de756d20": {
+    "features": [
+      "create a bookmark",
+      "list bookmarks",
+      "update a bookmark",
+      "delete a bookmark",
+      "a bookmark has a title, URL and tag"
+    ]
+  },
+  "bookmark_manager_e045ca2d": {
+    "features": [
+      "create a bookmark",
+      "list bookmarks",
+      "update a bookmark",
+      "delete a bookmark",
+      "a bookmark has a title, URL and tag"
     ]
   },
   "bulk_file_renamer_912f9b22": {
@@ -37,13 +160,167 @@
       "reverse a rename"
     ]
   },
-  "_live_verify_row2_final": {
+  "bulk_rename_cli": {
     "features": [
-      "full CRUD for bookmarks",
-      "tag filtering",
-      "a frontend that lists bookmarks",
-      "adds a bookmark through a form",
-      "filters by tag"
+      "rename files in bulk",
+      "regex patterns",
+      "a dry-run preview mode"
+    ]
+  },
+  "bulk_rename_tool_fa7533e1": {
+    "features": [
+      "rename files in bulk",
+      "regex patterns",
+      "a dry-run preview mode"
+    ]
+  },
+  "current_time_service_acde5070": {
+    "features": [
+      "return the current time as JSON"
+    ]
+  },
+  "inventory_system_3322017e": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "inventory_system_885804e4": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "inventory_system_90ee973f": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "inventory_system_9600d11d": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "inventory_system_e6a1da32": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "inventory_system_e9eac7be": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "inventory_system_f3dbcc61": {
+    "features": [
+      "CRUD for Supplier",
+      "CRUD for Product",
+      "CRUD for StockMovement",
+      "CRUD for Warehouse",
+      "stock level queries per warehouse",
+      "a low-stock report endpoint"
+    ]
+  },
+  "llm_api_key_dashboard": {
+    "features": [
+      "monitor multiple API keys",
+      "manage API keys",
+      "report key health"
+    ]
+  },
+  "project": {
+    "features": [
+      "read CSV/Excel data",
+      "analyze the data",
+      "generate charts",
+      "produce a PDF report",
+      "AI-generated summaries"
+    ]
+  },
+  "simple_calculator": {
+    "features": [
+      "adds two numbers"
+    ]
+  },
+  "task_manager": {
+    "features": [
+      "drag-and-drop boards",
+      "due dates",
+      "local storage persistence"
+    ]
+  },
+  "task_manager_3d57d0b8": {
+    "features": [
+      "drag-and-drop boards",
+      "due dates",
+      "local storage persistence"
+    ]
+  },
+  "task_manager_7167454c": {
+    "features": [
+      "drag-and-drop boards",
+      "due dates",
+      "local storage persistence"
+    ]
+  },
+  "test_coverage_improver": {
+    "features": [
+      "improve test coverage",
+      "add integration tests",
+      "improve error handling",
+      "add input validation"
+    ]
+  },
+  "test_coverage_tool": {
+    "features": [
+      "improve test coverage",
+      "add integration tests"
+    ]
+  },
+  "todo_app": {
+    "features": [
+      "track habits",
+      "track daily tasks"
+    ]
+  },
+  "todo_app_4fe8055a": {
+    "features": [
+      "track habits",
+      "track daily tasks"
+    ]
+  },
+  "todo_app_fb3e4b24": {
+    "features": [
+      "track habits",
+      "track daily tasks"
     ]
   }
 }

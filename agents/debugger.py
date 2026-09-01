@@ -397,11 +397,30 @@ class Debugger(BaseAgent):
 
             directory = (Path(config.OUTPUT_DIR) / fp).parent
 
+            # The directory listing, read once, because the check below must be
+            # CASE-SENSITIVE and `Path.is_file()` is not: Windows and macOS both
+            # answer True for `Supplier.py` when only `supplier.py` exists.
+            #
+            # That is not a corner case, it is the dominant Python convention —
+            # `class Supplier` living in `supplier.py`. With `is_file()`, the
+            # imported NAME `Supplier` resolved to the module `supplier`, and
+            # `from supplier import Supplier` was rewritten to `import Supplier`:
+            # a class imported as though it were a module, so the package stopped
+            # importing. Found 2026-09-01 by `tools/verify_repairs.py` against
+            # `repair_fixtures/multi_model_pkg`, which is a shape no build in the
+            # corpus has.
+            try:
+                _entries = {e.name for e in directory.iterdir()}
+            except OSError:
+                _entries = set()
+
             def _is_sibling(name: str) -> bool:
                 if not name or not name.isidentifier():
                     return False
-                return ((directory / f"{name}.py").is_file()
-                        or (directory / name / "__init__.py").is_file())
+                if f"{name}.py" in _entries:
+                    return True
+                return (name in _entries
+                        and (directory / name / "__init__.py").is_file())
 
             replacements: dict = {}
             for node in ast.walk(tree):
@@ -977,17 +996,10 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             models_file = project_dir / "models.py"
             models_dir  = project_dir / "models"
             if not models_file.exists() and models_dir.exists():
-                model_files = [f for f in models_dir.glob("*.py") if f.name != "__init__.py"]
-                if model_files:
-                    stem = model_files[0].stem
-                    new  = re.sub(
-                        r'from models import ([^\n]+)',
-                        f'from models.{stem} import \\1',
-                        content,
-                    )
-                    if new != content:
-                        content = new
-                        fixes.append(f"fixed 'from models import X' → 'from models.{stem} import X'")
+                new, note = self._retarget_models_package(content, models_dir)
+                if new != content:
+                    content = new
+                    fixes.append(note)
 
         if project_dir and (project_dir / "services.py").exists():
             new = re.sub(
@@ -1000,6 +1012,60 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         if content != original:
             create_file(file_path, content)
         return fixes
+
+    def _retarget_models_package(self, content: str, models_dir: Path):
+        """`from models import X` where `models` is a package, not a module.
+
+        The rule this replaces rewrote every such line to name `glob("*.py")[0]`
+        — whichever file the filesystem happened to return first — regardless of
+        which module actually defined X. On a four-entity project that is wrong
+        for three of the four, and `glob` is not sorted, so it was not even
+        stable across machines.
+
+        Measured 2026-09-01 by `tools/verify_repairs.py` against
+        `repair_fixtures/multi_model_pkg`: `from models import Product, Supplier`
+        became `from models.product import Product, Supplier` and the package
+        stopped importing. The same shape as the router defect found the same
+        session — a single-entity assumption applied to a name it never checked.
+
+        A package whose `__init__.py` re-exports the names needs no repair, and
+        that is the ordinary idiom. Otherwise a line is retargeted only when
+        exactly ONE module supplies every name it asks for: two sources cannot be
+        written as one import, and guessing between them is the bug itself.
+        """
+        init = models_dir / "__init__.py"
+        exported: set = set()
+        if init.exists():
+            try:
+                exported = top_level_symbols(init.read_text(encoding="utf-8"))
+            except Exception:
+                exported = set()
+
+        provides: dict = {}
+        for f in sorted(models_dir.glob("*.py")):
+            if f.name == "__init__.py":
+                continue
+            try:
+                provides[f.stem] = top_level_symbols(f.read_text(encoding="utf-8"))
+            except Exception:
+                provides[f.stem] = set()
+
+        note = ""
+
+        def repl(m):
+            nonlocal note
+            asked = {n.split(" as ")[0].strip() for n in m.group(1).split(",")}
+            asked = {n for n in asked if n and n.isidentifier()}
+            if not asked or asked <= exported:
+                return m.group(0)      # the package already answers this
+            owners = [stem for stem, syms in provides.items() if asked <= syms]
+            if len(owners) != 1:
+                return m.group(0)      # ambiguous, or nothing supplies it
+            note = ("fixed 'from models import X' -> "
+                    f"'from models.{owners[0]} import X'")
+            return f"from models.{owners[0]} import {m.group(1)}"
+
+        return re.sub(r'from models import ([^\n]+)', repl, content), note
 
     def _get_project_dir(self, file_path: str) -> Path | None:
         try:
@@ -1076,16 +1142,39 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 insert_at = idx
         return insert_at
 
+    # The markers that identify a shim this method injected earlier. Kept as a
+    # constant because the strip below and the re-insert above it must agree:
+    # anything the block writes and the strip does not remove accumulates.
+    _SHIM_MARKERS = (
+        "_here =", "_parent =", "_grandparent =",
+        "sys.path.insert", "import sys as _sys", "import os as _os",
+        "if _p not in _sys.path", "for _p in [_here",
+    )
+
     def _inject_syspath(self, file_path: str) -> bool:
         try:
             content = read_file(file_path)
+            on_disk = content
             if "_here = " in content or "sys.path.insert" in content:
                 lines    = content.splitlines(keepends=True)
-                filtered = [l for l in lines if not any(x in l for x in [
-                    "_here =", "_parent =", "_grandparent =",
-                    "sys.path.insert", "import sys as _sys", "import os as _os",
-                    "if _p not in _sys.path", "for _p in [_here",
-                ])]
+                # The strip used to remove the block's code lines but not the
+                # blank line it is re-inserted with (`SYSPATH_BLOCK + "\n"`),
+                # so every pass over a file added one blank line and rewrote
+                # it. Measured 2026-09-01 by `tools/verify_repairs.py`: **531
+                # of 531 corpus files were modified by this method and 535
+                # were non-idempotent** — it was the entire non-idempotence
+                # signal, which is to say it hid any other.
+                filtered = []
+                dropped  = False
+                for l in lines:
+                    if any(x in l for x in self._SHIM_MARKERS):
+                        dropped = True
+                        continue
+                    if dropped and not l.strip():
+                        dropped = False      # exactly the one blank we re-add
+                        continue
+                    dropped = False
+                    filtered.append(l)
                 content = "".join(filtered)
 
             lines     = content.splitlines(keepends=True)
@@ -1116,6 +1205,12 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 + SYSPATH_BLOCK + "\n"
                 + "".join(lines[insert_at:])
             )
+            # Nothing to do is not the same as work done. Rewriting a file whose
+            # shim is already correct churns its mtime and its digest on every
+            # pass, and made this method look like it had touched every file in
+            # the project when it had changed nothing.
+            if new_content == on_disk:
+                return False
             create_file(file_path, new_content)
             return True
         except Exception as e:

@@ -23,6 +23,197 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ---
 
+## 0.-7 The non-quota plan, executed — a harness for the half nothing tested
+
+Row 3's two defects both sat in the same blind spot, and it is worth stating
+plainly because it governs everything below:
+
+> `tools/verify_corpus.py` replays **verifiers** over finished projects. It never
+> invokes `_preflight_fix`, the debugger's repair loop, or the tester. The corpus
+> covers checkers, not the agents that write and repair code.
+
+### 0.-7.1 `tools/verify_repairs.py`
+
+Replays the deterministic, zero-LLM prefix of `Debugger.run()` — the file
+filter, `_ensure_init_files`, `_preflight_fix`, `_rewrite_dotted_imports`,
+`_inject_syspath`, `_apply_structural_import_repairs` — stopping immediately
+before `_debug_file`, where the LLM starts. Three properties:
+
+- **P1 do no harm** — a file that imported cleanly before must import after.
+- **P2 idempotence** — running the sequence twice equals running it once.
+- **P3 a reviewed diff** — every modification attributed to the rule that made it.
+
+`--baseline repair_baseline.json` turns it into a regression test, the same
+contract `verify_corpus.py` has. Costs nothing: no LLM, no tokens.
+
+### 0.-7.2 The design changed on evidence: `repair_fixtures/`
+
+The first full run found **zero** harm — and that was almost a false negative.
+**Every build in the corpus is single-router** (`from routes import router`),
+so replaying the repairs over the corpus alone **would not have caught the
+defect that cost row 3 either.** A blind spot inside a blind spot.
+
+Hence `repair_fixtures/` — small hand-written projects, correct and importable
+as they stand, for shapes the corpus lacks: `multi_router`, `multi_model_pkg`,
+`single_router_legacy`. **Three of the four repair defects below were found
+there and nowhere else.** When a repair rule is fixed, the shape that broke it
+belongs in that directory.
+
+### 0.-7.3 Three defects fixed, each measured
+
+**`_inject_syspath` grew a blank line on every pass.** It stripped the shim's
+code lines but not the blank line it re-inserts, and wrote unconditionally.
+Measured: **531 of 531 corpus files modified, 535 non-idempotent** — it *was*
+the entire non-idempotence signal, which is to say it hid every other. After:
+319 modified, and corpus-wide non-idempotence fell to **8**.
+
+**`from models import X` was retargeted at `glob("*.py")[0]`** — whichever file
+the filesystem returned first, regardless of which module defined X, and `glob`
+is not sorted so it was not stable across machines. Now a line is retargeted
+only when exactly one module supplies every name it asks for, and a package
+whose `__init__.py` re-exports the names is left alone.
+
+**`_is_sibling` was case-insensitive.** `Path.is_file()` answers True for
+`Supplier.py` when only `supplier.py` exists — on Windows and macOS both. So the
+imported *name* `Supplier` resolved to the *module* `supplier`, and
+`from supplier import Supplier` was rewritten to `import Supplier`: a class
+imported as a module. This is the one-class-per-module convention, so it is
+broadly reachable, and no build in the corpus has the shape that shows it.
+
+### 0.-7.4 The harness was falsified before it was believed
+
+A harness that only ever prints 0 has proved nothing. Reverting each fix, one at
+a time, and re-running the fixtures:
+
+| state | harmed |
+|---|---|
+| all three fixes in place | **0** |
+| router collapse reverted | **1** — CAUGHT |
+| `_is_sibling` case fix reverted | **4** — CAUGHT |
+
+It catches the defect that cost 222,068 tokens.
+
+### 0.-7.5 What it found that is NOT fixed: 21 harmed files, all pre-existing
+
+The full corpus run reports **21 files that import cleanly and stop importing
+after the repairs**. Measured with the three fixes reverted: **also 21**. They
+are pre-existing, not regressions — newly visible, not newly caused.
+
+| # | Project | Symptom | Cause |
+|---|---|---|---|
+| 9 | `llm_api_key_dashboard` | `NameError: Token` | `_apply_structural_import_repairs` step 2 deletes `services.py`'s sibling imports **without checking whether the names are still used** — `from auth import Token` removed, `Token` still referenced. |
+| 7 | `inventory_system_f3dbcc61` | `ImportError: cannot import name 'app' from 'main'` — and the path names **this repo's own `main.py`** | flattening `from backend.main import app` to `from main import app` for a file in `tests/`, where `backend/` is not on the path, so it resolves against the builder's own tree. |
+| 3 | `bookmark_manager_a3ca5c18` | `NameError: BookmarkCreate` | same shape as the first. |
+| 2 | `ai_pdf_reader` | `NameError: engine` | `_preflight_fix` comments out `engine = create_engine(...)` and leaves `bind=engine` on the next line. |
+
+**Three of the four are one bug**: *a rule removes a binding without checking
+its uses.* §Phase 22 already fixed this rule once, for multi-line statements;
+use-after-removal was never considered. That is the next repair defect to fix,
+and `repair_baseline.json` now records these 21 so a fix has to move the number.
+
+**Caveat on the baseline**: `clean_before` depends on a 30s import timeout, so a
+heavily loaded machine could shrink the asserted set and mask a harm. Diffs are
+compared on file names, not counts, but treat a *reduction* in harm with the
+same suspicion as an increase until a diff explains it.
+
+### 0.-7.6 `feature_coverage` — measured, and synonyms were never the blocker
+
+§4.40 called synonyms "the single remaining blocker" on the strength of **five**
+anchor projects. `corpus_intents.json` is now **39 projects / 167 features**,
+hand-authored from the 75 prompts `platform.db` already stores — zero quota,
+since the IntentAnalyzer is an LLM call and these were written by reading the
+prompt.
+
+Two numbers end the tightening:
+
+- **69 of 126 covered features (55%) hang on a single word.** Any "require two
+  words" rule converts them into findings at a stroke.
+- Of the 34 features now reported missing, roughly **23 are false**, in two
+  clusters that have nothing to do with synonyms:
+  - **the AI-report builds (14)** — the evidence is in `pd.read_csv`, string
+    literals and `data_analysis` vs "analyze". The vocabulary collects *defined
+    names*, not called ones, string content, or morphology.
+  - **the React task managers (9)** — the evidence is in 15 `.js` files, from
+    which only HTML tag names are collected.
+
+The remaining findings are genuine and worth having: `bookmark_manager_de756d20`
+is an **empty build** whose files are all architect placeholder stubs, and
+`todo_app_4fe8055a` really does implement neither habits nor daily tasks. Both
+were invisible before, because `feature_coverage` answered `not_applicable` for
+every project but five — checking nothing, and reading as fine.
+
+**Verdict: do not tighten the threshold. The work, if it is done, is vocabulary
+coverage — called names, string literals, JS identifiers — not a synonym table
+and not embeddings.** That is a different change with its own risk, and it is
+not started here.
+
+**What the corpus baseline now means for this check.** `feature_coverage` moved
+from `not_applicable` on 34 projects to `verified` on 17, `failed` on 15 and
+`not_run` on 2 (the two are empty directories with no `.py` at all, which is the
+honest answer). Those 34 findings are recorded in `verification_baseline.json`
+**as what the check currently says, not as truth** — roughly two thirds are the
+false positives measured above. The baseline's job is to detect change. Do not
+read that file as a defect list until the vocabulary is fixed.
+
+### 0.-7.7 Verification
+
+- `test_phase23.py` **850/850** (§4.45 tester filter, §4.46 the three repairs).
+- `verify_corpus.py --baseline` clean after re-recording; **every diff was
+  `feature_coverage`, and zero verifier outcomes changed** — the debugger work
+  touched no checker.
+- `verify_repairs.py --baseline repair_baseline.json` clean; fixtures 0 harmed.
+- Falsification passed for both fixes that have a fixture (§0.-7.4).
+
+---
+
+## 0.-6 Phase C's premise, re-examined — the verdict is NO-GO
+
+`PHASE23_PLAN.md:339-343` made this a precondition of any Phase C spend: *"If
+the live matrix shows build quality is dominated by architect variance rather
+than by missing precedent, vector memory is the wrong lever."* It was never
+done. It is done here, and it costs nothing: the catalogue is already written.
+
+### The classification
+
+Every defect catalogued in §4.22-§4.46 — 24 of them — sorted by what would have
+prevented it:
+
+| Cause | Count | Examples |
+|---|---|---|
+| **Pipeline mechanics** — plumbing, ordering, a verifier's semantics | 16 | §4.22 ledger, §4.25 findings never re-read, §4.31 "verified" meant inspected, §4.39 record written before routing, §4.40/§4.42/§4.43 verifier logic |
+| **The pipeline broke correct code** | 5 | §4.33 shim outranked `__future__`; §4.46 the router collapse, the `models/` retarget, `_is_sibling`'s case-blindness; §4.44 the tester testing a test |
+| **Generation quality** — the model wrote something wrong | 3 | §4.34 ignored the import convention, §4.35 routes against undefined schemas, §4.38 the unstated contract |
+| **Missing precedent** — a similar prior build would have helped | **0** | — |
+
+### What that means
+
+**Not one defect in the catalogue would have been prevented by the build having
+seen a similar build.** Phase C's premise is not merely unsupported; the second
+row inverts it. In five cases the *generator was correct* and the pipeline
+destroyed its output — better precedent would have produced better code for the
+same machinery to break.
+
+And where generation genuinely was at fault, precedent was not what fixed it.
+§4.34 is the clearest: the prompt "could not be plainer" and the model ignored
+it anyway, 39 violations across 10 builds. What worked was deterministic
+enforcement after the fact. §4.38 was fixed by stating the contract in the
+prompt. Both are cheaper than a vector store and neither needs one.
+
+### Decision
+
+**Do not build Phase C.** The named alternative is the right spend:
+`PHASE22_HANDOFF.md` §6 Step 3 — constraining the architect for simple and
+medium apps — which targets the variance the catalogue actually shows.
+
+The honest caveat: the catalogue is 24 diagnosed defects across ~43 builds of
+four shapes, all from one project's history. It cannot prove precedent would
+*never* help. It is decisive about priority rather than about possibility —
+nothing here is bottlenecked on precedent, so precedent is not what to buy next.
+Revisit only if a failure ever appears that a similar prior build would plainly
+have prevented. None has yet.
+
+---
+
 ## 0.-5 The tenth session (2026-09-01) — row 3 ran, and failed
 
 **Row 3 is red. Phase 23 does not close.** Build `885804e4`, `unusable`,

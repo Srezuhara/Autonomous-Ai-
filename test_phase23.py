@@ -7107,6 +7107,156 @@ check("windows separators are understood too",
 shutil.rmtree(_W57, ignore_errors=True)
 
 
+# ── §4.46 Three repairs that made working code worse ───────────────────────
+#
+# `tools/verify_repairs.py` replays the debugger's deterministic (zero-LLM)
+# repair sequence over every saved build plus `repair_fixtures/`, and asserts
+# that a file which imported cleanly before still imports after. It found three
+# defects on the day it was written, none of which any verifier could have seen:
+# the corpus checks CHECKERS, not the agents that rewrite code.
+#
+# Each case below is the shape that broke, plus the shape the rule was written
+# for — a fix that only satisfies the first is how the original bugs shipped.
+
+_W58 = Path(tempfile.mkdtemp(prefix="repairs58_"))
+_W58_OUT = _W58 / "out"
+_W58_OUT.mkdir(parents=True)
+
+from agents.debugger import Debugger as _Dbg58
+
+_dbg58 = _Dbg58()
+
+
+def _mk58(name: str, files: dict) -> str:
+    root = _W58_OUT / name
+    for rel, src in files.items():
+        t = root / rel
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(src, encoding="utf-8")
+    return name
+
+
+def _preflight58(project: str, rel: str) -> str:
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W58_OUT)
+        _dbg58._preflight_fix(f"{project}/{rel}")
+        return (_W58_OUT / project / rel).read_text(encoding="utf-8")
+    finally:
+        config.OUTPUT_DIR = real
+
+
+def _normalise58(project: str, rels: list) -> dict:
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W58_OUT)
+        _dbg58._normalise_sibling_imports([f"{project}/{r}" for r in rels])
+        return {r: (_W58_OUT / project / r).read_text(encoding="utf-8") for r in rels}
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# ── 1. `from models import X` when models/ is a real package ────────────────
+# The rule named glob("*.py")[0] — whichever file the filesystem returned first
+# — no matter which module defined X.
+_mk58("mm", {
+    "main.py": "from models import Product, Supplier\n",
+    "models/__init__.py": ("from models.supplier import Supplier\n"
+                           "from models.product import Product\n"),
+    "models/supplier.py": "class Supplier:\n    pass\n",
+    "models/product.py": "class Product:\n    pass\n",
+})
+_mm58 = _preflight58("mm", "main.py")
+check("a models/ package that re-exports its names is left alone",
+      "from models import Product, Supplier" in _mm58, _mm58)
+check("...and no name is retargeted at a module that does not define it",
+      "from models.product import Product, Supplier" not in _mm58, _mm58)
+
+# The single-entity case the rule WAS written for: no __init__ re-export, and
+# exactly one module supplies every name asked for.
+_mk58("mm1", {
+    "main.py": "from models import Task\n",
+    "models/__init__.py": "",
+    "models/task.py": "class Task:\n    pass\n",
+})
+_mm1_58 = _preflight58("mm1", "main.py")
+check("a name only one module supplies is still retargeted",
+      "from models.task import Task" in _mm1_58, _mm1_58)
+
+# Two modules, neither supplying both names: unresolvable as one import, so the
+# only correct action is to leave it alone rather than pick.
+_mk58("mm2", {
+    "main.py": "from models import Alpha, Beta\n",
+    "models/__init__.py": "",
+    "models/alpha.py": "class Alpha:\n    pass\n",
+    "models/beta.py": "class Beta:\n    pass\n",
+})
+_mm2_58 = _preflight58("mm2", "main.py")
+check("an import no single module can satisfy is not guessed at",
+      "from models import Alpha, Beta" in _mm2_58, _mm2_58)
+
+# ── 2. `_is_sibling` was case-insensitive on Windows ────────────────────────
+# `Supplier.py` "exists" when only `supplier.py` does, so the imported NAME
+# resolved to a module and `from supplier import Supplier` became
+# `import Supplier` — a class imported as a module.
+_mk58("cs", {
+    "supplier.py": "class Supplier:\n    pass\n",
+    "app.py": "from supplier import Supplier\n",
+})
+_cs58 = _normalise58("cs", ["app.py", "supplier.py"])
+check("a class is not mistaken for its own module on a case-insensitive disk",
+      "import Supplier" not in
+      [l.strip() for l in _cs58["app.py"].splitlines()], _cs58["app.py"])
+check("...and the import is left exactly as it was",
+      "from supplier import Supplier" in _cs58["app.py"], _cs58["app.py"])
+
+# The case the rule was written for still normalises: a genuinely package-
+# qualified import of a real sibling MODULE.
+_mk58("cs2", {
+    "models.py": "class Task:\n    pass\n",
+    "routes.py": "from backend.models import Task\n",
+})
+_cs2_58 = _normalise58("cs2", ["routes.py", "models.py"])
+check("a package-qualified sibling module import is still flattened",
+      "from models import Task" in _cs2_58["routes.py"], _cs2_58["routes.py"])
+
+# ── 3. `_inject_syspath` grew a blank line on every pass ────────────────────
+# It stripped the shim's code lines but not the blank line it re-inserts, so
+# every debugger pass rewrote every file. 531 of 531 corpus files, and it was
+# the entire non-idempotence signal — which is to say it hid any other.
+_mk58("sp", {"main.py": "print('hi')\n"})
+
+
+def _inject58(rel: str) -> str:
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W58_OUT)
+        _dbg58._inject_syspath(f"sp/{rel}")
+        return (_W58_OUT / "sp" / rel).read_text(encoding="utf-8")
+    finally:
+        config.OUTPUT_DIR = real
+
+
+_once58 = _inject58("main.py")
+_twice58 = _inject58("main.py")
+check("injecting the sys.path shim twice is a no-op the second time",
+      _once58 == _twice58,
+      f"{len(_once58)} -> {len(_twice58)} chars")
+check("...and the shim is actually there",
+      "_sys.path.insert" in _once58)
+
+real58 = config.OUTPUT_DIR
+try:
+    config.OUTPUT_DIR = str(_W58_OUT)
+    _second_call58 = _dbg58._inject_syspath("sp/main.py")
+finally:
+    config.OUTPUT_DIR = real58
+check("...and it reports that it changed nothing, rather than claiming a fix",
+      _second_call58 is False, str(_second_call58))
+
+shutil.rmtree(_W58, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

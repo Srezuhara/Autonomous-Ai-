@@ -72,6 +72,13 @@ _NOT_PROJECTS = {"__pycache__", "platform.db", "token_ledger.json"}
 # is never itself treated as a project — a crashed run leaves one behind.
 _CLONE_PREFIX = "_corpus_probe_"
 
+# `tools/verify_repairs.py` clones the same corpus for a different question, so
+# its scratch space must not read as a project here either. A crashed run of
+# EITHER tool leaves clones behind, and one probe measuring another probe's
+# leftovers is how a corpus stops being evidence.
+_REPAIR_PREFIX = "_repair_probe_"
+_PROBE_PREFIXES = (_CLONE_PREFIX, _REPAIR_PREFIX)
+
 # Intents the corpus cannot recover. `projects.prompt` is stored but the feature
 # list the analyser produced is not, so feature_coverage would answer "not
 # applicable" for every build and check nothing. This sidecar carries the
@@ -92,7 +99,7 @@ def project_names(only: str = "") -> list[str]:
     for path in sorted(OUT.iterdir()):
         if not path.is_dir():
             continue
-        if path.name in _NOT_PROJECTS or path.name.startswith(_CLONE_PREFIX):
+        if path.name in _NOT_PROJECTS or path.name.startswith(_PROBE_PREFIXES):
             continue
         if only and only not in path.name:
             continue
@@ -100,13 +107,20 @@ def project_names(only: str = "") -> list[str]:
     return names
 
 
-def _clone(name: str) -> str:
+def _clone(name: str, prefix: str = _CLONE_PREFIX,
+           src: Path | None = None) -> str:
     """A pristine copy under OUTPUT_DIR, since every verifier takes a root
-    relative to it. Returns the clone's folder name."""
-    dest = OUT / f"{_CLONE_PREFIX}{name}"
+    relative to it. Returns the clone's folder name.
+
+    `src` allows a fixture that lives outside the corpus to be staged the same
+    way; `prefix` is a parameter so `verify_repairs.py` can reuse this — the
+    stripping below (caches, node_modules, and any database an earlier probe
+    left behind) is exactly as necessary when the question is "does a repair
+    make things worse" as when it is "does a checker tell the truth"."""
+    dest = OUT / f"{prefix}{name}"
     shutil.rmtree(dest, ignore_errors=True)
     shutil.copytree(
-        OUT / name, dest,
+        src if src is not None else OUT / name, dest,
         ignore=shutil.ignore_patterns("__pycache__", "node_modules", ".git",
                                       "venv", "*.pyc"),
     )
