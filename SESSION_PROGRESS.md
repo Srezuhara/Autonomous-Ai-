@@ -1,13 +1,46 @@
 # Session Progress — start here
 
-**Last session: 2026-08-31 (Phase 23 — the ninth session). Zero tokens spent.**
-`test_phase23.py` is **820/820**, up from 765. **Part A of
-[`PHASE23_NEXT_SESSION_PLAN.md`](PHASE23_NEXT_SESSION_PLAN.md) is complete** —
-every no-quota item is closed. What remains for Phase 23 needs a live row, and
-quota was ~22 h out when the plan was written.
+**Last session: 2026-09-01 (Phase 23 — the tenth session).** `test_phase23.py`
+is **854/854**, up from 820. Row 3 was run live, came back `unusable`, and its
+cause turned out to be the pipeline breaking its own correct output. Four repair
+defects were fixed and a new harness exists for the half of the pipeline nothing
+tested.
 
-> **Next session: Part B.** Pre-flight, then `run_live_matrix.py --rows 3`. The
-> six assertions to make when it finishes are in §B2 of the plan.
+> ## ▶ Next session: read this, then Part B of `PHASE23_NEXT_SESSION_PLAN.md`
+>
+> **Row 3 is the remaining work and it is quota-gated.** But three things
+> changed on 2026-09-01 that you need before you spend a row:
+>
+> 1. **Run `tools/verify_repairs.py --baseline repair_baseline.json` as
+>    pre-flight.** It is free, takes ~40 min unattended, and it is the only
+>    thing that checks the debugger's deterministic repairs do not break working
+>    code. It found four defects the day it was written. Expected: **1 harmed,
+>    8 non-idempotent, "No change against the baseline."**
+> 2. **`feature_coverage` is now routed to manual testing** when something
+>    executed the artifact and found it sound. A row reading
+>    `for manual testing: generated_tests, feature_coverage` is a **pass**, not
+>    a failure. §B2's assertion table was updated to match.
+> 3. **Budget row 3 at ~222,000 tokens, not the ~87-98K the plan predicted.**
+>    That was the measured cost on 2026-09-01, most of it a repair loop that has
+>    since been fixed — so expect less, but do not plan for less.
+>
+> Full detail: `PHASE23_HANDOFF.md` §0.-5 (why row 3 died), §0.-7 (the harness),
+> §0.-8 (the four repair fixes and the feature_coverage decision), §0.-6 (Phase C
+> is NO-GO).
+
+## §0.-1 What the tenth session changed, in one table
+
+| | |
+|---|---|
+| **Row 3 ran and failed** | `885804e4`, `unusable`, 222,068 tokens. Cause: `_preflight_fix` collapsed five router aliases onto one unbound name, *and* re-broke the file after every accepted LLM repair. The generator was correct. |
+| **`tools/verify_repairs.py`** | New. Replays the debugger's zero-LLM repair sequence and asserts a file that imported before still imports after. Found 4 defects; 21 harmed corpus files are now **1**. |
+| **`repair_fixtures/`** | New. Every corpus build is single-router, so the corpus alone could not have caught the router defect. Three of the four defects were found only here. |
+| **`feature_coverage`** | Measured across 39 projects instead of 5: ~2/3 of its findings are false, and widening its vocabulary would fix only 6 of 34. Routed to manual rather than tightened. |
+| **Phase C** | **NO-GO.** 24 catalogued defects, 0 attributable to missing precedent. |
+
+**Known-open, and not a blocker for row 3:** one harmed file
+(`ai_pdf_reader/backend/search.py` — a flattened import colliding with a root
+`ocr/` package), recorded in `repair_baseline.json`.
 
 ## §0.0 The five defects closed, in the order they were found
 

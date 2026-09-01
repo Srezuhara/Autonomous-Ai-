@@ -323,14 +323,24 @@ Do these while waiting; each is free and each has cost real time before:
 
 > ## ▶ START HERE (a new session reading this: this is the entry point)
 >
-> Part A is done. **There is no useful no-quota work left in Phase 23** — what
-> remains can only be settled by a live build. Three commands, in order:
+> Part A is done, and so is the follow-on no-quota work of 2026-09-01 (the
+> repair harness, four repair fixes, the `feature_coverage` decision, the Phase C
+> verdict — `PHASE23_HANDOFF.md` §0.-6 to §0.-8). What remains can only be
+> settled by a live build. Four commands, in order:
 >
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+> venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
 > venv/Scripts/python.exe run_live_matrix.py --dry-run   # both models: "would start: yes"
-> venv/Scripts/python.exe run_live_matrix.py --rows 3    # ~30-45 min
+> venv/Scripts/python.exe run_live_matrix.py --rows 3    # ~45 min, ~222K tokens
 > ```
+>
+> **The second command is new and it is not optional.** It replays the
+> debugger's deterministic repairs over every saved build and asserts that a file
+> which imported cleanly still does. Row 3 died on 2026-09-01 because a repair
+> rule broke correct generated code, and nothing in the test suite or the corpus
+> could see it. Expected: **1 harmed, 8 non-idempotent, "No change against the
+> baseline."** Anything else, stop and read the diff before spending a row.
 >
 > **Quota was available immediately on 2026-09-01** — the tenth session ran
 > row 3 with fast at 29,928 used / 170,071 left. The ninth session's "~21 h to
@@ -358,8 +368,18 @@ Do these while waiting; each is free and each has cost real time before:
 
 ```bash
 venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1
+venv/Scripts/python.exe test_phase23.py                      # expect 854/854
+venv/Scripts/python.exe tools/verify_corpus.py  --baseline verification_baseline.json
+venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
 venv/Scripts/python.exe run_live_matrix.py --dry-run
 ```
+
+The two baselines answer different questions and both matter: `verify_corpus`
+asks whether a **checker** still tells the truth, `verify_repairs` asks whether a
+**repair** still avoids making things worse. The corpus cannot see the second —
+it replays verifiers over finished projects and never invokes `_preflight_fix`,
+the debugger's repair loop or the tester. That blind spot cost 222,068 tokens on
+2026-09-01.
 
 `--dry-run` prints a refusal per model against its own floor. Proceed only on
 "would start: yes" **for both**, and prefer margin over the floor rather than
@@ -407,6 +427,9 @@ changed and has never run live:
 | **Zero `not_run` outcomes** | A NOT_RUN is a hole in the evidence. The driver already fails the row for it; the thing to do is find out *why*, because it is usually a pipeline defect, not a build defect. |
 | `grep -c "does not parse" server.log` is **0** | The phantom-defect count. Eight per build before the §4.13 fix, each spending an LLM call rewriting correct code. |
 | A row reading `verified: yes — …; for manual testing: generated_tests` **is a pass** | §4.26. If A1 was done right, a test-only `module_ref` finding reads the same way. |
+| **`feature_coverage` in that manual list is also a pass** | Added 2026-09-01. It is a static word-match and ~2/3 of its findings were measured false; it is routed whenever something executed the artifact. It still *counts* when nothing did, which is correct. |
+| **`app/main.py` includes each router under its own alias** | The exact shape row 3 died on. `grep -c "include_router(router)"` on a multi-entity build should be **0**, not 5. If it is 5 again, `_preflight_fix` has regressed and `verify_repairs.py` should have caught it first. |
+| **No generated module resolves to one of ours** | The shim used to put this repo on the project's path, so `from main import app` could find *our* `main.py`. A traceback naming a file under `C:\...\Aiautonomous\` that is not under `generated_projects/` is that defect returning. |
 
 Then re-run the free corpus check, which now includes the new build, read its
 result, believe it, and only then re-record:
