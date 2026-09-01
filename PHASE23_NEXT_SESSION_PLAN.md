@@ -61,43 +61,71 @@ Phase 23 closes on that row's result.
 
 ---
 
-## Part 0 — State, as of 2026-08-31
+## Part 0 — State, as of 2026-09-01
 
 Verify these before trusting anything below; all three are free.
 
 | Fact | How to check |
 |---|---|
-| `test_phase23.py` is **765/765** | `venv/Scripts/python.exe test_phase23.py` |
+| `test_phase23.py` is **820/820** | `venv/Scripts/python.exe test_phase23.py` |
 | Corpus baseline is **clean** | `venv/Scripts/python.exe tools/verify_corpus.py --baseline verification_baseline.json` |
-| HEAD is `b768904` | `git log --oneline -3` |
+| HEAD is `09af400` or later | `git log --oneline -3` |
 
-**Quota, measured 2026-08-31.** Both models are *over* their daily budget in the
-24-hour window:
+> ### ⚠ The snippet that used to be here measured the wrong thing (fixed 2026-09-01)
+>
+> It summed a **hard rolling 24h window**. Groq does not operate one — it runs a
+> **leaky bucket** that refills continuously at ~8,333 tokens/hour/model, which
+> `llm_client.py:531-548` establishes against two real 429 `retry-after` values
+> that match the arithmetic to within a second. Summing the window is the
+> *discarded* model, and the same file says why it was discarded: "it only gave
+> budget back when an individual call aged out, so after a matrix run it
+> reported 0 remaining for six hours during which Groq would happily have
+> accepted a build."
+>
+> On 2026-09-01 the old snippet reported **225,254 used** and "~4h to floor"
+> while the bucket showed **29,928 used, 170,071 left** and the driver said
+> "would start: yes" — the row ran immediately and the wait would have been
+> pure loss. The tell is on the snippet's own face: **225,254 is larger than the
+> 200,000 daily limit.** A number above the cap cannot be a live balance; if you
+> ever see one, you are reading the wrong model, not a dire quota.
 
-| Model | Used in window | Floor needs | Time to floor |
-|---|---|---|---|
-| `openai/gpt-oss-20b` (fast) | ~296,366 | ≤110,000 (90K floor) | **~22 h** |
-| `openai/gpt-oss-120b` (heavy) | ~287,293 | ≤130,000 (70K floor) | **~22 h** |
+**Quota — read the bucket, which is what the driver enforces.** `--dry-run`
+and `/health` both call `get_daily_usage()` → `_bucket_level()`. That is the
+authority; there is no separate arithmetic to do:
 
-Recompute rather than trusting the table — the arithmetic is a rolling 24h sum
-against `200000 - floor`:
+```bash
+venv/Scripts/python.exe run_live_matrix.py --dry-run   # needs the server up
+```
+
+It prints per-model `used / left / reconstructed` and a verdict. Proceed only on
+**"Would start: yes"**, and check the two floors yourself: fast ≥ 90,000 left,
+heavy ≥ 70,000 left.
+
+Without a server, read the same figures directly:
 
 ```bash
 venv/Scripts/python.exe -c "
-import sys,time; sys.path.insert(0,'.')
+import sys; sys.path.insert(0,'.')
 import llm_client as lc; lc._ledger_load()
-now=time.time(); W=lc._LEDGER_WINDOW_SECONDS
-for m,floor in ((lc._FAST_MODEL,90000),(lc._HEAVY_MODEL,70000)):
-    es=[(t,n) for t,mm,n,*r in lc._ledger if mm==m]
-    cur=sum(n for t,n in es if t>now-W); target=200000-floor
-    h=next((h for h in range(0,49) if sum(n for t,n in es if t>now+h*3600-W)<=target), None)
-    print(f'{m:<24} used~{cur:>8,} need<={target:>7,} -> ~{h}h')
+u = lc.get_daily_usage()
+for m,(floor) in ((lc._FAST_MODEL,90000),(lc._HEAVY_MODEL,70000)):
+    r = u['models'].get(m)
+    if not r: print(f'{m:<24} no spend recorded -> full budget'); continue
+    used = r['tokens_used']; left = r['tokens_remaining']
+    ok = 'OK' if left >= floor else 'WAIT'
+    pess = left - 51000
+    print(f'{m:<24} used {used:>8,}  left {left:>8,}  floor {floor:>7,}  {ok}   (pessimistic {pess:>8,})')
 "
 ```
 
 > **The ledger under-reports by ~51K** — it records only calls that returned
 > 2xx. Treat every number here as optimistic and start a row with margin over
-> the floor, not just above it. See `PHASE23_QUOTA_RUNBOOK.md` §0.-1.
+> the floor, not just above it. The pessimistic column above is that subtraction;
+> require *it* to clear the floor, not the headline number. See
+> `PHASE23_QUOTA_RUNBOOK.md` §0.-1.
+>
+> **If a model really is short, the wait is computable** — `left` climbs at
+> 8,333/hour: `hours = (floor + 51000 - left) / 8333`.
 
 ---
 
@@ -304,10 +332,12 @@ Do these while waiting; each is free and each has cost real time before:
 > venv/Scripts/python.exe run_live_matrix.py --rows 3    # ~30-45 min
 > ```
 >
-> **Measured 2026-08-31 (ninth session): ~21 h to both floors.** Fast model had
-> used ~296,900 of a 110,000 ceiling; heavy ~287,300 of 130,000. Recompute with
-> the snippet in Part 0 rather than trusting that — and read `--dry-run`
-> yourself even when it passes, because the ledger under-reports by ~51K.
+> **Quota was available immediately on 2026-09-01** — the tenth session ran
+> row 3 with fast at 29,928 used / 170,071 left. The ninth session's "~21 h to
+> both floors" was an artefact of a Part 0 snippet that summed a hard 24h
+> window; Groq runs a leaky bucket and the snippet has been replaced. **Read
+> `--dry-run`, not a remembered hour count** — and read it yourself even when it
+> passes, because the ledger under-reports by ~51K.
 >
 > Three things that have each cost real time:
 >
