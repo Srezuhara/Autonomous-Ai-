@@ -7292,6 +7292,265 @@ check("...and it reports that it changed nothing, rather than claiming a fix",
 shutil.rmtree(_W58, ignore_errors=True)
 
 
+# ── §4.47 A finding that names the file to repair ──────────────────────────
+#
+# Row 3 on 2026-09-02 shipped 21 of 22 endpoints returning 500 while
+# `module_ref` reported, 23 times, the exact repair: "Add `get_suppliers` to
+# `backend.services`". Both LLM repair passes rewrote `backend/routes.py`, which
+# was correct — because the only channel that produced a repair TARGET was the
+# 5xx traceback, and a traceback names the caller. The findings themselves were
+# advisory text that nothing could act on.
+#
+# These assert at the level the defect lived at: which FILE the repair is aimed
+# at, and whether a file that imports cleanly can be reached at all.
+
+_W59 = Path(tempfile.mkdtemp(prefix="modref59_"))
+_W59_OUT = _W59 / "out"
+_W59_OUT.mkdir(parents=True)
+
+from tools.module_ref_check import check_module_refs as _cmr59
+
+
+def _mk59(name: str, files: dict) -> str:
+    root = _W59_OUT / name
+    for rel, src in files.items():
+        t = root / rel
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(src, encoding="utf-8")
+    return name
+
+
+def _targets59(project: str) -> dict:
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W59_OUT)
+        return dict(_cmr59(project).evidence.get("repair_targets") or {})
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# ── 1. The target is the module that must DEFINE the name ───────────────────
+_mk59("app59", {
+    "routes.py": "import services\n\ndef list_all():\n    return services.get_suppliers()\n",
+    "services.py": "DB = 'x.db'\n\ndef low_stock():\n    return []\n",
+})
+_t59 = _targets59("app59")
+
+check("a module_ref finding is aimed at the file that must define the name",
+      list(_t59) == ["app59/services.py"], str(list(_t59)))
+check("...and NOT at the file that reads it — routes.py was correct",
+      "app59/routes.py" not in _t59, str(list(_t59)))
+check("...and the path is OUTPUT_DIR-relative, which is what a repair resolves",
+      bool(_t59) and all(k.startswith("app59/") for k in _t59), str(list(_t59)))
+check("...and it carries the finding, which already says to ADD the name",
+      bool(_t59) and "get_suppliers" in _t59["app59/services.py"][0]
+      and "Add" in _t59["app59/services.py"][0],
+      str(_t59.get("app59/services.py")))
+
+# ── 2. A test module is not a repair target ─────────────────────────────────
+# §4.26: a broken suite is not a broken build, and these findings are routed to
+# the user as manual testing. A repair target would drag them back into the
+# build's verdict by the back door.
+_mk59("app59t", {
+    "services.py": "def real():\n    return 1\n",
+    "helper.py": "import services\n\ndef go():\n    return services.real()\n",
+    "tests/test_services.py": ("import services\n\n"
+                               "def test_x():\n    assert services.missing_helper()\n"),
+})
+_t59t = _targets59("app59t")
+check("a finding in a test module produces no repair target",
+      _t59t == {}, str(_t59t))
+
+# ── 3. A module that may define anything is never a target ──────────────────
+# An open module (globals()/__getattr__) can grow the name in a way the check
+# cannot see, so repairing it would add a duplicate definition.
+_mk59("app59o", {
+    "caller.py": "import dyn\n\ndef go():\n    return dyn.whatever()\n",
+    "dyn.py": "def __getattr__(name):\n    return lambda: None\n",
+})
+_t59o = _targets59("app59o")
+check("an open module is never handed over for repair", _t59o == {}, str(_t59o))
+
+# ── 4. A file that imports cleanly still reaches the repair ─────────────────
+# The load-bearing one. `services.py` imports perfectly — it is incomplete, not
+# broken — so `run_python` succeeds and `_debug_file` returns success on attempt
+# 1. Every hook on that path was for a runtime traceback, and a static finding
+# has none, so the file was never looked at.
+from agents.debugger import Debugger as _Dbg59
+import agents.debugger as _dbgmod59
+from tools.code_executor import ExecutionResult as _ER59
+
+_dbg59 = _Dbg59()
+_seen59 = {}
+
+
+def _fake_defrepair59(file_path, findings, result):
+    _seen59[file_path] = list(findings)
+    return True
+
+
+_real_runpy59 = _dbgmod59.run_python
+_real_defrep59 = _dbg59._repair_missing_definitions
+_real_out59 = config.OUTPUT_DIR
+try:
+    # `run()` resolves every path against OUTPUT_DIR and CREATES files —
+    # `_ensure_init_files` writes an `__init__.py` beside each one. Without this
+    # line the probe writes into the real `generated_projects/`, and the next
+    # `verify_corpus` run reports a test fixture as a new corpus member. That is
+    # how `_pristine_f3` and `_bisect_f3` got into a baseline once; a probe
+    # measuring its own scratch space is how a corpus stops being evidence.
+    config.OUTPUT_DIR = str(_W59_OUT)
+    _dbgmod59.run_python = lambda fp, **kw: _ER59(True, "", "", 0)
+    _dbg59._repair_missing_definitions = _fake_defrepair59
+    _res59 = _dbg59.run(
+        ["app59/services.py"],
+        missing_definitions={"app59/services.py": ["Add `get_suppliers` to `services`"]},
+    )
+    _res59b = _dbg59.run(["app59/routes.py"])
+finally:
+    config.OUTPUT_DIR = _real_out59
+    _dbgmod59.run_python = _real_runpy59
+    _dbg59._repair_missing_definitions = _real_defrep59
+
+check("a file that imports cleanly is still handed its missing definitions",
+      _seen59.get("app59/services.py") == ["Add `get_suppliers` to `services`"],
+      str(_seen59))
+check("...and a file with none is not sent for a definition repair",
+      "app59/routes.py" not in _seen59, str(list(_seen59)))
+check("...and it still reports success rather than being failed for it",
+      bool(_res59) and _res59[0].success, str(_res59))
+
+# ── 5. The prompt asks for completion, not correction ───────────────────────
+# The runtime prompt says "the bug is in THIS file". Here the other module is
+# right and this one is missing what it reads, so saying that would aim the
+# repair the wrong way a second time.
+_asked59 = {}
+
+
+def _fake_think59(prompt, max_tokens=None, **kw):
+    _asked59["prompt"] = prompt
+    _asked59["max_tokens"] = max_tokens
+    return "def get_suppliers():\n    return []\n"
+
+
+_real_think59 = _dbg59.think
+_real_scan59 = _dbg59._scan_project_structure
+try:
+    _dbg59.think = _fake_think59
+    _dbg59._scan_project_structure = lambda fp: ""
+    _dbg59._generate_missing_definitions_fix(
+        "app59/services.py", "DB = 'x.db'\n",
+        ["Add `get_suppliers` to `services`", "Add `create_supplier` to `services`"],
+    )
+finally:
+    _dbg59.think = _real_think59
+    _dbg59._scan_project_structure = _real_scan59
+
+_p59 = _asked59.get("prompt", "")
+check("the completion prompt passes every finding through verbatim",
+      "get_suppliers" in _p59 and "create_supplier" in _p59, _p59[:120])
+check("...and says the callers are correct rather than blaming this file",
+      "INCOMPLETE" in _p59 and "The callers are correct" in _p59, _p59[:120])
+check("...and asks for the new definitions only, never the file back",
+      "do NOT return it" in _p59 and "ready to append" in _p59, _p59[:120])
+check("...and forbids the stub that would silence the error",
+      "NotImplementedError" in _p59 and "returns None" in _p59, _p59[:120])
+check("...and budgets for a reply LONGER than the file it was handed",
+      (_asked59.get("max_tokens") or 0) > len("DB = 'x.db'") // 3 + 400,
+      str(_asked59.get("max_tokens")))
+
+# ── 6. Appending, because a rewrite cannot fit and would be rejected ────────
+# Measured on 2026-09-02, driving the real debugger at the build row 3 shipped:
+# 23 missing functions, output clamped to 2,626 tokens by Groq's 8,000-token
+# minute, three truncated replies, 19,749 tokens, nothing written. And a reply
+# that HAD fitted would still have been rejected — `accept_generated_fix`'s
+# `too_large` rule is `len(fixed) > max(len(current) * 1.6, len(current) + 1800)`,
+# which a file gaining 23 functions trips by design. So the repair appends in
+# batches and is judged by `_accept_definitions` instead.
+from agents.debugger import (
+    _missing_names as _mn59, _accept_definitions as _ad59,
+    _defines as _def59, _DEFINITIONS_PER_CALL as _DPC59,
+)
+from tools.module_ref_check import RefIssue as _RI59
+
+# Pinned against the real finding text, so a reworded finding fails HERE rather
+# than silently parsing to nothing in a live build.
+_attr59 = _RI59(file="backend/routes.py", line=20, module="backend.services",
+                name="get_suppliers", where="attribute", defines=("DB_PATH",))
+_imp59 = _RI59(file="backend/routes.py", line=3, module="backend.models",
+               name="SupplierCreate", where="import", at_import_time=True,
+               defines=("Supplier",))
+check("the name to add is read back out of the finding the user sees",
+      _mn59([str(_attr59), str(_imp59)]) == ["get_suppliers", "SupplierCreate"],
+      str(_mn59([str(_attr59), str(_imp59)])))
+check("...and an unparseable line is skipped rather than guessed at",
+      _mn59(["something else entirely"]) == [], str(_mn59(["something else entirely"])))
+
+_have59 = "def keep_me():\n    return 1\n"
+check("a fragment defining what was asked for is appended",
+      _ad59(_have59, "def get_suppliers():\n    return []\n", ["get_suppliers"])[0])
+check("...with its markdown fence stripped before it reaches the file",
+      _ad59(_have59, "```python\ndef get_suppliers():\n    return []\n```",
+            ["get_suppliers"])[2] == "def get_suppliers():\n    return []")
+check("...and a reply that redefines an existing name is refused",
+      _ad59(_have59, "def keep_me():\n    return 2\n", ["keep_me"])[0] is False)
+check("...and one that answers with a different name is refused",
+      _ad59(_have59, "def something_else():\n    return []\n",
+            ["get_suppliers"])[0] is False)
+check("...and one that does not parse is refused",
+      _ad59(_have59, "def broken(:\n", ["broken"])[0] is False)
+# The whole file coming back IS the failure mode, and it is caught by the clash
+# rule rather than by size: a reply containing the file re-defines what the file
+# already defines. A size rule was tried first and was wrong on the first real
+# input — five supplier CRUD functions are about as long as the 3,630-character
+# file they belong to, so the legitimate batch was refused and those five names
+# stayed missing.
+_wholefile59 = "def keep_me():\n    return 1\n\ndef get_suppliers():\n    return []\n"
+check("the whole file coming back is refused, which is the failure mode",
+      _ad59(_have59, _wholefile59, ["get_suppliers"])[0] is False,
+      str(_ad59(_have59, _wholefile59, ["get_suppliers"])[1]))
+check("...but a big addition to a small file is NOT refused for its size",
+      _ad59(_have59, "def get_suppliers():\n    return []\n" * 6,
+            ["get_suppliers"])[0])
+
+# ── 7. A definition needs the call, not just the name ───────────────────────
+# Measured on the third probe run: every name was added and the endpoints still
+# returned 500, because `create_supplier(name, contact_email)` was written for a
+# route that calls `services.create_supplier(supplier)` with one Pydantic model.
+# AttributeError became TypeError. The name existing is not the same as the call
+# working, and `module_ref` only ever asked the first question.
+from agents.debugger import _call_sites as _cs59
+
+_mk59("app59c", {
+    "routes.py": ("import services\n\n"
+                  "def create(supplier):\n    return services.create_supplier(supplier)\n"),
+    "services.py": "DB = 'x.db'\n",
+})
+_real59c = config.OUTPUT_DIR
+try:
+    config.OUTPUT_DIR = str(_W59_OUT)
+    _sites59 = _cs59("app59c/services.py", ["create_supplier"])
+finally:
+    config.OUTPUT_DIR = _real59c
+
+check("the call site is found so the signature is copied, not guessed",
+      "create_supplier" in _sites59
+      and any("services.create_supplier(supplier)" in h
+              for h in _sites59["create_supplier"]),
+      str(_sites59))
+check("...and the file being completed is not searched for calls to itself",
+      all("services.py" not in h for h in _sites59.get("create_supplier", [])),
+      str(_sites59))
+
+check("a batch is small enough to fit one Groq minute",
+      1 <= _DPC59 <= 8, str(_DPC59))
+check("_defines sees a function, a class and an assignment alike",
+      _def59("def f(): pass\n", "f") and _def59("class C: pass\n", "C")
+      and _def59("D = 1\n", "D") and not _def59("def f(): pass\n", "g"))
+
+shutil.rmtree(_W59, ignore_errors=True)
+
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # Put the ledger back where it belongs and remove the scratch file, so a test run
 # leaves the platform's real quota record exactly as it found it.

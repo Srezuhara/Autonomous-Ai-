@@ -136,6 +136,14 @@ class RefReport:
     open_modules: set = field(default_factory=set)
     ambiguous: set = field(default_factory=set)   # import spellings two files claim
     issues: list = field(default_factory=list)
+    #: module path -> the file that defines it, PROJECT-relative like
+    #: `RefIssue.file` (the root folder is prepended by `check_module_refs`,
+    #: because repair paths are OUTPUT_DIR-relative and these are not). This is the
+    #: file a repair has to edit, and it is NOT the file the issue is reported
+    #: in: `RefIssue.file` is where the name is *read*. Row 3 (2026-09-02) died
+    #: on exactly that distinction — 23 findings naming `backend.services`, two
+    #: LLM repair passes spent rewriting `backend/routes.py`, which was correct.
+    files: dict = field(default_factory=dict)
 
 
 # ── What each module defines ──────────────────────────────────────────────────
@@ -512,6 +520,7 @@ def check_project_module_refs(root: str) -> RefReport:
         return report
 
     report.modules, report.open_modules = modules, open_modules
+    report.files = {dotted: rel.as_posix() for dotted, (rel, _s, _t) in sources.items()}
     index, ambiguous = _alias_index(modules)
     report.ambiguous = ambiguous
 
@@ -652,6 +661,34 @@ def _check_file(tree, source: str, dotted: str, rel: Path, modules: dict,
     return issues
 
 
+def _repair_targets(root: str, report: RefReport) -> dict:
+    """
+    `{OUTPUT_DIR-relative file: [finding, ...]}` for the files that must GAIN a
+    definition, or `{}` when there is nothing a repair could act on.
+
+    Three exclusions, each deliberate:
+
+    * **Test modules.** §4.26 settled that a broken suite is not a broken build,
+      and these findings are routed to manual testing rather than counted; a
+      repair target would drag them back into the build's verdict by the back
+      door.
+    * **Open modules.** A module doing `globals()`/`__getattr__` may already
+      define the name in a way this check cannot see, so nothing may be asserted
+      about it — and a repair would add a duplicate.
+    * **Modules with no file of their own.** A package, or a spelling two files
+      could claim: there is no single file to edit.
+    """
+    targets: dict = {}
+    for issue in report.issues:
+        if issue.in_test or issue.module in report.open_modules:
+            continue
+        rel = report.files.get(issue.module)
+        if not rel:
+            continue
+        targets.setdefault(f"{root}/{rel}", []).append(str(issue))
+    return targets
+
+
 def check_module_refs(root: str) -> VerificationOutcome:
     """The same check as a VerificationOutcome, for the verification surface."""
     report = check_project_module_refs(root)
@@ -678,6 +715,18 @@ def check_module_refs(root: str) -> VerificationOutcome:
         "module_ref", [str(i) for i in report.issues], detail=detail,
         evidence={
             "undefined": [f"{i.module}.{i.name}" for i in report.issues],
+            # The file each defect must be repaired IN, which is the module that
+            # should DEFINE the name — not the one that reads it. Without this
+            # the findings are advisory text: they reach the reader and the
+            # remediation advisory, and nothing can act on them. Row 3
+            # (2026-09-02) shipped 21 of 22 endpoints returning 500 with the
+            # repair named in every one of its 23 findings; both LLM passes
+            # rewrote the *referencing* file, because a 5xx traceback names the
+            # caller and that was the only channel that produced a repair target.
+            #
+            # OUTPUT_DIR-relative, because that is what the debugger resolves
+            # against; `report.files` is project-relative.
+            "repair_targets": _repair_targets(root, report),
             # Findings the pipeline should hand to the user as manual testing
             # rather than count against the build, *if* something else has
             # executed the artifact and found it sound. A test module that

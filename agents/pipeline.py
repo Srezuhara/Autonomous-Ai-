@@ -934,6 +934,12 @@ class Pipeline:
         Outcomes are recorded on the build so the terminal status, the API and
         SESSION_CONTEXT.md can all state what was actually checked. Never raises.
         """
+        # Cleared before any early return, not after the verifiers run: this
+        # method returns early on three paths (no root, no directory, verifiers
+        # unimportable), and a value left over from an earlier build would then
+        # be handed to the repair passes as if it described this one.
+        self._module_ref_targets = {}
+
         root = result.architecture.get("root_folder", "")
         if not root:
             return []
@@ -1020,6 +1026,19 @@ class Pipeline:
                 outcomes.append(VerificationOutcome.not_run(
                     name, detail=f"the check itself raised {type(e).__name__}: {e}"
                 ))
+
+        # The one check that localises a defect to a file OTHER than the one it
+        # is reported in. `module_ref` says `backend.services` is missing
+        # `get_suppliers`; the 500 that results names `backend/routes.py`,
+        # because that is where the call is written. Recorded here so
+        # `_refine_and_remediate` can repair the file that must GAIN the name —
+        # on 2026-09-02 these findings were advisory text, both repair passes
+        # rewrote the correct file, and the build shipped 21 of 22 endpoints
+        # returning 500 with the fix named in every finding.
+        for outcome in outcomes:
+            if outcome.check == "module_ref":
+                self._module_ref_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
 
         for outcome in outcomes:
             logger.info(f"  🧾 {outcome.summary()}")
@@ -1713,6 +1732,22 @@ class Pipeline:
                 f"{', '.join(sorted(runtime_errors)[:4])}"
             ]
 
+        # A name another module reads and this one does not define is repairable
+        # for the same reason a 5xx is: the file is right there and the finding
+        # already says what to add. It reaches the debugger through its own
+        # channel because the file IMPORTS CLEANLY — every gate in `_debug_file`
+        # passes it, so without this it is never looked at.
+        missing_definitions = dict(getattr(self, "_module_ref_targets", {}) or {})
+        for path in missing_definitions:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if missing_definitions:
+            issues = list(issues) + [
+                f"{sum(len(v) for v in missing_definitions.values())} name(s) "
+                f"other modules read are not defined in "
+                f"{', '.join(sorted(missing_definitions)[:4])}"
+            ]
+
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
             report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
@@ -1835,7 +1870,11 @@ class Pipeline:
 
             try:
                 if failed_paths:
-                    fresh = self.debugger.run(failed_paths, runtime_errors=runtime_errors)
+                    fresh = self.debugger.run(
+                        failed_paths,
+                        runtime_errors=runtime_errors,
+                        missing_definitions=missing_definitions,
+                    )
                     # Merge the fresh results over the stale ones so the DB
                     # scores reflect the repaired state, not the pre-repair one.
                     by_path = {
@@ -1879,6 +1918,34 @@ class Pipeline:
                 break
 
             issues, failed_paths, diag_advisory = self._diagnose(result)
+
+            # Re-ask which names are still missing. Free (static), and without
+            # it a second pass would re-send definitions the first pass already
+            # added — paying to re-write a file that is now correct, which is
+            # the loop that cost 222,068 tokens on 2026-09-01.
+            if missing_definitions:
+                try:
+                    from tools.module_ref_check import check_module_refs
+                    root = result.architecture.get("root_folder", "")
+                    refreshed = check_module_refs(root) if root else None
+                    missing_definitions = dict(
+                        (refreshed.evidence.get("repair_targets") or {})
+                        if refreshed is not None else {}
+                    )
+                    self._module_ref_targets = dict(missing_definitions)
+                    if not missing_definitions:
+                        logger.info(
+                            "  ✅ Every name other modules read is now defined")
+                    else:
+                        for path in missing_definitions:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            f"{sum(len(v) for v in missing_definitions.values())} "
+                            f"name(s) other modules read are still not defined"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  module_ref re-check skipped: {e}")
 
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the

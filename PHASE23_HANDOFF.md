@@ -1,5 +1,10 @@
 # Phase 23 Handoff
 
+*Updated 2026-09-02 at the end of the ELEVENTH session: row 3 ran again, failed
+again, and the cause was again a repair the pipeline could not aim. It is fixed
+and the fix is measured — 1/22 endpoints responding became 16/22 on the build
+row 3 shipped, for 21,769 tokens instead of a rebuild. Earlier notes follow.*
+
 *Updated 2026-08-31 at the end of the NINTH session, which spent no quota and
 closed Part A of PHASE23_NEXT_SESSION_PLAN.md — every remaining Phase 23 item
 now needs a live row. Earlier notes follow.*
@@ -20,6 +25,126 @@ current state. This file is the per-defect detail behind it, and
 
 Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
+
+---
+
+## 0.-9 The eleventh session (2026-09-02) — row 3 ran, and the finding that named its own repair was advisory text
+
+Row 3 (`d1b98d57`) reached **`done_with_context`** in 997s for **117,191
+tokens** — against `unusable` and 222,068 the day before. The repair-loop fixes
+of the tenth session held: two remediation passes, no thrash, and `_preflight_fix`
+did not collapse anything. It still failed its row: **21 of 22 endpoints
+returned 500**.
+
+### The cause, which is one layer out from the last one
+
+`backend/routes.py` called 23 functions in `backend/services.py`. `services.py`
+defined three. `module_ref` caught this exactly and said what to do, 23 times:
+
+> `backend.services.get_suppliers` is read at line 20 … **Add `get_suppliers` to
+> `backend.services`** — do NOT delete the reference or point it at a different
+> name.
+
+Then nothing could act on it. `_verify_other_shapes` returns finding **strings**,
+which land in `advisory` — "issues the repair passes cannot fix". The only thing
+that produces a repair *target* is a failed import or a 5xx traceback, **and a
+traceback names the caller**. So both LLM passes repaired `routes.py`, which was
+correct. `SESSION_CONTEXT.md` says so on its face: *"Files repaired:
+`backend/routes.py`"*.
+
+The build's own progress record settles it without inference — this is what the
+pipeline wrote for itself at step 8, and it survives in `build_progress`:
+
+```
+failed_files: ['inventory_system_d1b98d57/backend/routes.py']
+issues:       'Generated tests fail for 2 file(s)…'
+              '1 file(s) raise at request time: …/backend/routes.py'
+advisory:     33 items — 23 of them naming `backend.services`
+```
+
+One repair target, and it is the correct file. Twenty-three findings naming the
+broken one, all in the list that by definition drives nothing.
+
+The information was all present. `RefIssue` carries the module that must define
+the name, and `collect_modules` already returns a module→file map; the map was
+discarded one layer before the layer that needed it.
+
+### The fix, and the three measurements that shaped it
+
+`module_ref` now publishes `evidence["repair_targets"]` — `{defining file:
+[findings]}`, OUTPUT_DIR-relative, excluding test modules (§4.26), open modules,
+and modules with no file of their own. The pipeline merges those into
+`failed_paths` beside the runtime errors and hands them to
+`Debugger.run(missing_definitions=...)`, re-asking between passes so a second
+pass never pays to re-add what the first one added.
+
+In the debugger it needed **its own channel**, because such a file *imports
+cleanly*: `run_python` succeeds, `_debug_file` returns success on attempt 1, and
+every existing hook on that path was for a runtime traceback. A static finding
+has none.
+
+Then the probe — the real debugger against a clone of the build row 3 shipped —
+falsified the first two designs before a row was spent:
+
+| # | What was tried | What the probe measured |
+|---|---|---|
+| 1 | Rewrite the whole file | Groq bills prompt and completion against one 8,000-token minute. 23 functions clamped the output to 2,626 tokens; three truncated replies, **19,749 tokens, nothing written**. |
+| 2 | — | A reply that *had* fitted would still have been rejected: `accept_generated_fix`'s `too_large` rule is `len(fixed) > max(len(current) * 1.6, len(current) + 1800)`, and a file gaining 23 functions trips it **by design**. Correct rule, wrong repair. |
+| 3 | Append in batches of 5, judged by `_accept_definitions` | 18/23 names. Batch 1 was refused by a size heuristic **I had just written** — five supplier CRUD functions are legitimately about as long as the 3,630-character file they belong to. Removed; the clash rule already catches a whole-file return exactly, and size never could. |
+| 4 | Same, plus the call sites | **23/23, `module_ref` VERIFIED, `routes.py` untouched.** |
+
+### And the assertion the name existing does not carry
+
+Run 3 added every name and the endpoints still returned 500:
+`create_supplier(name, contact_email)` against a route calling
+`services.create_supplier(supplier)` with one Pydantic model. AttributeError had
+become TypeError. **`module_ref` only ever asked whether the name exists.** The
+prompt now carries the actual call lines and says the parameters must match
+them, which is what run 4 measured:
+
+| probe run | endpoints responding | names added |
+|---|---|---|
+| before any repair (the shipped row 3) | **1/22** | — |
+| run 4, after the definition repair | **16/22** | 23/23 |
+
+The six that still fail are ordinary request-time bugs with clean tracebacks
+naming `services.py` — the channel that was already there, and the pipeline
+re-smokes after this repair, which the probe does not.
+
+### Also closed
+
+**The buffered-log trap is gone.** `start_server.py` now sets
+`line_buffering=True` on stdout and stderr. Five session logs in this repo are
+exactly 1,567 bytes — the startup banner and nothing else — because a killed
+server never flushes its 8KB buffer, and this session's is one of them: it was
+stopped with `Stop-Process`, which does not flush. So `grep -c "does not parse"`
+was **not measured for this row**, and §4.41's `RATIO_LOG` still has no live
+data. (Not 0 — unmeasured. The build's `build_progress` record contains no
+phantom finding, but that record holds step payloads, not the agents' log lines,
+so it cannot answer the question either.) Sessions whose server exited cleanly
+have 272KB and 135KB logs containing exactly these lines, so the note that
+"`server.log` never receives it" is wrong; it receives it on exit. Both problems
+are gone now: the log can be read while a build runs, and a killed server no
+longer takes it with it.
+
+**A test fixture leaked into the corpus and was caught by the corpus.**
+`Debugger.run` resolves paths against `config.OUTPUT_DIR` and *creates* files
+(`_ensure_init_files`), so a probe that forgets to point OUTPUT_DIR at its own
+scratch writes into `generated_projects/`. `verify_corpus` reported `app59` as a
+new corpus member on the next run. Removed, and the test now sets OUTPUT_DIR for
+the whole block — the same defect that put `_pristine_f3` into a baseline once.
+
+### Verification
+
+| | |
+|---|---|
+| `test_phase23.py` | **881/881**, up from 854 — 27 new, word-level |
+| probe, 4 runs | 1/22 → **16/22** endpoints; `module_ref` FAILED(23) → **VERIFIED(0)** |
+| cost of proving it | **~80K on the fast model**, against 117K for a row. The plan said 2-7K; that estimate was for a single-file repair, not 23 names over five batches, four times. It put the fast model below its 90,000 floor, so the re-run of row 3 waits for refill. |
+
+**Still open, and what the row is for:** the re-run itself. Everything above is
+measured on a clone, and a clone cannot exercise generation, the tester, or the
+second remediation pass.
 
 ---
 

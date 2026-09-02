@@ -1,32 +1,49 @@
 # Session Progress — start here
 
-**Last session: 2026-09-01 (Phase 23 — the tenth session).** `test_phase23.py`
-is **854/854**, up from 820. Row 3 was run live, came back `unusable`, and its
-cause turned out to be the pipeline breaking its own correct output. Four repair
-defects were fixed and a new harness exists for the half of the pipeline nothing
-tested.
+**Last session: 2026-09-02 (Phase 23 — the eleventh session).** `test_phase23.py`
+is **881/881**, up from 854. Row 3 ran live, came back `done_with_context` with
+21 of 22 endpoints returning 500, and the cause was a finding that named its own
+repair while nothing could act on it. Fixed and measured on the build row 3
+shipped: **1/22 endpoints responding became 16/22**.
 
-> ## ▶ Next session: read this, then Part B of `PHASE23_NEXT_SESSION_PLAN.md`
+> ## ▶ Next session: run row 3, then read Part B of `PHASE23_NEXT_SESSION_PLAN.md`
 >
-> **Row 3 is the remaining work and it is quota-gated.** But three things
-> changed on 2026-09-01 that you need before you spend a row:
+> **The row is the only thing left, and it is quota-gated.** Everything below it
+> is done.
 >
-> 1. **Run `tools/verify_repairs.py --baseline repair_baseline.json` as
->    pre-flight.** It is free, takes ~40 min unattended, and it is the only
->    thing that checks the debugger's deterministic repairs do not break working
->    code. It found four defects the day it was written. Expected: **1 harmed,
->    8 non-idempotent, "No change against the baseline."**
-> 2. **`feature_coverage` is now routed to manual testing** when something
->    executed the artifact and found it sound. A row reading
->    `for manual testing: generated_tests, feature_coverage` is a **pass**, not
->    a failure. §B2's assertion table was updated to match.
-> 3. **Budget row 3 at ~222,000 tokens, not the ~87-98K the plan predicted.**
->    That was the measured cost on 2026-09-01, most of it a repair loop that has
->    since been fixed — so expect less, but do not plan for less.
+> 1. **Check the fast model first.** The eleventh session spent ~80K on
+>    `gpt-oss-20b` proving the fix on a clone, which left it **below its 90,000
+>    floor at 23:48 on 2026-09-02**. It refills at 8,333/hour and there is no
+>    reset to wait for: `run_live_matrix.py --dry-run` is the authority.
+> 2. **Row 3 cost 117,191 tokens** on 2026-09-02 (56,801 fast / 55,708 heavy) —
+>    half the 222,068 of the run before, and the number to budget with. The
+>    plan's older ~87-98K and the tenth session's ~222K are both superseded.
+> 3. **The pre-flight is unchanged and still not optional:**
+>    `tools/verify_repairs.py --baseline repair_baseline.json` — expect **1
+>    harmed, 8 non-idempotent, "No change against the baseline."**
+> 4. **Both baselines have `inventory_system_d1b98d57` outstanding as "new in
+>    the corpus".** Read the next row's result first, then re-record both with
+>    `--json` so one recording covers both builds.
 >
-> Full detail: `PHASE23_HANDOFF.md` §0.-5 (why row 3 died), §0.-7 (the harness),
-> §0.-8 (the four repair fixes and the feature_coverage decision), §0.-6 (Phase C
-> is NO-GO).
+> Two things that were true in every earlier handoff and are now false:
+> **`server.log` is no longer block-buffered** (`start_server.py` sets
+> `line_buffering=True`), so it can be read while a build runs — and a killed
+> server no longer loses the whole build's log, which is why this row's
+> phantom-defect count and `RATIO_LOG` data do not exist.
+>
+> Full detail: `PHASE23_HANDOFF.md` §0.-9 (this session), §0.-8 (the repair
+> harness and the four fixes before it), §0.-6 (Phase C is NO-GO).
+
+## §0.-2 What the eleventh session changed, in one table
+
+| | |
+|---|---|
+| **Row 3 ran and failed** | `d1b98d57`, `done_with_context`, 117,191 tokens, 997s. 21/22 endpoints 500. `routes.py` called 23 functions `services.py` did not define. |
+| **The finding named the repair; nothing could act on it** | `module_ref` said "Add `get_suppliers` to `backend.services`" 23 times. Shape findings are advisory strings, and the only channel producing a repair *target* is a 5xx traceback — which names the caller. Both LLM passes rewrote the correct file. |
+| **`evidence["repair_targets"]`** | New. `module_ref` now publishes the file that must DEFINE each name, and the pipeline repairs that file. |
+| **`Debugger.run(missing_definitions=...)`** | New channel, because such a file *imports cleanly* — every existing hook needed a traceback. Appends in batches of 5; a whole-file rewrite cannot fit Groq's 8,000-token minute and `accept_generated_fix` rejects growth by design. |
+| **Call sites in the prompt** | The name existing is not the call working: run 3 added all 23 names and still 500'd on `create_supplier(name, contact_email)` versus `create_supplier(supplier)`. |
+| **`start_server.py` line buffering** | Five session logs in this repo are 1,567 bytes of startup banner. A killed server never flushed. |
 
 ## §0.-1 What the tenth session changed, in one table
 

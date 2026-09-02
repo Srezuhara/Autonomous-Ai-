@@ -338,6 +338,149 @@ class FileDebugResult:
 # what the text needs and let the one component that knows the limit enforce it.
 _REWRITE_CHARS_PER_TOKEN = 3       # measured on this model's Python output (~3.3)
 _REWRITE_HEADROOM        = 400     # a fix is usually a little longer than the bug
+# A file being COMPLETED has to come back longer than it went in, by roughly one
+# small function per missing name. 120 tokens is a generous CRUD helper.
+_DEFINITION_TOKENS_EACH  = 120
+# How many missing names to ask for in one call. Groq bills prompt and completion
+# against a single 8,000-token minute, so the reply for a whole file's worth of
+# missing functions cannot fit: on 2026-09-02 a 23-name repair was clamped to
+# 2,626 output tokens, truncated three times and wrote nothing, for 19,749
+# tokens. Five names is ~600 output tokens beside a ~1,200-token prompt.
+_DEFINITIONS_PER_CALL    = 5
+
+#: The two shapes `module_ref_check.RefIssue.__str__` produces, which is where
+#: these findings come from. Parsed rather than passed as data because the
+#: findings are also what the user reads, and one wording is easier to keep
+#: honest than two representations of it. `test_phase23.py` pins this against the
+#: real `RefIssue`, so a change to that wording fails there rather than here.
+_MISSING_ATTR_RE   = re.compile(r"^`(?P<mod>[\w.]+)\.(?P<name>\w+)` is read at line")
+_MISSING_IMPORT_RE = re.compile(r"^`from (?P<mod>[\w.]+) import (?P<name>\w+)` at line")
+
+
+def _missing_names(findings) -> list:
+    """The names a batch of `module_ref` findings says are missing, in order."""
+    names: list = []
+    for finding in findings or ():
+        text = str(finding).strip()
+        m = _MISSING_ATTR_RE.match(text) or _MISSING_IMPORT_RE.match(text)
+        if m and m.group("name") not in names:
+            names.append(m.group("name"))
+    return names
+
+
+def _defines(source: str, name: str) -> bool:
+    """Does this source bind `name` at the top level?"""
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                return True
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == name:
+                    return True
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return True
+    return False
+
+
+def _call_sites(file_path: str, names: list, per_name: int = 3) -> dict:
+    """
+    `{name: ["rel.py:12: services.create_supplier(supplier)", ...]}`.
+
+    A definition written without seeing the call is a definition with a guessed
+    signature. Measured on 2026-09-02: the repair added `create_supplier(name,
+    contact_email)` while the route calls `services.create_supplier(supplier)`
+    with a Pydantic model, so the endpoint traded `AttributeError` for
+    `TypeError: missing 1 required positional argument`. The name existed and
+    the call still failed.
+
+    Text search rather than AST: the caller may be any of `services.create_x(`,
+    `create_x(` after a from-import, or an aliased module, and all three read
+    the same here.
+    """
+    found: dict = {}
+    if not names:
+        return found
+    try:
+        rel = Path(file_path)
+        root = Path(config.OUTPUT_DIR) / rel.parts[0]
+        if not root.is_dir():
+            return found
+        me = (Path(config.OUTPUT_DIR) / rel).resolve()
+    except Exception:
+        return found
+
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            if path.resolve() == me:
+                continue
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            continue
+        shown = path.relative_to(root.parent).as_posix()
+        for i, line in enumerate(lines, 1):
+            for name in names:
+                if f"{name}(" not in line:
+                    continue
+                hits = found.setdefault(name, [])
+                if len(hits) < per_name:
+                    hits.append(f"{shown}:{i}: {line.strip()[:160]}")
+    return found
+
+
+def _accept_definitions(current: str, fragment: str, wanted: list) -> tuple:
+    """
+    Should this fragment be appended? `(accept, reason_if_not, cleaned_text)`.
+
+    The third element is what the caller must append — the fragment with any
+    markdown fence removed. Returning it is not tidiness: validating the cleaned
+    text and appending the raw one would write a fence into a .py file that had
+    just been import-checked without it.
+
+    `repair_guard.accept_generated_fix` cannot answer this: its `too_large` rule
+    exists to stop a REWRITE ballooning, and a file being completed is supposed
+    to grow. What has to be checked instead is that the fragment is only new
+    definitions — the property that makes appending safe, since a name that is
+    never re-typed cannot be dropped.
+    """
+    if not fragment or not fragment.strip():
+        return False, "empty reply", ""
+    text = fragment.strip()
+    if text.startswith("```") or "```" in text:
+        text = re.sub(r"^```[a-zA-Z]*\n?|```", "", text).strip()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as e:
+        return False, f"does not parse ({e.msg})", ""
+
+    defined = [
+        n.name for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    if not defined:
+        return False, "no definition in the reply", ""
+    landed = [n for n in defined if n in wanted]
+    if not landed:
+        return False, f"defines {defined[:3]}, none of which were asked for", ""
+    # A name the file already has would shadow the working one further down.
+    clashes = [n for n in defined if _defines(current, n)]
+    if clashes:
+        return False, f"redefines {clashes[:3]}, which the file already has", ""
+    # There is deliberately no size rule here. One was tried — reject a fragment
+    # longer than 90% of the file — and it was measured wrong on the first real
+    # input: five supplier CRUD functions are legitimately about as long as the
+    # 3,630-character file they belong to, so batch 1 of 5 was refused and those
+    # five names stayed missing. Size does not distinguish "the whole file came
+    # back" from "this file is small". The clash rule above does, exactly: a
+    # reply containing the file re-defines what the file already defines.
+    return True, "", text
 
 # Below this, repairing one block COSTS more than rewriting the file: the block
 # prompt carries extra rules and a digest of the rest of the file, and on a
@@ -403,6 +546,7 @@ class Debugger(BaseAgent):
         self,
         file_paths: list[str],
         runtime_errors: dict | None = None,
+        missing_definitions: dict | None = None,
     ) -> list[FileDebugResult]:
         """
         `runtime_errors` maps a file to a failure the *running* app produced —
@@ -411,8 +555,17 @@ class Debugger(BaseAgent):
         request arrives. Without them a file like this is "passing" and the
         repair passes skip it, which is exactly what happened to a build whose
         three DB routes returned 500 on every call.
+
+        `missing_definitions` maps a file to the names OTHER modules read from it
+        and it does not define (`module_ref`'s findings, one line each). It needs
+        its own channel for the same reason `runtime_errors` did — such a file
+        imports perfectly, so every gate here passes it — but it is the opposite
+        defect: nothing is wrong *in* this file, it is incomplete. Row 3 on
+        2026-09-02 shipped `services.py` defining 3 of the 23 functions its
+        routes call, and both repair passes rewrote the routes.
         """
         runtime_errors = runtime_errors or {}
+        missing_definitions = missing_definitions or {}
         py_files = [
             f for f in file_paths
             if f.endswith(".py")
@@ -447,7 +600,11 @@ class Debugger(BaseAgent):
 
         results = {}
         for fp in py_files:
-            r = self._debug_file(fp, runtime_error=runtime_errors.get(fp, ""))
+            r = self._debug_file(
+                fp,
+                runtime_error=runtime_errors.get(fp, ""),
+                missing_defs=missing_definitions.get(fp, ()),
+            )
             results[fp] = r
             logger.info(str(r))
 
@@ -1507,7 +1664,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
     # ── Main debug loop ───────────────────────────────────────────────────────
 
-    def _debug_file(self, file_path: str, runtime_error: str = "") -> FileDebugResult:
+    def _debug_file(self, file_path: str, runtime_error: str = "",
+                    missing_defs: tuple = ()) -> FileDebugResult:
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
@@ -1522,8 +1680,21 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             if runtime_error and not runtime_repair_tried:
                 runtime_repair_tried = True
                 self._repair_runtime_error(file_path, runtime_error, result)
+            # A file can be both wrong and incomplete, and these are different
+            # repairs: one rewrites what is there, the other adds what is not.
+            # Run this second so the definitions are added to whatever the
+            # runtime repair left behind, rather than being overwritten by it.
+            _try_definition_repair()
+
+        def _try_definition_repair() -> None:
+            nonlocal definition_repair_tried
+            if missing_defs and not definition_repair_tried:
+                definition_repair_tried = True
+                self._repair_missing_definitions(
+                    file_path, list(missing_defs), result)
 
         runtime_repair_tried = False
+        definition_repair_tried = False
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             result.attempts = attempt
@@ -1757,6 +1928,168 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         result.fixes_applied.append(f"Runtime repair on {file_path}")
         logger.info(f"  ✅ [{file_path}] Runtime repair applied")
         return True
+
+    def _repair_missing_definitions(
+        self, file_path: str, findings: list, result: FileDebugResult
+    ) -> bool:
+        """
+        Complete a file that imports cleanly and is missing definitions.
+
+        This APPENDS, in batches, and does not rewrite. Three measurements from
+        the 2026-09-02 probe forced that shape, and each one kills the
+        whole-file version outright:
+
+        * **Groq bills prompt and completion against one 8,000-token minute.**
+          `services.py` needed 23 functions; the output budget was clamped to
+          2,626 tokens, every attempt came back truncated at `finish_reason=
+          length`, and each retry doubled an ask that was clamped straight back.
+          Three attempts, 19,749 tokens, nothing written.
+        * **`accept_generated_fix` rejects growth by design** — `too_large` is
+          `len(fixed) > max(len(current) * 1.6, len(current) + 1800)`. A file
+          that must gain 23 functions is an "oversized rewrite" under a rule
+          written to stop a rewrite ballooning. Correct rule, wrong repair.
+        * A rewrite has to re-emit every existing name to keep it, which is the
+          one way this repair could make things worse.
+
+        Appending removes all three: cost is proportional to what is missing,
+        the reply is small enough to fit a minute, and a name that is never
+        re-typed cannot be dropped. The file is still import-checked after each
+        batch and restored if the batch broke it.
+        """
+        if not findings:
+            return False
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for definition repair: {e}")
+            return False
+
+        wanted = _missing_names(findings)
+        if not wanted:
+            logger.warning(
+                f"  ⚠️  [{file_path}] No name could be read out of "
+                f"{len(findings)} finding(s) — not guessing")
+            return False
+
+        logger.info(
+            f"  🧩 [{file_path}] Completing: {len(wanted)} name(s) other modules "
+            f"read and this file does not define"
+        )
+
+        batches = [
+            findings[i:i + _DEFINITIONS_PER_CALL]
+            for i in range(0, len(findings), _DEFINITIONS_PER_CALL)
+        ]
+        current = original
+        added_total: list[str] = []
+
+        for n, batch in enumerate(batches, 1):
+            names = _missing_names(batch)
+            if not names:
+                continue
+            fragment = self._generate_missing_definitions_fix(
+                file_path, current, batch)
+            ok, why, cleaned = _accept_definitions(current, fragment, names)
+            if not ok:
+                logger.warning(
+                    f"  ⚠️  [{file_path}] Batch {n}/{len(batches)} rejected: {why}")
+                continue
+
+            candidate = current.rstrip() + "\n\n\n" + cleaned + "\n"
+            create_file(file_path, candidate)
+            self._preflight_fix(file_path)
+            self._inject_syspath(file_path)
+
+            verify = run_python(file_path)
+            if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+                logger.warning(
+                    f"  ↩️  [{file_path}] Batch {n}/{len(batches)} broke the import "
+                    f"check — restoring what worked")
+                create_file(file_path, current)
+                continue
+
+            current = read_file(file_path)
+            landed = [n_ for n_ in names if _defines(current, n_)]
+            added_total.extend(landed)
+            logger.info(
+                f"  ✅ [{file_path}] Batch {n}/{len(batches)}: added "
+                f"{len(landed)}/{len(names)} name(s)")
+
+        if not added_total:
+            logger.warning(f"  ⚠️  [{file_path}] Definition repair added nothing")
+            return False
+
+        result.fixes_applied.append(
+            f"Added {len(added_total)} missing definition(s) to {file_path}")
+        logger.info(
+            f"  ✅ [{file_path}] Definition repair applied: "
+            f"{len(added_total)}/{len(wanted)} name(s)")
+        return True
+
+    def _generate_missing_definitions_fix(
+        self, file_path: str, current_code: str, findings: list
+    ) -> str | None:
+        """
+        Ask for the missing definitions ONLY — never the file back.
+
+        It has to say the opposite of the runtime prompt. That one says "the bug
+        is in THIS file, do not make the other module tolerate it"; here the
+        other module is right and this file is missing what it reads. The
+        findings already carry that instruction verbatim — "Add `get_suppliers`
+        to `backend.services` — do NOT delete the reference" — so they are passed
+        through rather than paraphrased.
+
+        The file goes in the prompt (the new code has to use the same connection
+        helper, tables and return shapes) but must not come back out of it.
+        """
+        project_map = self._scan_project_structure(file_path)
+        wanted = "\n".join(f"- {f}" for f in findings)
+        # What the callers actually pass. Without this the signature is a guess,
+        # and a guessed signature turns AttributeError into TypeError.
+        sites = _call_sites(file_path, _missing_names(findings))
+        calls = ""
+        if sites:
+            lines = [
+                f"{name}:" + "".join(
+                    chr(10) + "    " + hit for hit in hits)
+                for name, hits in sites.items()
+            ]
+            calls = ("HOW EACH ONE IS CALLED — the parameters must match these "
+                     "calls exactly:" + chr(10) + chr(10).join(lines) + chr(10))
+        prompt = f"""This Python file is INCOMPLETE. It imports and runs correctly,
+but other modules read names from it that it does not define, so every call that
+reaches one of them raises AttributeError or ImportError.
+
+FILE: {file_path}
+CURRENT CONTENT OF THAT FILE (for context — do NOT return it):
+{current_code}
+
+{project_map}
+
+ADD DEFINITIONS FOR EXACTLY THESE, AND NOTHING ELSE:
+{wanted}
+
+{calls}
+
+RULES:
+- Return ONLY the new top-level definitions, ready to append to the end of that
+  file. No imports, no existing code, no markdown fences, no explanation.
+- The callers are correct and this file is not. Do not rename anything, do not
+  change what the callers do.
+- Implement each one for real, in the style already in the file above: the same
+  connection helper, the same table and column names, the same return shapes.
+  A stub that returns None, an empty list, or raises NotImplementedError is
+  worse than the error it replaces — it turns a loud failure into a wrong answer
+  that reaches the database.
+- Take each signature from the calls listed above: same number of parameters, in
+  the same order. If a caller passes one object (a Pydantic model, say), the
+  function takes one object — not its fields spread out.
+- Use only names the file already imports. Do not add new dependencies.
+
+Return ONLY the new definitions."""
+        budget = _DEFINITION_TOKENS_EACH * max(1, len(findings)) + _REWRITE_HEADROOM
+        logger.info(f"  🧠 LLM completing: {file_path} (+{len(findings)} name(s))")
+        return self.think(prompt, max_tokens=budget)
 
     def _generate_fix(
         self, file_path: str, error_text: str, runtime: bool = False

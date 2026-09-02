@@ -24,10 +24,24 @@ import sys
 import argparse
 import uvicorn
 
-# Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals
+# Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals.
+#
+# `line_buffering=True` is the other half, and it is not cosmetic. Redirected to
+# a file, stdout is block-buffered: every agent log line for a whole build sits
+# in an 8KB buffer that is lost if the process is killed rather than asked to
+# stop. Five session logs in this repo are exactly 1,567 bytes — the startup
+# banner and nothing else — including the one for the row-3 run of 2026-09-02,
+# whose phantom-defect count and repair_guard RATIO_LOG lines are simply gone.
+# It is also why every handoff says "do not tail server.log while a build runs".
+# Line buffering costs nothing here and makes the log readable live.
 if hasattr(sys.stdout, 'reconfigure'):
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', line_buffering=True)
     except Exception:
         pass
 
