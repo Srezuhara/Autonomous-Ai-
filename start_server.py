@@ -21,19 +21,17 @@ Why not just use --reload-exclude?
     the glob matching is tricky.  This script is more reliable across versions.
 """
 import sys
+import os
 import argparse
+import logging
 import uvicorn
 
 # Force UTF-8 stdout encoding to avoid UnicodeEncodeErrors on some terminals.
 #
-# `line_buffering=True` is the other half, and it is not cosmetic. Redirected to
-# a file, stdout is block-buffered: every agent log line for a whole build sits
-# in an 8KB buffer that is lost if the process is killed rather than asked to
-# stop. Five session logs in this repo are exactly 1,567 bytes — the startup
-# banner and nothing else — including the one for the row-3 run of 2026-09-02,
-# whose phantom-defect count and repair_guard RATIO_LOG lines are simply gone.
-# It is also why every handoff says "do not tail server.log while a build runs".
-# Line buffering costs nothing here and makes the log readable live.
+# `line_buffering=True` is cheap and makes a redirected stdout readable while a
+# build runs instead of in 8KB gulps. It is NOT, however, the reason those five
+# 1,567-byte session logs in this repo contain only the startup banner — that was
+# measured on 2026-09-03 and the answer was different, see `--log-file` below.
 if hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
@@ -52,7 +50,36 @@ def main():
     parser.add_argument("--port",      default=8000, type=int, help="Bind port")
     parser.add_argument("--no-reload", action="store_true",  help="Disable auto-reload")
     parser.add_argument("--workers",   default=1, type=int,  help="Number of worker processes")
+    parser.add_argument("--log-file",  default=os.getenv("SERVER_LOG_FILE", ""),
+                        help="Also write every log line to this file. Use it for "
+                             "any run whose log you intend to read afterwards.")
     args = parser.parse_args()
+
+    # Why this exists, measured on 2026-09-03.
+    #
+    # Five logs in this repo are exactly 1,567 bytes — the startup banner and
+    # nothing else — and two live rows were assessed without their build log
+    # because of it. The cause was assumed to be block buffering and it is not:
+    # after `line_buffering=True` was added, a row's log was STILL 1,551 bytes
+    # while the build ran, and still 1,551 after the process exited. A buffer
+    # would have flushed. The output never reached the file.
+    #
+    # It is the launch, not the process. Started detached from a shell that then
+    # exits (`nohup ... &` from a tool call, which is how an agent starts it),
+    # the inherited stdout stops being written to once that shell is gone, so
+    # everything after startup is lost. Sessions that ran the server in a
+    # terminal that stayed open have 272KB logs of exactly the same output.
+    #
+    # A file the server opens itself does not care how it was launched.
+    if args.log_file:
+        handler = logging.FileHandler(args.log_file, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root = logging.getLogger()
+        root.addHandler(handler)
+        if root.level > logging.INFO or root.level == logging.NOTSET:
+            root.setLevel(logging.INFO)
+        print(f"|  Log file: {args.log_file}")
 
     reload = not args.no_reload
 
@@ -74,7 +101,6 @@ def main():
         "*.log",
     ]
 
-    import os
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Only watch actual source code directories

@@ -113,19 +113,33 @@ re-smokes after this repair, which the probe does not.
 
 ### Also closed
 
-**The buffered-log trap is gone.** `start_server.py` now sets
-`line_buffering=True` on stdout and stderr. Five session logs in this repo are
-exactly 1,567 bytes — the startup banner and nothing else — because a killed
-server never flushes its 8KB buffer, and this session's is one of them: it was
-stopped with `Stop-Process`, which does not flush. So `grep -c "does not parse"`
-was **not measured for this row**, and §4.41's `RATIO_LOG` still has no live
-data. (Not 0 — unmeasured. The build's `build_progress` record contains no
-phantom finding, but that record holds step payloads, not the agents' log lines,
-so it cannot answer the question either.) Sessions whose server exited cleanly
-have 272KB and 135KB logs containing exactly these lines, so the note that
-"`server.log` never receives it" is wrong; it receives it on exit. Both problems
-are gone now: the log can be read while a build runs, and a killed server no
-longer takes it with it.
+**The 1,567-byte log, diagnosed twice — the first diagnosis was wrong.**
+
+Five session logs in this repo are exactly 1,567 bytes: the startup banner and
+nothing else. Two live rows have now been assessed without their build log
+because of it. The first diagnosis was block buffering, and `line_buffering=True`
+was added to `start_server.py` on that theory. **It was wrong.** The next row's
+log was still 1,551 bytes while the build ran — and still 1,551 bytes *after the
+process exited*. A buffer would have flushed. The output never reached the file
+at all, which is also why uvicorn's own access lines for every request were
+missing.
+
+It is the launch, not the process. Started detached from a shell that then exits
+(`nohup ... &` from a tool call, which is how an agent starts a server), the
+inherited stdout stops being written once that shell is gone. Sessions that ran
+the server in a terminal that stayed open have 272KB and 135KB logs of exactly
+the same output — so the older note that "`server.log` never receives it" is
+also wrong.
+
+Fixed properly: **`start_server.py --log-file PATH`** attaches a `FileHandler` to
+the root logger, so the log belongs to the server rather than to whatever shell
+started it. Verified by running with stdout pointed at `/dev/null` and watching
+the file fill. Use it for any run whose log you intend to read. `line_buffering`
+was kept — it is correct and free — but it is not what fixes this.
+
+Consequences for both rows: `grep -c "does not parse"` is **unmeasured**, not 0,
+and §4.41's `RATIO_LOG` still has no live data after three sessions of waiting
+for one.
 
 **A test fixture leaked into the corpus and was caught by the corpus.**
 `Debugger.run` resolves paths against `config.OUTPUT_DIR` and *creates* files
@@ -134,17 +148,102 @@ scratch writes into `generated_projects/`. `verify_corpus` reported `app59` as a
 new corpus member on the next run. Removed, and the test now sets OUTPUT_DIR for
 the whole block — the same defect that put `_pristine_f3` into a baseline once.
 
+### The re-run: the fix worked, and the row still failed
+
+Row 3 ran again (`c2d4a4d4`) on the fixed code: **`done_with_context`, 114,240
+tokens, 873s.**
+
+| | first run `d1b98d57` | re-run `c2d4a4d4` |
+|---|---|---|
+| `module_ref` | **failed**, 23 findings | **verified**, 0 findings |
+| endpoints responding | 1/22 | **13/22** |
+| unresolved issues | 34 | **10** |
+| generated tests | 6/12 | **12/12** |
+| debug score | 8/8 | 5/5 |
+
+**The repair fired live**, and the build's own record says so rather than the
+log — which is fortunate, because the log was lost again:
+
+```
+failed_files:   [.../backend/main.py, .../backend/routes.py, .../backend/services.py]
+issues:         '1 name(s) other modules read are not defined in .../backend/services.py'
+repaired_files: [.../backend/main.py, .../backend/routes.py, .../backend/services.py]
+```
+
+`services.py` — the file that had to *define* the name — is in both lists. On the
+first run it was in neither. Note the scale, though: the generator left **one**
+missing name this time, not 23, so the live exercise was far smaller than the
+probe's.
+
+### Why it still failed, and the pattern underneath
+
+Two things, and both are the same shape as the defect just fixed.
+
+**1. `schema_attr`, which is `module_ref` one check over.** `product.price` is
+read at `routes.py:84` but `ProductCreate` declares description, name, sku,
+supplier_id. The finding names the model that must gain the field; its evidence
+is `{"undeclared": [...]}` — **no repair target** — so it is advisory text that
+nothing can act on. `find_model_definition(root, class_name)` already exists and
+already returns the model's defining file. The gap is the same one, unclosed.
+
+**2. Eight of the nine 500s are `no such table`.** `main.py` creates `supplier`
+and `warehouse`; it never creates `product` or `stock_movement`. The tracebacks
+name `services.py:102`, where the query runs — **the fix belongs in `main.py`,
+where the DDL is.** The file the traceback names is the wrong file, for the third
+time. And no checker reports it: `sql_schema` deliberately stays silent on a
+table with no `CREATE TABLE` anywhere, because "the schema may live in a
+migration or an ORM" — sound in general, wrong for a project that creates its
+other tables inline three lines up.
+
+So the pattern is systemic and this session closed one instance of three.
+
+### What was deliberately NOT shipped, and why
+
+Both fixes above are tempting, cheap-looking, and were **declined**:
+
+- Neither can be validated by a live row — the fast model was at 34,502 after
+  the re-run and a row costs ~114K.
+- The one that *was* shipped needed **~80K of probe runs** and was wrong twice
+  offline before it worked, including a size guard written for it that refused a
+  legitimate repair on its first real input.
+- This phase's own record: 4 of 6 new verifiers once reported defects that did
+  not exist.
+
+Shipping two more unvalidated repairs would be the mistake this phase keeps
+catching. They are specified above instead, with the machinery each would use.
+
+### `tools/assert_row.py`
+
+The §B2 assertion table, executable — three handoffs have asked a reader to run
+it by hand. Reads the record from the API *and* re-checks the artifact on disk,
+so neither is trusted alone. Calibrated against both rows: it fails `module_ref`
+on `d1b98d57` and passes it on `c2d4a4d4`.
+
+It also produced a false positive on first use, which is worth recording because
+the cause was invisible: it flagged `include_router(router)` in a **single**-router
+build, where that is correct — the §4.38 defect was a *multi*-router build whose
+five aliases were all rewritten to the bare name. The assertion is now "every
+included name is bound in the file that includes it". The reason it survived a
+first fix is that the patch script wrote a literal **backspace character** into
+the regex (`` in a non-raw string), so the pattern read `.*<BS>router<BS>` and
+could never match, and `grep` could not show it.
+
 ### Verification
 
 | | |
 |---|---|
 | `test_phase23.py` | **881/881**, up from 854 — 27 new, word-level |
 | probe, 4 runs | 1/22 → **16/22** endpoints; `module_ref` FAILED(23) → **VERIFIED(0)** |
+| live re-run `c2d4a4d4` | `module_ref` **verified**; endpoints 1/22 → **13/22**; unresolved 34 → **10** |
+| `verify_corpus` | re-recorded with both new builds; no change on re-check |
 | cost of proving it | **~80K on the fast model**, against 117K for a row. The plan said 2-7K; that estimate was for a single-file repair, not 23 names over five batches, four times. It put the fast model below its 90,000 floor, so the re-run of row 3 waits for refill. |
 
-**Still open, and what the row is for:** the re-run itself. Everything above is
-measured on a clone, and a clone cannot exercise generation, the tester, or the
-second remediation pass.
+**Still open — the phase does not close.** Its criterion is a row whose record
+carries positive evidence: zero `not_run`, at least one check that *executed* the
+artifact, and the §B2 assertions. The re-run gets 7 of 9 and misses the two that
+matter most: `schema_attr` failed, and no executing check verified, because
+`runtime_smoke` is 13/22. The next row needs the two defects above closed first;
+neither is quota-gated to *fix*, only to *prove*.
 
 ---
 

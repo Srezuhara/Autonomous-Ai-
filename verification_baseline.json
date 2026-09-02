@@ -1878,6 +1878,193 @@
     },
     "shape": "web_api"
   },
+  "inventory_system_c2d4a4d4": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "generated_tests": {
+        "detail": "pytest exit 1, 7 failed, 12 passed",
+        "findings": [
+          "FAILED tests/test_endpoints.py::test_create_product_and_stock_movement - sqli...",
+          "FAILED tests/test_endpoints.py::test_create_supplier - sqlite3.OperationalErr...",
+          "FAILED tests/test_endpoints.py::test_delete_supplier - sqlite3.OperationalErr...",
+          "FAILED tests/test_endpoints.py::test_get_supplier - sqlite3.OperationalError:...",
+          "FAILED tests/test_endpoints.py::test_low_stock_report - sqlite3.OperationalEr...",
+          "FAILED tests/test_endpoints.py::test_stock_level_query - sqlite3.OperationalE...",
+          "FAILED tests/test_endpoints.py::test_update_supplier - sqlite3.OperationalErr...",
+          "the project's own test suite fails: 7 failed, 12 passed"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "12 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "13/22 routes responded without a server error",
+        "findings": [
+          "DELETE /products/{product_id} -> 500",
+          "DELETE /stock_movements/{movement_id} -> 500",
+          "GET /products/ -> 500",
+          "GET /products/{product_id} -> 500",
+          "GET /reports/low_stock -> 500",
+          "GET /stock_movements/ -> 500",
+          "GET /stock_movements/{movement_id} -> 500",
+          "GET /warehouses/{warehouse_id}/stock_levels -> 500",
+          "POST /suppliers/ -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "15 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [
+          "`product.price` is read at line 84, but `product` is a `ProductCreate`, which declares description, name, sku, supplier_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `price` to ProductCreate where it is defined \u2014 do NOT replace the read with a .get() or a default, which writes an empty value into the database instead."
+        ],
+        "status": "failed"
+      },
+      "sql_schema": {
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
+  "inventory_system_d1b98d57": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "generated_tests": {
+        "detail": "pytest exit 1, 5 error, 19 failed, 6 passed",
+        "findings": [
+          "FAILED tests/test_main.py::test_create_supplier_returns_created - AttributeEr...",
+          "FAILED tests/test_main.py::test_get_supplier_not_found_404 - AttributeError: ...",
+          "FAILED tests/test_main.py::test_list_suppliers_returns_list - AttributeError:...",
+          "FAILED tests/test_products.py::test_create_product - AttributeError: module '...",
+          "FAILED tests/test_products.py::test_delete_product - AttributeError: module '...",
+          "FAILED tests/test_products.py::test_get_product - AttributeError: module 'ser...",
+          "FAILED tests/test_products.py::test_list_products - AttributeError: module 's...",
+          "FAILED tests/test_products.py::test_update_product - AttributeError: module '...",
+          "the project's own test suite does not run: 5 of its tests error before executing"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "15 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [
+          "`backend.services.create_product` is read at line 67: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `create_product`. This raises on every call that reaches it. Add `create_product` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.create_stock_movement` is read at line 145: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `create_stock_movement`. This raises on every call that reaches it. Add `create_stock_movement` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.create_supplier` is read at line 29: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `create_supplier`. This raises on every call that reaches it. Add `create_supplier` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.create_warehouse` is read at line 105: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `create_warehouse`. This raises on every call that reaches it. Add `create_warehouse` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.delete_product` is read at line 88: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `delete_product`. This raises on every call that reaches it. Add `delete_product` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.delete_stock_movement` is read at line 175: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `delete_stock_movement`. This raises on every call that reaches it. Add `delete_stock_movement` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.delete_supplier` is read at line 50: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `delete_supplier`. This raises on every call that reaches it. Add `delete_supplier` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.delete_warehouse` is read at line 126: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `delete_warehouse`. This raises on every call that reaches it. Add `delete_warehouse` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_low_stock_report` is read at line 197: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_low_stock_report`. This raises on every call that reaches it. Add `get_low_stock_report` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_product` is read at line 72: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_product`. This raises on every call that reaches it. Add `get_product` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_products` is read at line 58: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_products`. This raises on every call that reaches it. Add `get_products` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_stock_levels` is read at line 189: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_stock_levels`. This raises on every call that reaches it. Add `get_stock_levels` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_stock_movement` is read at line 153: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_stock_movement`. This raises on every call that reaches it. Add `get_stock_movement` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_stock_movements` is read at line 136: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_stock_movements`. This raises on every call that reaches it. Add `get_stock_movements` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_supplier` is read at line 34: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_supplier`. This raises on every call that reaches it. Add `get_supplier` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_suppliers` is read at line 20: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_suppliers`. This raises on every call that reaches it. Add `get_suppliers` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_warehouse` is read at line 110: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_warehouse`. This raises on every call that reaches it. Add `get_warehouse` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.get_warehouses` is read at line 96: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_warehouses`. This raises on every call that reaches it. Add `get_warehouses` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.init_db` is read at line 31: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `init_db`. This raises on every call that reaches it. Add `init_db` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.update_product` is read at line 80: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `update_product`. This raises on every call that reaches it. Add `update_product` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.update_stock_movement` is read at line 164: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `update_stock_movement`. This raises on every call that reaches it. Add `update_stock_movement` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.update_supplier` is read at line 42: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `update_supplier`. This raises on every call that reaches it. Add `update_supplier` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.",
+          "`backend.services.update_warehouse` is read at line 118: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `update_warehouse`. This raises on every call that reaches it. Add `update_warehouse` to `backend.services` \u2014 do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it."
+        ],
+        "status": "failed"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "1/22 routes responded without a server error",
+        "findings": [
+          "DELETE /products/{product_id} -> 500",
+          "DELETE /stock_movements/{movement_id} -> 500",
+          "DELETE /suppliers/{supplier_id} -> 500",
+          "DELETE /warehouses/{warehouse_id} -> 500",
+          "GET /products -> 500",
+          "GET /products/{product_id} -> 500",
+          "GET /reports/low_stock -> 500",
+          "GET /stock_movements -> 500",
+          "GET /stock_movements/{movement_id} -> 500",
+          "GET /suppliers -> 500",
+          "GET /suppliers/{supplier_id} -> 500",
+          "GET /warehouses -> 500",
+          "GET /warehouses/{warehouse_id} -> 500",
+          "GET /warehouses/{warehouse_id}/stock -> 500",
+          "POST /products -> 500",
+          "POST /suppliers -> 500",
+          "POST /warehouses -> 500",
+          "PUT /products/{product_id} -> 500",
+          "PUT /stock_movements/{movement_id} -> 500",
+          "PUT /suppliers/{supplier_id} -> 500",
+          "PUT /warehouses/{warehouse_id} -> 500"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "19 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
   "inventory_system_e6a1da32": {
     "checks": {
       "cli_smoke": {

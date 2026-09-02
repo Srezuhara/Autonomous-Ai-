@@ -1,6 +1,6 @@
 # Phase 23 A2 — live matrix results
 
-*Run 2026-09-02T23:07:13*
+*Run 2026-09-03T03:01:18*
 
 Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done_with_context` with a downloadable ZIP, and every build that boots reports **0 5xx** from the runtime smoke test.
 
@@ -10,42 +10,38 @@ Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done
 
 | Row | Shape | Status | Verified | Tokens | Duration | Files | ZIP |
 |-----|-------|--------|----------|--------|----------|-------|-----|
-| 3 | complex / multi-entity | `done_with_context` | NO | 117,191 | 997s | 23 | yes |
+| 3 | complex / multi-entity | `done_with_context` | NO | 114,240 | 873s | 20 | yes |
 
 ## Per-row detail
 
 ### Row 3 — complex / multi-entity
 
-- build_id: `d1b98d57-023a-4bfa-af2a-48250d31bfa0`
-- status: `done_with_context` — Build completed with 34 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
+- build_id: `c2d4a4d4-0871-4e3b-8800-52cb6a6690b2`
+- status: `done_with_context` — Build completed with 10 unresolved verification issue(s) after automatic repair. See SESSION_CONTEXT.md.
 - progress: 100.0%
-- tokens by model: `{"openai/gpt-oss-20b": 59146, "openai/gpt-oss-120b": 58045}`
-- download: HTTP 200, application/zip, 23,630 bytes
+- tokens by model: `{"openai/gpt-oss-20b": 58906, "openai/gpt-oss-120b": 55334}`
+- download: HTTP 200, application/zip, 21,344 bytes
 - expected to boot: yes
 - build shape: web_api
-- smoke: 1/22 routes responded without a server error
-- verified: **NO** — failed: runtime_smoke, module_ref; for manual testing: generated_tests
+- smoke: 13/22 routes responded without a server error
+- verified: **NO** — failed: runtime_smoke, schema_attr; for manual testing: generated_tests
 
 | Check | Status | What it did |
 |---|---|---|
-| `runtime_smoke` | failed | 1/22 routes responded without a server error |
+| `runtime_smoke` | failed | 13/22 routes responded without a server error |
 | `cli_smoke` | not_applicable | this project declares no command-line entry point |
 | `web_assets` | not_applicable | this project ships no HTML page |
 | `static_smoke` | not_applicable | this project ships no HTML page |
 | `package_smoke` | not_applicable | this project is run, not imported; its own verifier covers it |
-| `feature_coverage` | verified | 6/6 requested feature(s) have supporting code (22 route(s), 29 function(s) across web_api) |
-| `schema_attr` | verified | 19 model(s) checked field-by-field (0 skipped as open) |
-| `module_ref` | failed | 15 module(s) checked name-by-name (0 skipped as open) |
-| `generated_tests` | failed | pytest exit 1, 5 error, 19 failed, 6 passed |
+| `feature_coverage` | verified | 6/6 requested feature(s) have supporting code (22 route(s), 48 function(s) across web_api) |
+| `schema_attr` | failed | 15 model(s) checked field-by-field (0 skipped as open) |
+| `module_ref` | verified | 12 module(s) checked name-by-name (0 skipped as open) |
+| `generated_tests` | failed | pytest exit 1, 7 failed, 12 passed |
 
-- 🚨 21 of 22 endpoint(s) return a server error when called: GET /suppliers → 500, POST /suppliers → 500, GET /suppliers/{supplier_id} → 500, PUT /suppliers/{supplier_id} → 500, DELETE /suppliers/{supplier_id} → 500. These fail at request time, which the import check cannot see.
-- 🚨 `backend.services.init_db` is read at line 31: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `init_db`. This raises on every call that reaches it. Add `init_db` to `backend.services` — do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.
-- 🚨 `backend.services.get_suppliers` is read at line 20: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_suppliers`. This raises on every call that reaches it. Add `get_suppliers` to `backend.services` — do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.
-- 🚨 `backend.services.create_supplier` is read at line 29: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `create_supplier`. This raises on every call that reaches it. Add `create_supplier` to `backend.services` — do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.
-- 🚨 `backend.services.get_supplier` is read at line 34: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `get_supplier`. This raises on every call that reaches it. Add `get_supplier` to `backend.services` — do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.
-- 🚨 `backend.services.update_supplier` is read at line 42: `backend.services` defines DB_PATH, get_stock_level, get_stock_levels_by_warehouse, low_stock_report, and no `update_supplier`. This raises on every call that reaches it. Add `update_supplier` to `backend.services` — do NOT delete the reference or point it at a different name, which silently changes what this code does instead of fixing it.
-- 🚨 the project's own test suite does not run: 5 of its tests error before executing
-- 🚨 FAILED tests/test_main.py::test_list_suppliers_returns_list - AttributeError:...
-- 🚨 FAILED tests/test_main.py::test_create_supplier_returns_created - AttributeEr...
-- 🚨 FAILED tests/test_main.py::test_get_supplier_not_found_404 - AttributeError: ...
-- 🚨 FAILED tests/test_products.py::test_create_product - AttributeError: module '...
+- 🚨 9 of 22 endpoint(s) return a server error when called: POST /suppliers/ → 500, GET /products/{product_id} → 500, GET /products/ → 500, DELETE /products/{product_id} → 500, GET /stock_movements/{movement_id} → 500. These fail at request time, which the import check cannot see.
+- 🚨 `product.price` is read at line 84, but `product` is a `ProductCreate`, which declares description, name, sku, supplier_id. This raises AttributeError on every call that reaches it. Either use the field that exists, or add `price` to ProductCreate where it is defined — do NOT replace the read with a .get() or a default, which writes an empty value into the database instead.
+- 🚨 the project's own test suite fails: 7 failed, 12 passed
+- 🚨 FAILED tests/test_endpoints.py::test_create_supplier - sqlite3.OperationalErr...
+- 🚨 FAILED tests/test_endpoints.py::test_get_supplier - sqlite3.OperationalError:...
+- 🚨 FAILED tests/test_endpoints.py::test_update_supplier - sqlite3.OperationalErr...
+- 🚨 FAILED tests/test_endpoints.py::test_delete_supplier - sqlite3.OperationalErr...
