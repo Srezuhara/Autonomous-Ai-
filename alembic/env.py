@@ -24,9 +24,27 @@ from api_platform.db.models import Base  # noqa: E402
 
 config = context.config
 
-if config.config_file_name is not None:
+# `configure_logger` is alembic's documented escape hatch for an embedded run,
+# and `api_platform/database.py` sets it to False. Even with
+# `disable_existing_loggers=False`, `fileConfig` REPLACES the root handlers with
+# alembic.ini's, so a host application loses its own logging the moment it runs a
+# migration — which the server does at startup, before it does anything else.
+if config.config_file_name is not None and config.attributes.get(
+        "configure_logger", True):
     try:
-        fileConfig(config.config_file_name)
+        # `disable_existing_loggers=False` is load-bearing, and its absence cost
+        # three sessions of build logs. `fileConfig` defaults to True, which
+        # REPLACES the root handlers with alembic.ini's and marks every logger
+        # already created as disabled. The server runs migrations at startup, so
+        # from that moment on nothing from `agents.*` was ever emitted again:
+        # five session logs in this repo stop mid-startup at exactly the line
+        # after alembic runs, and two live rows were assessed with no log at all.
+        #
+        # It was diagnosed twice before this and both diagnoses were wrong —
+        # first block buffering (disproved: the file was the same size after the
+        # process exited), then the detached launch (disproved: a FileHandler the
+        # server owned stopped at the same line). The tell was the timestamp.
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
     except Exception:
         pass
 

@@ -124,6 +124,12 @@ def _alembic_config(engine):
         return None
     cfg = Config(str(ini))
     cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    # Do not let alembic configure logging for us. `env.py` calls `fileConfig`,
+    # which replaces the ROOT handlers with alembic.ini's — and this runs during
+    # app startup, so every log line the platform emits afterwards goes nowhere.
+    # Five session logs in this repo stop at exactly the line before this call,
+    # and two live rows were assessed with no build log at all.
+    cfg.attributes["configure_logger"] = False
     cfg.attributes["connection"] = None
     return cfg
 
