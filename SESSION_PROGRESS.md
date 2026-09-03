@@ -1,42 +1,83 @@
 # Session Progress — start here
 
 **Last session: 2026-09-03 (Phase 23 — the eleventh session).** `test_phase23.py`
-is **899/899**, up from 854. Row 3 ran twice, and all three instances of one
-systemic defect are now closed: **the repair was always aimed at the file the
-traceback names, not the file that must change.**
+is **899/899**, up from 854. Row 3 ran **three times**. All three instances of
+one systemic defect were closed and each held on the next run — and each row then
+failed on something new. The phase does not close.
 
-> ## ▶ Next session: run one row. That is the whole remaining task.
+> ## ▶ Next session: one static fix, then one row
 >
-> Everything that can be fixed without quota has been. What is left is proof.
+> **Quota first.** At 07:00 on 2026-09-03 the fast model was at **3,445** and
+> heavy at **45,091**; a row costs ~114K and the fast floor is 90,000. That is
+> roughly a **10-hour** wait. `run_live_matrix.py --dry-run` is the authority.
+>
+> **1. Fix the defect the third row died on (no quota, static, ~1 hour).**
+> The generator wrote:
+>
+> ```python
+> app = FastAPI(lifespan=lifespan)
+>
+> @app.on_event("startup")
+> def include_routers():
+>     app.include_router(product.router)
+> ```
+>
+> **Starlette ignores `on_event` when a `lifespan` is supplied**, so no route is
+> ever registered and the app serves nothing — `unusable`. It is statically
+> detectable with certainty: a FastAPI app constructed with `lifespan=` that also
+> declares `@app.on_event(...)` is always wrong. Give it a `repair_target` on the
+> file that builds the app, exactly as `module_ref`, `schema_attr` and
+> `sql_schema` now do — this is the **fourth** instance of that same pattern.
+> Falsify it against the corpus first (`tools/verify_corpus.py`), which is how
+> the last two were kept honest.
+>
+> **2. Then one row**, and grade it with `tools/assert_row.py <build_id> row.log`.
 >
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
 > venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
-> venv/Scripts/python.exe run_live_matrix.py --dry-run          # both models "yes"
-> venv/Scripts/python.exe run_live_matrix.py --rows 3           # ~114,000 tokens
-> venv/Scripts/python.exe tools/assert_row.py <build_id> row.log
+> venv/Scripts/python.exe run_live_matrix.py --dry-run
+> venv/Scripts/python.exe run_live_matrix.py --rows 3
 > ```
 >
-> 1. **`--log-file` is new and not optional.** Two rows in a row were assessed
->    with no build log. Without it `grep -c "does not parse"` and §4.41's
->    `RATIO_LOG` stay unmeasured, as they still are.
-> 2. **Budget ~114,000 tokens** — measured on both runs (117,191 and 114,240).
-> 3. **`tools/assert_row.py` runs the whole §B2 table for you** and is calibrated
->    against both rows.
-> 4. **What the row has to show**, beyond the driver's verdict: `schema_attr`
->    and `sql_schema` **verified**, and `runtime_smoke` verified — the last is
->    the one no clone can prove.
+> **The build log works now** (`fe7465d`). For four sessions alembic's
+> `fileConfig()` had been replacing the root log handlers during the startup
+> migration, so the platform silenced itself before building anything. This row
+> is the first chance to measure `grep -c "does not parse"` and §4.41's
+> `RATIO_LOG` — both still unmeasured.
 >
-> Measured on a clone of the last row's build, three probe runs at ~4,200 tokens:
-> endpoints **13/22 → 20/22**, `schema_attr` and `sql_schema` both failed →
-> **verified**. The two endpoints still failing are ordinary code bugs with clean
-> tracebacks, which the existing runtime channel handles and the pipeline gets a
-> second pass at.
->
-> Full detail: `PHASE23_HANDOFF.md` §0.-10 (the two fixes and their
-> falsification), §0.-9 (the first one, and the live row that proved it).
+> Full detail: `PHASE23_HANDOFF.md` §0.-11 (this row and the log fix), §0.-10
+> (schema_attr and sql_schema), §0.-9 (module_ref, and the first live proof).
 
-## §0.-3 What the eleventh session changed, in one table
+## §0.-4 The three rows, and what each one proved
+
+| run | architecture | outcome | why |
+|---|---|---|---|
+| `d1b98d57` | single router, raw sqlite3 | `done_with_context`, 1/22 endpoints | `routes.py` called 23 functions `services.py` did not define |
+| `c2d4a4d4` | multi-file, raw sqlite3 | `done_with_context`, 13/22 | a model field never declared; 2 tables never created |
+| `e3894a9e` | SQLAlchemy, `routers/` package | **`unusable`**, 0 routes | routers registered in an `on_event` that a `lifespan` disables |
+
+**Each fix held on the following run.** `module_ref` went failed → verified and
+its repair fired again in row 3. `schema_attr` and `sql_schema` came back
+verified / correctly `not_applicable`. Every row then failed on a defect the
+previous one did not have.
+
+**Architect variance is now the dominant obstacle.** Three runs, three different
+programs; no defect has recurred. The repairs generalise — the surface they must
+cover keeps moving.
+
+**Every static check passed a build that serves nothing.** Row 3's
+`feature_coverage` read `verified, 6/6, "5 route(s)"` against an app with zero
+routes at runtime; `debug_score` 8/8, `review_score` 7.0. Only the executing
+check caught it, which is the entire argument for the "at least one check must
+EXECUTE the artifact" criterion.
+
+**The quota fallback is proven live.** Row 3 was started deliberately below the
+90,000 fast floor (49,894 left); the fast model ran dry, `generate_text` moved
+the rest to heavy (149,741 → 45,091), and the row completed instead of dying at
+the wall. Until 2026-09-03 that branch had no test at all.
+
+## §0.-3 What that session changed, in one table
 
 | | |
 |---|---|

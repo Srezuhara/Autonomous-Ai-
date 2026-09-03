@@ -28,6 +28,119 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ---
 
+## 0.-11 The third row: every fix held, and it failed on a fourth thing
+
+`e3894a9e`, `unusable`, 1,153s. Run on the fixed code, and the fixes are not why
+it failed.
+
+| check | result |
+|---|---|
+| `module_ref` | **verified** — and the repair fired again: `1 name(s) other modules read are not defined in .../backend/main.py`, `main.py` repaired |
+| `schema_attr` | **verified** |
+| `sql_schema` | `not_applicable` — correct: this build used SQLAlchemy, and the ORM guard is exactly what should fire |
+| `runtime_smoke` | **failed** — "the app boots and declares 0 routes" |
+
+`tools/assert_row.py`: 7 passed, 2 failed, and both failures are the same fact —
+the terminal state, and "at least one check executed the artifact".
+
+### The defect
+
+```python
+app = FastAPI(lifespan=lifespan)
+
+@app.on_event("startup")
+def include_routers():
+    from routers import product
+    app.include_router(product.router)
+```
+
+**Starlette ignores `on_event` when a `lifespan` is supplied.** The routers are
+never registered, and the application serves nothing. Only one of the four
+requested entities got a router module at all — the generated README says so
+itself: *"Routers are referenced in `main.py` … but not implemented."*
+
+This is a fourth instance of the pattern §0.-9 named, and the sharpest one yet:
+the finding says "declares 0 routes", the file that must change is `main.py`, and
+nothing connects the two. `main.py` WAS a repair target here (for the import
+error) and was repaired — the repair fixed what it was told about and left the
+dead `on_event` alone, because nothing told it.
+
+It is also cheaply detectable and worth doing before the next row: a FastAPI app
+constructed with `lifespan=` that also declares `@app.on_event(...)` is always
+wrong, statically, with no execution required.
+
+### What every static check said about a build that serves nothing
+
+`feature_coverage`: **verified, 6/6, "5 route(s)"** — against an app with zero
+routes at runtime. `module_ref`, `schema_attr`: verified. `debug_score` 8/8,
+`review_score` 7.0, `test_score` 10/12.
+
+Only the executing check caught it. That is the whole argument for the "at least
+one check must EXECUTE the artifact" criterion, demonstrated by a build that
+would otherwise have shipped as sound.
+
+### Architect variance is now the dominant obstacle
+
+Three runs, three architectures:
+
+| run | shape | how it failed |
+|---|---|---|
+| `d1b98d57` | single router, raw sqlite3, flat `services.py` | 23 undefined service functions |
+| `c2d4a4d4` | multi-file, raw sqlite3 | missing model field, 2 tables never created |
+| `e3894a9e` | SQLAlchemy, `routers/` package | routers registered in a dead `on_event` |
+
+Each row is a different program. No single defect has recurred across two runs,
+which is the good news and the bad news: the repairs generalise, and the surface
+they must cover keeps moving.
+
+### The log problem, finally diagnosed — and the two wrong answers before it
+
+Every log line the platform emits after its startup migration was being
+discarded. The startup sequence proves it, because it logs five lines around the
+migration:
+
+```
+🚀 Starting AI App Builder Platform v2.2.0     present
+initialize_db()                                 runs alembic
+✅ Database initialized                         MISSING
+🔧 Worker pool: 3 workers ready                 MISSING
+✅ Platform ready                               MISSING
+```
+
+`alembic/env.py` calls `fileConfig(config.config_file_name)`, which replaces the
+root handlers with alembic.ini's and disables every logger already created. The
+server runs migrations at startup, so this happened before a single build ran.
+The five 1,567-byte logs in this repo all stop at that exact line, and every
+272KB log that does contain agent output predates Alembic landing on 2026-08-31.
+
+Both earlier answers were wrong, and each was disproved by its own fix:
+
+| diagnosis | fix tried | how it was disproved |
+|---|---|---|
+| block buffering | `line_buffering=True` | the log was the same size **after the process exited** — a buffer would have flushed |
+| the detached launch | `--log-file`, a FileHandler the server owns | it stopped at the **same line** |
+| `fileConfig` (correct) | alembic's `configure_logger` attribute | the three missing lines appear |
+
+`disable_existing_loggers=False` alone is not enough either — it stops loggers
+being *disabled* while `fileConfig` still *replaces* the root handlers. Both
+changes are in: `env.py` honours `configure_logger`, and
+`api_platform/database.py` sets it to False, which is alembic's documented way
+for an embedded caller to keep its own logging.
+
+**Consequence:** the next row gets a readable build log for the first time in
+four sessions, which is also the first chance to measure
+`grep -c "does not parse"` and §4.41's `RATIO_LOG`. Both are still unmeasured.
+
+### The quota fallback, proven live
+
+Started deliberately below the driver's 90,000 fast floor (49,894 left) by
+posting the build directly. The fast model ran dry and `generate_text` moved the
+remaining work to the heavy model, which went 149,741 -> 45,091. **The row
+completed rather than dying at the wall** — the first live exercise of that
+branch, which until yesterday had no test at all.
+
+---
+
 ## 0.-10 The other two instances, closed — and a check that had been silent for months
 
 §0.-9 closed one instance of "the repair is aimed at the file the traceback
@@ -202,7 +315,11 @@ re-smokes after this repair, which the probe does not.
 
 ### Also closed
 
-**The 1,567-byte log, diagnosed twice — the first diagnosis was wrong.**
+**The 1,567-byte log, diagnosed three times. Only the third was right — see
+§0.-11's commit `fe7465d`: `alembic/env.py`'s `fileConfig()` replaces the ROOT
+handlers during the startup migration, so the platform silenced itself before it
+had built anything. What follows is the second diagnosis, kept because it is how
+the third was reached.**
 
 Five session logs in this repo are exactly 1,567 bytes: the startup banner and
 nothing else. Two live rows have now been assessed without their build log
