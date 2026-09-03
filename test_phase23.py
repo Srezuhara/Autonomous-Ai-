@@ -1920,11 +1920,23 @@ check("the ceiling is llm_client's, and it is always known",
 # without the budget is the same bug again, so count the call sites.
 _dbg_src = Path("agents/debugger.py").read_text(encoding="utf-8")
 check("every rewrite call passes a sized budget",
-      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 4
+      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 6
       and "self.think(prompt, max_tokens=_rewrite_budget(self, block.source))" in _dbg_src
       and "self.think(prompt)\n" not in _dbg_src,
       f"whole-file={_dbg_src.count('_rewrite_budget(self, current_code)')} "
       f"block={_dbg_src.count('_rewrite_budget(self, block.source)')}")
+# The count above is brittle on purpose — it fails when a prompt is added — but
+# a count alone cannot say WHY, so assert the property too. Six whole-file
+# rewrites: the import fix, the runtime fix, the targeted retry's fallback, the
+# missing-field fix and the missing-table fix. The definition repair is the one
+# deliberate exception: it APPENDS, so its budget is sized to the names it must
+# add rather than to the file it was handed, and sizing that one to the current
+# text would cap the reply at roughly what already exists.
+check("...and no think() call in the debugger goes without one",
+      all("max_tokens=" in line
+          for line in _dbg_src.splitlines() if "self.think(" in line),
+      str([l.strip() for l in _dbg_src.splitlines()
+           if "self.think(" in l and "max_tokens=" not in l]))
 
 
 # ── 25. Locating and replacing one block of a file ────────────────────────────
@@ -7549,6 +7561,156 @@ check("_defines sees a function, a class and an assignment alike",
       and _def59("D = 1\n", "D") and not _def59("def f(): pass\n", "g"))
 
 shutil.rmtree(_W59, ignore_errors=True)
+
+
+# ── §4.48 The same gap, in the two checks that still had it ────────────────
+#
+# Fixing `module_ref` did not fix the class. Row 3's re-run (`c2d4a4d4`,
+# 2026-09-03) passed `module_ref` and failed anyway: `schema_attr` reported
+# `product.price` against a `ProductCreate` that declares four other fields, and
+# 8 of its 9 dead endpoints raised `no such table`. Both findings named the file
+# that had to change. Neither could reach a repair.
+
+_W60 = Path(tempfile.mkdtemp(prefix="targets60_"))
+_W60_OUT = _W60 / "out"
+_W60_OUT.mkdir(parents=True)
+
+
+def _mk60(name: str, files: dict) -> str:
+    root = _W60_OUT / name
+    for rel, src in files.items():
+        t = root / rel
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(src, encoding="utf-8")
+    return name
+
+
+def _under60(fn, *a):
+    real = config.OUTPUT_DIR
+    try:
+        config.OUTPUT_DIR = str(_W60_OUT)
+        return fn(*a)
+    finally:
+        config.OUTPUT_DIR = real
+
+
+# ── 1. schema_attr names the file that DEFINES the model ────────────────────
+from tools.schema_attr_check import (
+    check_schema_attributes as _csa60, AttrIssue as _AI60)
+
+_mk60("app60", {
+    "models.py": ("from pydantic import BaseModel\n\n\n"
+                  "class ProductCreate(BaseModel):\n"
+                  "    name: str\n    sku: str\n"),
+    "routes.py": ("import models\n\n\n"
+                  "def create(product: models.ProductCreate):\n"
+                  "    return {\"p\": product.price}\n"),
+})
+_o60 = _under60(_csa60, "app60")
+_t60 = dict(_o60.evidence.get("repair_targets") or {})
+
+check("a schema_attr finding is aimed at the file that defines the model",
+      list(_t60) == ["app60/models.py"], str(list(_t60)))
+check("...and NOT at the file that reads the field",
+      "app60/routes.py" not in _t60, str(list(_t60)))
+check("...and carries the finding, which already says where to add it",
+      bool(_t60) and "price" in _t60["app60/models.py"][0], str(_t60))
+
+from agents.debugger import (
+    _missing_fields as _mf60, _declares_field as _df60,
+    _missing_tables as _mt60)
+
+_issue60 = _AI60(file="backend/routes.py", line=84, param="product",
+                 attr="price", model="ProductCreate", declared=("name", "sku"))
+check("the model and field are read back out of the finding the user sees",
+      _mf60([str(_issue60)]) == [("ProductCreate", "price")],
+      str(_mf60([str(_issue60)])))
+check("...and an unparseable line is skipped rather than guessed at",
+      _mf60(["something else"]) == [])
+check("a field is only 'declared' when the class actually declares it",
+      _df60("class P:\n    price: float\n", "P", "price")
+      and not _df60("class P:\n    name: str\n", "P", "price")
+      and not _df60("class Q:\n    price: float\n", "P", "price"))
+
+# ── 2. The schema parser was inert on the commonest DDL there is ────────────
+# `_CREATE_TABLE` required a trailing `;`. A statement passed to
+# `cursor.execute("CREATE TABLE ...")` has none and needs none, so parse_schema
+# returned {} and the whole module went silent: no schema means no column is
+# ever checked, and it reported nothing rather than reporting it could not run.
+# Four corpus projects went `not_applicable -> verified` when this was fixed.
+from tools.sql_schema_check import (
+    parse_schema as _ps60, check_project_sql as _cps60, check_sql_schema as _css60)
+
+check("a CREATE TABLE with no trailing semicolon is parsed",
+      sorted(_ps60("CREATE TABLE supplier (id INTEGER, name TEXT)")) == ["supplier"],
+      str(_ps60("CREATE TABLE supplier (id INTEGER, name TEXT)")))
+check("...and IF NOT EXISTS, as generated code writes it",
+      "warehouse" in _ps60("CREATE TABLE IF NOT EXISTS warehouse (id INT)"))
+check("...and a column type with its own parentheses, which the `;` guarded",
+      sorted(_ps60("CREATE TABLE item (id INT, price DECIMAL(10, 2), n TEXT)")["item"])
+      == ["id", "n", "price"],
+      str(_ps60("CREATE TABLE item (id INT, price DECIMAL(10, 2), n TEXT)")))
+check("...and a semicolon-terminated statement still works",
+      "t" in _ps60("CREATE TABLE t (a INT);"))
+
+# ── 3. A queried table that nothing creates ─────────────────────────────────
+_mk60("app60sql", {
+    "main.py": ("import sqlite3\n\ndef init(conn):\n"
+                "    conn.execute(\"\"\"CREATE TABLE IF NOT EXISTS supplier ("
+                "id INTEGER PRIMARY KEY, name TEXT)\"\"\")\n"),
+    "services.py": ("import sqlite3\n\ndef get_products(conn):\n"
+                    "    return conn.execute(\"SELECT id, name FROM product\")\n"),
+})
+_r60 = _under60(_cps60, "app60sql", [])
+check("a table the code queries and nothing creates is reported",
+      [m.table for m in _r60.missing] == ["product"],
+      str([m.table for m in _r60.missing]))
+check("...and the table that IS created is not",
+      "supplier" not in [m.table for m in _r60.missing])
+_sqlo60 = _under60(_css60, "app60sql")
+check("...and the repair is aimed at the file holding the other CREATE TABLEs",
+      list(_sqlo60.evidence.get("repair_targets") or {}) == ["app60sql/main.py"],
+      str(list(_sqlo60.evidence.get("repair_targets") or {})))
+check("...and the table name is read back out of the finding",
+      _mt60([str(_r60.missing[0])]) == ["product"],
+      str(_mt60([str(_r60.missing[0])])))
+
+# ── 4. And it stays silent where the premise does not hold ──────────────────
+# This is the half that keeps it honest. The module's standing rule is that a
+# table with no CREATE TABLE may be created by a migration or an ORM, and that
+# is still true — the new report is only safe because the project demonstrably
+# creates its OTHER tables inline.
+_mk60("app60orm", {
+    "models.py": ("from sqlalchemy.orm import declarative_base\n"
+                  "Base = declarative_base()\n"),
+    "main.py": ("import sqlite3\ndef init(c):\n"
+                "    c.execute(\"CREATE TABLE supplier (id INTEGER)\")\n"),
+    "svc.py": "def q(c):\n    return c.execute(\"SELECT id FROM product\")\n",
+})
+check("an ORM in the project silences the missing-table report",
+      _under60(_cps60, "app60orm", []).missing == [],
+      str([m.table for m in _under60(_cps60, "app60orm", []).missing]))
+
+_mk60("app60mig", {
+    "main.py": ("import sqlite3\ndef init(c):\n"
+                "    c.execute(\"CREATE TABLE supplier (id INTEGER)\")\n"),
+    "svc.py": "def q(c):\n    return c.execute(\"SELECT id FROM product\")\n",
+    "migrations/0001.py": "# a migration\n",
+})
+check("...and so does a migrations/ directory",
+      _under60(_cps60, "app60mig").missing == []
+      if False else _under60(_cps60, "app60mig", []).missing == [],
+      str([m.table for m in _under60(_cps60, "app60mig", []).missing]))
+
+_mk60("app60none", {
+    "svc.py": "def q(c):\n    return c.execute(\"SELECT id FROM product\")\n",
+})
+check("...and a project that creates no tables at all reports nothing",
+      _under60(_cps60, "app60none", []).missing == []
+      and _under60(_css60, "app60none").status.name == "NOT_APPLICABLE",
+      str(_under60(_css60, "app60none").status))
+
+shutil.rmtree(_W60, ignore_errors=True)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

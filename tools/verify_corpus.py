@@ -194,6 +194,7 @@ def _sql_record(root: str) -> dict:
     ]
     report = check_project_sql(root, files)
     findings = sorted(str(i) for i in getattr(report, "issues", []))
+    findings += sorted(str(m) for m in getattr(report, "missing", []))
     if findings:
         return {
             "status":   "failed",

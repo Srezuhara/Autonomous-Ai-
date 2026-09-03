@@ -368,6 +368,62 @@ def _missing_names(findings) -> list:
     return names
 
 
+#: `AttrIssue.__str__` from `tools/schema_attr_check.py`. Pinned by
+#: `test_phase23.py` against the real dataclass, so a reworded finding fails
+#: there rather than silently parsing to nothing during a live build.
+_MISSING_FIELD_RE = re.compile(
+    r"^`(?P<param>\w+)\.(?P<attr>\w+)` is read at line \d+, "
+    r"but `(?P=param)` is a `(?P<model>\w+)`")
+
+
+def _missing_fields(findings) -> list:
+    """`[(model, attr), ...]` a batch of `schema_attr` findings says are missing."""
+    out: list = []
+    for finding in findings or ():
+        m = _MISSING_FIELD_RE.match(str(finding).strip())
+        if m:
+            pair = (m.group("model"), m.group("attr"))
+            if pair not in out:
+                out.append(pair)
+    return out
+
+
+#: `MissingTable.__str__` from `tools/sql_schema_check.py`, pinned by
+#: `test_phase23.py` against the real dataclass.
+_MISSING_TABLE_RE = re.compile(
+    r"^SQL in .* queries table `(?P<table>\w+)`, which this project never creates")
+
+
+def _missing_tables(findings) -> list:
+    """The table names a batch of `sql_schema` findings says are never created."""
+    out: list = []
+    for finding in findings or ():
+        m = _MISSING_TABLE_RE.match(str(finding).strip())
+        if m and m.group("table") not in out:
+            out.append(m.group("table"))
+    return out
+
+
+def _declares_field(source: str, model: str, attr: str) -> bool:
+    """Does `model` declare `attr` as a class-level name in this source?"""
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return False
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef) and node.name == model):
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                if stmt.target.id == attr:
+                    return True
+            elif isinstance(stmt, ast.Assign):
+                for t in stmt.targets:
+                    if isinstance(t, ast.Name) and t.id == attr:
+                        return True
+    return False
+
+
 def _defines(source: str, name: str) -> bool:
     """Does this source bind `name` at the top level?"""
     try:
@@ -547,6 +603,8 @@ class Debugger(BaseAgent):
         file_paths: list[str],
         runtime_errors: dict | None = None,
         missing_definitions: dict | None = None,
+        missing_fields: dict | None = None,
+        missing_tables: dict | None = None,
     ) -> list[FileDebugResult]:
         """
         `runtime_errors` maps a file to a failure the *running* app produced —
@@ -555,6 +613,12 @@ class Debugger(BaseAgent):
         request arrives. Without them a file like this is "passing" and the
         repair passes skip it, which is exactly what happened to a build whose
         three DB routes returned 500 on every call.
+
+        `missing_fields` is the same idea one level in: a file to the fields
+        other modules read from the models it defines and the models do not
+        declare (`schema_attr`'s findings). Same reason for its own channel, and
+        the same rule about which file is repaired — the model's, never the
+        reader's.
 
         `missing_definitions` maps a file to the names OTHER modules read from it
         and it does not define (`module_ref`'s findings, one line each). It needs
@@ -566,6 +630,8 @@ class Debugger(BaseAgent):
         """
         runtime_errors = runtime_errors or {}
         missing_definitions = missing_definitions or {}
+        missing_fields = missing_fields or {}
+        missing_tables = missing_tables or {}
         py_files = [
             f for f in file_paths
             if f.endswith(".py")
@@ -604,6 +670,8 @@ class Debugger(BaseAgent):
                 fp,
                 runtime_error=runtime_errors.get(fp, ""),
                 missing_defs=missing_definitions.get(fp, ()),
+                missing_flds=missing_fields.get(fp, ()),
+                missing_tbls=missing_tables.get(fp, ()),
             )
             results[fp] = r
             logger.info(str(r))
@@ -1665,7 +1733,9 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
     # ── Main debug loop ───────────────────────────────────────────────────────
 
     def _debug_file(self, file_path: str, runtime_error: str = "",
-                    missing_defs: tuple = ()) -> FileDebugResult:
+                    missing_defs: tuple = (),
+                    missing_flds: tuple = (),
+                    missing_tbls: tuple = ()) -> FileDebugResult:
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
@@ -1685,6 +1755,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             # Run this second so the definitions are added to whatever the
             # runtime repair left behind, rather than being overwritten by it.
             _try_definition_repair()
+            _try_field_repair()
+            _try_table_repair()
 
         def _try_definition_repair() -> None:
             nonlocal definition_repair_tried
@@ -1693,8 +1765,24 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 self._repair_missing_definitions(
                     file_path, list(missing_defs), result)
 
+        def _try_field_repair() -> None:
+            nonlocal field_repair_tried
+            if missing_flds and not field_repair_tried:
+                field_repair_tried = True
+                self._repair_missing_fields(
+                    file_path, list(missing_flds), result)
+
+        def _try_table_repair() -> None:
+            nonlocal table_repair_tried
+            if missing_tbls and not table_repair_tried:
+                table_repair_tried = True
+                self._repair_missing_tables(
+                    file_path, list(missing_tbls), result)
+
         runtime_repair_tried = False
         definition_repair_tried = False
+        field_repair_tried = False
+        table_repair_tried = False
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             result.attempts = attempt
@@ -2025,6 +2113,217 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             f"  ✅ [{file_path}] Definition repair applied: "
             f"{len(added_total)}/{len(wanted)} name(s)")
         return True
+
+    def _repair_missing_fields(
+        self, file_path: str, findings: list, result: FileDebugResult
+    ) -> bool:
+        """
+        Add fields to models that other modules read and the model does not
+        declare (`schema_attr`'s findings).
+
+        Unlike `_repair_missing_definitions` this REWRITES the file rather than
+        appending, and that is the right shape here for the reason the other one
+        is not: a field belongs inside an existing class, so there is nothing to
+        append to the end of the file. The whole-file guard applies again too —
+        `accept_generated_fix` rejects a reply that drops a top-level name, which
+        is the real risk when a models file is re-emitted, and its `too_large`
+        rule is no obstacle because adding a field is not growth of that order.
+        """
+        wanted = _missing_fields(findings)
+        if not wanted:
+            return False
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for field repair: {e}")
+            return False
+
+        logger.info(
+            f"  🧾 [{file_path}] Declaring {len(wanted)} field(s) other modules read"
+        )
+        fixed = self._generate_missing_fields_fix(file_path, original, findings)
+        if not fixed or not self._accept_generated_fix(file_path, fixed):
+            logger.warning(f"  ⚠️  [{file_path}] Field repair rejected or empty")
+            return False
+
+        create_file(file_path, fixed)
+        self._preflight_fix(file_path)
+        self._inject_syspath(file_path)
+
+        verify = run_python(file_path)
+        if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+            logger.warning(
+                f"  ↩️  [{file_path}] Field repair broke the import check — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+
+        current = read_file(file_path)
+        landed = [(m, a) for m, a in wanted if _declares_field(current, m, a)]
+        if not landed:
+            # The file still imports, so nothing is broken — but nothing was
+            # fixed either, and saying "repaired" would retire the issue and
+            # ship the defect. Put the original back so the next pass sees the
+            # same problem rather than a rewrite that did not address it.
+            logger.warning(
+                f"  ↩️  [{file_path}] Field repair declared none of "
+                f"{[f'{m}.{a}' for m, a in wanted]} — restoring the original")
+            create_file(file_path, original)
+            return False
+
+        result.fixes_applied.append(
+            f"Declared {len(landed)} missing field(s) in {file_path}")
+        logger.info(
+            f"  ✅ [{file_path}] Field repair applied: {len(landed)}/{len(wanted)}")
+        return True
+
+    def _repair_missing_tables(
+        self, file_path: str, findings: list, result: FileDebugResult
+    ) -> bool:
+        """
+        Add a CREATE TABLE for a table the code queries and nothing creates.
+
+        Rewrites, like the field repair and for the same reason: the statement
+        belongs beside the other CREATE TABLEs, inside whatever function already
+        runs them. Verified by re-parsing the schema out of the result, so
+        "it wrote something" cannot pass for "the table exists now".
+        """
+        wanted = _missing_tables(findings)
+        if not wanted:
+            return False
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for schema repair: {e}")
+            return False
+
+        logger.info(
+            f"  🗄️  [{file_path}] Creating {len(wanted)} table(s) the code queries"
+        )
+        fixed = self._generate_missing_tables_fix(file_path, original, findings)
+        if not fixed or not self._accept_generated_fix(file_path, fixed):
+            logger.warning(f"  ⚠️  [{file_path}] Schema repair rejected or empty")
+            return False
+
+        create_file(file_path, fixed)
+        self._preflight_fix(file_path)
+        self._inject_syspath(file_path)
+
+        verify = run_python(file_path)
+        if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+            logger.warning(
+                f"  ↩️  [{file_path}] Schema repair broke the import check — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+
+        try:
+            from tools.sql_schema_check import parse_schema
+            now = set(parse_schema(read_file(file_path)))
+        except Exception:
+            now = set()
+        landed = [t for t in wanted if t in now]
+        if not landed:
+            logger.warning(
+                f"  ↩️  [{file_path}] Schema repair created none of {wanted} — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+
+        result.fixes_applied.append(
+            f"Created {len(landed)} missing table(s) in {file_path}")
+        logger.info(
+            f"  ✅ [{file_path}] Schema repair applied: {len(landed)}/{len(wanted)}")
+        return True
+
+    def _generate_missing_tables_fix(
+        self, file_path: str, current_code: str, findings: list
+    ) -> str | None:
+        """
+        The prompt for a schema that is missing a table its own code queries.
+
+        The trap it has to close is named in the finding: changing the QUERY to
+        use a table that does exist makes the error disappear and reads the wrong
+        rows, which is the same class of "repair" as defaulting a missing field
+        to None.
+        """
+        wanted = "\n".join(f"- {f}" for f in findings)
+        prompt = f"""This file creates the database schema. Other code in this project
+queries tables that it never creates, so every request that reaches one of those
+queries fails with `no such table`.
+
+FILE: {file_path}
+CURRENT CODE:
+{current_code}
+
+TABLES THE CODE QUERIES THAT THIS FILE NEVER CREATES:
+{wanted}
+
+RULES:
+- Add a CREATE TABLE for each one, in the same place and the same style as the
+  tables this file already creates: same helper, same `IF NOT EXISTS`, same
+  column conventions, run at the same point in startup.
+- Infer the columns from the queries in the project — the SELECT, INSERT and
+  UPDATE statements that use the table name each column belongs to. A foreign
+  key to another table should be an INTEGER referencing that table's id.
+- Do NOT change any query to use a different table. Making the error disappear
+  by reading a table that already exists returns the wrong rows.
+- Keep every table this file already creates, and every other name in it,
+  exactly as they are.
+
+Return ONLY the complete fixed Python code for this file."""
+        logger.info(f"  🧠 LLM creating tables: {file_path}")
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
+
+    def _generate_missing_fields_fix(
+        self, file_path: str, current_code: str, findings: list
+    ) -> str | None:
+        """
+        The prompt for a model that is missing a field its callers read.
+
+        The finding already carries the instruction and the trap — "Either use
+        the field that exists, or add `price` to ProductCreate ... do NOT replace
+        the read with a .get() or a default, which writes an empty value into the
+        database instead" — so it is passed through verbatim. The caller cannot
+        be edited from here in any case: this file is the model, not the reader.
+        """
+        wanted = "\n".join(f"- {f}" for f in findings)
+        # The findings explain the defect; this says the edit in one line each.
+        # Measured on 2026-09-03: with the prose alone the repair returned a
+        # file that did not declare the field about half the time, and the
+        # post-check correctly restored the original — a correct outcome, but a
+        # wasted call. The instruction and the reasoning are different jobs.
+        pairs = "\n".join(
+            f"- add `{attr}` to class `{model}`"
+            for model, attr in _missing_fields(findings))
+        prompt = f"""This file defines pydantic models. Other modules read fields from
+them that they do not declare, so every call that reaches one raises
+AttributeError.
+
+FILE: {file_path}
+CURRENT CODE:
+{current_code}
+
+EXACTLY WHAT TO ADD:
+{pairs}
+
+WHY, IN FULL:
+{wanted}
+
+RULES:
+- Add each missing field to the model named, with a sensible type annotation
+  that matches how the caller uses it. A price is a float, a count is an int, a
+  name is a str, a flag is a bool.
+- Give a field a default ONLY if the caller can reasonably omit it. A field the
+  caller always sets is required.
+- Change nothing else. Keep every model, every field and every import this file
+  already has — other modules import them and a dropped name is a new failure.
+- Do not silence the problem: do not delete the model, do not make it accept
+  arbitrary extra fields, and do not add a catch-all `dict` field.
+
+Return ONLY the complete fixed Python code for this file."""
+        logger.info(f"  🧠 LLM declaring fields: {file_path}")
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
 
     def _generate_missing_definitions_fix(
         self, file_path: str, current_code: str, findings: list

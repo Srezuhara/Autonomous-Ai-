@@ -1,50 +1,54 @@
 # Session Progress — start here
 
 **Last session: 2026-09-03 (Phase 23 — the eleventh session).** `test_phase23.py`
-is **881/881**, up from 854. Row 3 ran **twice**. The first run failed on a
-finding that named its own repair while nothing could act on it; that was fixed
-and the second run proves the fix live — `module_ref` **verified**, endpoints
-**1/22 → 13/22**, unresolved **34 → 10**. The row still does not pass, for two
-defects of the same shape as the one just closed.
+is **899/899**, up from 854. Row 3 ran twice, and all three instances of one
+systemic defect are now closed: **the repair was always aimed at the file the
+traceback names, not the file that must change.**
 
-> ## ▶ Next session: close two defects, then run one row
+> ## ▶ Next session: run one row. That is the whole remaining task.
 >
-> **Do not start with a row.** Both remaining blockers can be fixed and probed
-> with no quota; only *proving* them needs one. Full detail in
-> `PHASE23_HANDOFF.md` §0.-9.
+> Everything that can be fixed without quota has been. What is left is proof.
 >
-> 1. **`schema_attr` has no repair target** — exactly the gap `module_ref` had
->    until this session. `product.price` is read while `ProductCreate` declares
->    four other fields; the finding names the model and nothing can act on it.
->    `find_model_definition(root, class_name)` in `tools/schema_attr_check.py`
->    already returns the model's defining file. Mirror what `module_ref` now
->    does — but note the repair is a *modification* of an existing class, not an
->    append, so `_accept_definitions`'s clash rule does not apply as-is.
-> 2. **A queried table that is never created.** Eight of the nine remaining 500s
->    are `no such table: product` / `stock_movement`; `main.py` creates only
->    `supplier` and `warehouse`. The traceback names `services.py`, where the
->    query runs — **the fix belongs in `main.py`**, where the DDL is. `sql_schema`
->    deliberately says nothing about a table with no `CREATE TABLE` anywhere
->    ("it may live in a migration or an ORM"), which is right in general and
->    wrong when the project creates its other tables inline.
+> ```bash
+> venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
+> venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
+> venv/Scripts/python.exe run_live_matrix.py --dry-run          # both models "yes"
+> venv/Scripts/python.exe run_live_matrix.py --rows 3           # ~114,000 tokens
+> venv/Scripts/python.exe tools/assert_row.py <build_id> row.log
+> ```
 >
-> Both are the same pattern as the defect fixed this session: **the repair is
-> aimed at the file the traceback names, not the file that must change.** Three
-> instances, one closed.
+> 1. **`--log-file` is new and not optional.** Two rows in a row were assessed
+>    with no build log. Without it `grep -c "does not parse"` and §4.41's
+>    `RATIO_LOG` stay unmeasured, as they still are.
+> 2. **Budget ~114,000 tokens** — measured on both runs (117,191 and 114,240).
+> 3. **`tools/assert_row.py` runs the whole §B2 table for you** and is calibrated
+>    against both rows.
+> 4. **What the row has to show**, beyond the driver's verdict: `schema_attr`
+>    and `sql_schema` **verified**, and `runtime_smoke` verified — the last is
+>    the one no clone can prove.
 >
-> 3. **Then one row**, budgeted at **~114,000 tokens** (the measured cost of both
->    runs: 117,191 and 114,240). Pre-flight is unchanged and not optional:
->    `tools/verify_repairs.py --baseline repair_baseline.json` (expect 1 harmed,
->    8 non-idempotent) and `run_live_matrix.py --dry-run`.
-> 4. **Start the server with `--log-file`.** Two rows in a row were assessed
->    without their build log; `--log-file` makes the log belong to the server
->    rather than to the shell that launched it. Without it, `grep -c "does not
->    parse"` and `RATIO_LOG` stay unmeasurable, as they still are.
-> 5. **`tools/assert_row.py <build_id>`** runs the whole §B2 table for you.
+> Measured on a clone of the last row's build, three probe runs at ~4,200 tokens:
+> endpoints **13/22 → 20/22**, `schema_attr` and `sql_schema` both failed →
+> **verified**. The two endpoints still failing are ordinary code bugs with clean
+> tracebacks, which the existing runtime channel handles and the pipeline gets a
+> second pass at.
 >
-> Quota at 03:20 on 2026-09-03: fast **34,502**, heavy **121,470**.
+> Full detail: `PHASE23_HANDOFF.md` §0.-10 (the two fixes and their
+> falsification), §0.-9 (the first one, and the live row that proved it).
 
-## §0.-2 What the eleventh session changed, in one table
+## §0.-3 What the eleventh session changed, in one table
+
+| | |
+|---|---|
+| **The pattern** | Three defects, one shape: the repair goes to the file the traceback names, which is the *caller*. The file that must change is named only in the finding, and findings were advisory strings. |
+| **`module_ref`** | Publishes `repair_targets`; repaired by `Debugger.run(missing_definitions=...)`, which **appends in batches** — a whole-file rewrite cannot fit Groq's 8,000-token minute and `accept_generated_fix` rejects growth by design. Proven live: row 2 of 2. |
+| **`schema_attr`** | Same gap, same fix; repaired by `missing_fields`, which **rewrites**, because a field belongs inside an existing class. |
+| **`sql_schema`** | Had **never run during a build** — it lived only in `verify_corpus`. And it was **inert**: its regex required a trailing `;`, which `cursor.execute("CREATE TABLE ...")` never has, so it parsed no schema and checked no column. Fixed, wired in, and taught to report a queried table nothing creates. |
+| **Falsification** | 48 corpus projects: 4 `not_applicable → verified` (never checked before), 1 true positive, **0 false positives**, 0 checks going quiet. |
+| **`start_server.py --log-file`** | The 1,567-byte logs were not buffering — that diagnosis was wrong. Output never reached the file; it is the detached launch. |
+| **`tools/assert_row.py`** | The §B2 assertion table, executable. |
+
+## §0.-2 The first half of that session, in one table
 
 | | |
 |---|---|

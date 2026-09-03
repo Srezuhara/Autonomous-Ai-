@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
+from tools.verification import VerificationOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,9 @@ _NOT_A_COLUMN = {
     "asc", "desc", "true", "false", "exists",
 }
 
-_CREATE_TABLE = re.compile(
-    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"'`\[]?(\w+)[\"'`\]]?\s*\((.*?)\)\s*;",
-    re.IGNORECASE | re.DOTALL,
+_CREATE_TABLE_HEAD = re.compile(
+    r"""CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`\[]?(\w+)["'`\]]?\s*\(""",
+    re.IGNORECASE,
 )
 _SELECT = re.compile(r"SELECT\s+(.*?)\s+FROM\s+(.*?)(?:\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|$)",
                      re.IGNORECASE | re.DOTALL)
@@ -90,9 +91,48 @@ class SchemaIssue:
 
 
 @dataclass
+class MissingTable:
+    """A table the code queries that no CREATE TABLE in the project creates."""
+    table: str
+    files: tuple = ()          # where it is queried, OUTPUT_DIR-relative
+    created: tuple = ()        # the tables that ARE created, for contrast
+    columns: tuple = ()        # the columns the queries read from it
+
+    def __str__(self) -> str:
+        where = ", ".join(self.files) if self.files else "the project"
+        made = ", ".join(self.created) if self.created else "none"
+        # Naming the columns the queries actually use is what makes this
+        # repairable in one call. Without them the repair invents a plausible
+        # table and the endpoints trade `no such table` for `no such column`,
+        # which is what the first probe measured: the repair created
+        # `stock_movement` and the queries wanted `movement_type`.
+        cols = (f" Its queries read these columns: {', '.join(self.columns)}."
+                if self.columns else "")
+        return (
+            f"SQL in {where} queries table `{self.table}`, which this project "
+            f"never creates. The tables it does create are: {made}.{cols} Every "
+            f"call that reaches this query raises `no such table: {self.table}` "
+            f"at request time. Add the CREATE TABLE for `{self.table}` beside "
+            f"the others — do NOT change the query to use a table that already "
+            f"exists, which would read the wrong rows."
+        )
+
+
+@dataclass
 class SchemaReport:
     tables: dict = field(default_factory=dict)          # table -> {columns}
     issues: list = field(default_factory=list)          # SchemaIssue
+    #: table -> the files that query it. Collected before the "not in schema"
+    #: skip, because a table absent from the schema is exactly the case below.
+    queried: dict = field(default_factory=dict)
+    #: table -> the columns its queries read. For a table that exists this is
+    #: redundant with the schema; for one that does not, it is the only
+    #: description of the table the code expects.
+    queried_columns: dict = field(default_factory=dict)
+    #: files containing at least one CREATE TABLE — the repair target for a
+    #: missing one, because that is where its siblings live.
+    schema_files: list = field(default_factory=list)
+    missing: list = field(default_factory=list)         # MissingTable
 
 
 def _split_top_level(text: str) -> list[str]:
@@ -113,10 +153,40 @@ def _split_top_level(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def _iter_create_tables(sql_text: str):
+    """
+    `(name, body)` for every CREATE TABLE, finding the body by matching
+    parentheses rather than by looking for a terminator.
+
+    The regex this replaces ended in `\\)\\s*;` — it required a semicolon after
+    the closing bracket. A statement passed to `cursor.execute("CREATE TABLE
+    ...")` does not have one, and needs none, so for those projects
+    `parse_schema` returned {} and this entire module went silent: no schema
+    means no column is ever checked, and the check reported nothing rather than
+    reporting that it could not run. Found on 2026-09-03 on a build whose
+    main.py creates two tables exactly that way.
+
+    Matching brackets also handles `price DECIMAL(10, 2)`, which is why the
+    terminator was there in the first place.
+    """
+    for m in _CREATE_TABLE_HEAD.finditer(sql_text):
+        start = m.end() - 1                    # at the opening "("
+        depth = 0
+        for i in range(start, len(sql_text)):
+            ch = sql_text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    yield m.group(1), sql_text[start + 1:i]
+                    break
+
+
 def parse_schema(sql_text: str) -> dict:
     """table name -> set of column names, from CREATE TABLE statements."""
     tables: dict = {}
-    for name, body in _CREATE_TABLE.findall(sql_text):
+    for name, body in _iter_create_tables(sql_text):
         cols = set()
         for part in _split_top_level(body):
             head = part.strip().split()
@@ -172,13 +242,18 @@ def _from_clause_tables(clause: str) -> tuple[dict, bool]:
     return mapping, count == 1
 
 
-def _check_select(sql: str, schema: dict, file: str, issues: list) -> None:
+def _check_select(sql: str, schema: dict, file: str, issues: list,
+                  queried: dict | None = None,
+                  columns: dict | None = None) -> None:
     for collist, from_clause in _SELECT.findall(sql):
         if "(" in from_clause and re.search(r"\bSELECT\b", from_clause, re.IGNORECASE):
             continue                                   # subquery: skip
         aliases, single = _from_clause_tables(from_clause)
         if not aliases:
             continue
+        if queried is not None:
+            for t in set(aliases.values()):
+                queried.setdefault(t, set()).add(file)
         for expr in _split_top_level(collist):
             expr = re.sub(r"\s+AS\s+\w+$", "", expr, flags=re.IGNORECASE).strip()
             if "*" in expr or "(" in expr:
@@ -187,18 +262,31 @@ def _check_select(sql: str, schema: dict, file: str, issues: list) -> None:
             if qualified:
                 alias, col = qualified.groups()
                 table = aliases.get(alias)
+                if table and columns is not None:
+                    columns.setdefault(table, set()).add(col)
                 if table and table in schema and col not in schema[table]:
                     issues.append(SchemaIssue(table, col, file, tuple(sorted(schema[table]))))
             elif single and re.fullmatch(r"\w+", expr):
                 if expr.lower() in _NOT_A_COLUMN:
                     continue
                 table = next(iter(set(aliases.values())))
+                if columns is not None:
+                    columns.setdefault(table, set()).add(expr)
                 if table in schema and expr not in schema[table]:
                     issues.append(SchemaIssue(table, expr, file, tuple(sorted(schema[table]))))
 
 
-def _check_insert_update(sql: str, schema: dict, file: str, issues: list) -> None:
+def _check_insert_update(sql: str, schema: dict, file: str, issues: list,
+                         queried: dict | None = None,
+                         columns: dict | None = None) -> None:
     for table, collist in _INSERT.findall(sql):
+        if queried is not None:
+            queried.setdefault(table, set()).add(file)
+        if columns is not None:
+            for col in _split_top_level(collist):
+                col = col.strip('"\'`[]')
+                if re.fullmatch(r"\w+", col):
+                    columns.setdefault(table, set()).add(col)
         if table not in schema:
             continue
         for col in _split_top_level(collist):
@@ -206,12 +294,43 @@ def _check_insert_update(sql: str, schema: dict, file: str, issues: list) -> Non
             if re.fullmatch(r"\w+", col) and col not in schema[table]:
                 issues.append(SchemaIssue(table, col, file, tuple(sorted(schema[table]))))
     for table, assigns in _UPDATE.findall(sql):
+        if queried is not None:
+            queried.setdefault(table, set()).add(file)
         if table not in schema:
             continue
         for part in _split_top_level(assigns):
             m = re.match(r"\s*[\"'`\[]?(\w+)[\"'`\]]?\s*=", part)
             if m and m.group(1) not in schema[table]:
                 issues.append(SchemaIssue(table, m.group(1), file, tuple(sorted(schema[table]))))
+
+
+#: Never reported as a missing table.
+_NOT_A_TABLE = {
+    "sqlite_master", "sqlite_sequence", "sqlite_temp_master", "dual",
+    "information_schema", "pg_catalog",
+}
+
+#: Anything here means tables may be created by something this module cannot
+#: read, so "nothing creates it" is no longer a safe inference.
+_ORM_MARKERS = (
+    "sqlalchemy", "declarative_base", "metadata.create_all", "alembic",
+    "django.db", "peewee", "tortoise", "sqlmodel",
+)
+
+
+def _schema_lives_elsewhere(sources: dict, project) -> bool:
+    """Could this project be creating tables somewhere this module cannot see?"""
+    try:
+        for name in ("alembic", "migrations"):
+            if (project / name).is_dir():
+                return True
+    except Exception:
+        return True                       # unreadable: assume yes, report nothing
+    for source in sources.values():
+        low = source.lower()
+        if any(marker in low for marker in _ORM_MARKERS):
+            return True
+    return False
 
 
 def check_project_sql(root: str, file_paths: list[str]) -> SchemaReport:
@@ -260,10 +379,52 @@ def check_project_sql(root: str, file_paths: list[str]) -> SchemaReport:
             if path.suffix == ".sql":
                 continue                              # the schema itself
             try:
-                _check_select(sql, report.tables, rel, report.issues)
-                _check_insert_update(sql, report.tables, rel, report.issues)
+                _check_select(sql, report.tables, rel, report.issues,
+                              report.queried, report.queried_columns)
+                _check_insert_update(sql, report.tables, rel, report.issues,
+                                     report.queried, report.queried_columns)
             except Exception:
                 continue
+
+    # ── A queried table that is never created ────────────────────────────────
+    #
+    # The module's stated rule is that a table with no CREATE TABLE anywhere is
+    # NOT reported, because "the schema may live in a migration or an ORM". That
+    # is right in general and wrong in one specific, checkable case: when this
+    # project creates its OTHER tables inline. Row 3 on 2026-09-03 created
+    # `supplier` and `warehouse` in main.py and queried `product` and
+    # `stock_movement`, which nothing created — 8 of its 9 failing endpoints,
+    # every one raising `no such table` at request time, and no check said a
+    # word. Reaching this point at all means `report.tables` is non-empty, so
+    # the inline-schema condition already holds.
+    #
+    # Two exits, both because the premise stops holding:
+    #   * an ORM or migrations in the project — the tables it does not create
+    #     inline may be created by metadata, and this cannot see that;
+    #   * a name that is not a plain identifier, or a known system table.
+    for path, source in sources.items():
+        if "CREATE TABLE" in source.upper():
+            try:
+                report.schema_files.append(
+                    str(path.relative_to(base)).replace("\\", "/"))
+            except Exception:
+                pass
+
+    if not _schema_lives_elsewhere(sources, project):
+        created = tuple(sorted(report.tables))
+        for table, files in sorted(report.queried.items()):
+            if table in report.tables or table.lower() in _NOT_A_TABLE:
+                continue
+            report.missing.append(MissingTable(
+                table=table, files=tuple(sorted(files)), created=created,
+                columns=tuple(sorted(report.queried_columns.get(table, ())))))
+
+    if report.missing:
+        logger.info(
+            f"🗄️  SQL schema check: {len(report.missing)} queried table(s) that "
+            f"nothing creates — "
+            + "; ".join(m.table for m in report.missing[:5])
+        )
 
     # De-duplicate: the same mismatch in five queries is one defect.
     seen, unique = set(), []
@@ -280,3 +441,54 @@ def check_project_sql(root: str, file_paths: list[str]) -> SchemaReport:
             + "; ".join(f"{i.table}.{i.column}" for i in report.issues[:5])
         )
     return report
+
+
+def check_sql_schema(root: str) -> VerificationOutcome:
+    """The same check as a VerificationOutcome, for the verification surface.
+
+    This did not exist until 2026-09-03, and neither did any call to this module
+    from the pipeline: it ran only in `tools/verify_corpus.py`, over projects
+    that had already shipped. So the one check that can see a query and a schema
+    disagree has never run during a build.
+    """
+    try:
+        base = Path(config.OUTPUT_DIR)
+        project = base / root
+        files = [
+            str(p.relative_to(base)).replace("\\", "/")
+            for p in sorted(project.rglob("*.py"))
+            if "__pycache__" not in p.parts
+        ] if project.is_dir() else []
+    except Exception:
+        files = []
+
+    report = check_project_sql(root, files)
+
+    if not report.tables:
+        return VerificationOutcome.not_applicable(
+            "sql_schema",
+            detail=("this project creates no tables inline, so there is no "
+                    "schema here to check SQL against"),
+        )
+
+    detail = (f"{len(report.tables)} table(s) created, "
+              f"{len(report.queried)} queried")
+    findings = [str(i) for i in report.issues] + [str(m) for m in report.missing]
+    if not findings:
+        return VerificationOutcome.verified("sql_schema", detail=detail)
+
+    # A missing table is repaired where the other CREATE TABLEs are, which is
+    # never the file the traceback names — that one is wherever the query runs.
+    targets: dict = {}
+    if report.missing and report.schema_files:
+        where = report.schema_files[0]
+        targets[where] = [str(m) for m in report.missing]
+
+    return VerificationOutcome.failed(
+        "sql_schema", findings, detail=detail,
+        evidence={
+            "missing_tables": [m.table for m in report.missing],
+            "column_mismatches": [f"{i.table}.{i.column}" for i in report.issues],
+            "repair_targets": targets,
+        },
+    )

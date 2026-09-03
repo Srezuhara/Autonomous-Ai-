@@ -1085,9 +1085,9 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "this project contains no SQL to check",
+        "detail": "12 python file(s) scanned",
         "findings": [],
-        "status": "not_applicable"
+        "status": "verified"
       },
       "static_smoke": {
         "detail": "this project ships no HTML page",
@@ -1937,9 +1937,12 @@
         "status": "failed"
       },
       "sql_schema": {
-        "detail": "this project contains no SQL to check",
-        "findings": [],
-        "status": "not_applicable"
+        "detail": "12 python file(s) scanned",
+        "findings": [
+          "SQL in inventory_system_c2d4a4d4/backend/services.py queries table `product`, which this project never creates. The tables it does create are: supplier, warehouse. Its queries read these columns: description, id, name, price, supplier_id. Every call that reaches this query raises `no such table: product` at request time. Add the CREATE TABLE for `product` beside the others \u2014 do NOT change the query to use a table that already exists, which would read the wrong rows.",
+          "SQL in inventory_system_c2d4a4d4/backend/services.py queries table `stock_movement`, which this project never creates. The tables it does create are: supplier, warehouse. Its queries read these columns: id, movement_type, product_id, quantity, timestamp, warehouse_id. Every call that reaches this query raises `no such table: stock_movement` at request time. Add the CREATE TABLE for `stock_movement` beside the others \u2014 do NOT change the query to use a table that already exists, which would read the wrong rows."
+        ],
+        "status": "failed"
       },
       "static_smoke": {
         "detail": "this project ships no HTML page",
@@ -2661,9 +2664,9 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "this project contains no SQL to check",
+        "detail": "11 python file(s) scanned",
         "findings": [],
-        "status": "not_applicable"
+        "status": "verified"
       },
       "static_smoke": {
         "detail": "this project ships no HTML page",
@@ -2726,9 +2729,9 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "this project contains no SQL to check",
+        "detail": "13 python file(s) scanned",
         "findings": [],
-        "status": "not_applicable"
+        "status": "verified"
       },
       "static_smoke": {
         "detail": "this project ships no HTML page",
@@ -3041,9 +3044,9 @@
         "status": "verified"
       },
       "sql_schema": {
-        "detail": "this project contains no SQL to check",
+        "detail": "9 python file(s) scanned",
         "findings": [],
-        "status": "not_applicable"
+        "status": "verified"
       },
       "static_smoke": {
         "detail": "this project ships no HTML page",

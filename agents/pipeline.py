@@ -939,6 +939,8 @@ class Pipeline:
         # unimportable), and a value left over from an earlier build would then
         # be handed to the repair passes as if it described this one.
         self._module_ref_targets = {}
+        self._schema_attr_targets = {}
+        self._sql_schema_targets = {}
 
         root = result.architecture.get("root_folder", "")
         if not root:
@@ -963,6 +965,7 @@ class Pipeline:
             from tools.package_smoke import smoke_test_package
             from tools.schema_attr_check import check_schema_attributes
             from tools.module_ref_check import check_module_refs
+            from tools.sql_schema_check import check_sql_schema
             from tools.generated_tests import run_generated_tests
             from tools.static_smoke import smoke_test_static
             from tools.verification import collect_findings
@@ -1011,6 +1014,12 @@ class Pipeline:
             # `not_applicable`, because the models whose fields it would have
             # checked were the very thing that was missing.
             ("module_ref", check_module_refs),
+            # Never ran during a build until 2026-09-03 — it existed only in
+            # `tools/verify_corpus.py`, over projects that had already shipped.
+            # A query and a schema that disagree is a request-time failure the
+            # import check cannot see, and the row that exposed this had 8 of
+            # its 9 failing endpoints raising `no such table`.
+            ("sql_schema", check_sql_schema),
             # The suite the build ships. Row 2 shipped one in which every test
             # errored at fixture setup and was still recorded `verified: yes`,
             # because no other check executes the tests — a suite that cannot
@@ -1038,6 +1047,15 @@ class Pipeline:
         for outcome in outcomes:
             if outcome.check == "module_ref":
                 self._module_ref_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "sql_schema":
+                self._sql_schema_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "schema_attr":
+                # One level in from `module_ref`: that one asks whether the name
+                # exists, this one whether the model declares the field. Both
+                # name a file that is not the file the traceback names.
+                self._schema_attr_targets = dict(
                     outcome.evidence.get("repair_targets") or {})
 
         for outcome in outcomes:
@@ -1748,6 +1766,34 @@ class Pipeline:
                 f"{', '.join(sorted(missing_definitions)[:4])}"
             ]
 
+        # And the same for a field the model does not declare. Row 3 on
+        # 2026-09-03 failed on `product.price` with the finding naming both the
+        # model and the fix, in a list that drives nothing.
+        missing_fields = dict(getattr(self, "_schema_attr_targets", {}) or {})
+        for path in missing_fields:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if missing_fields:
+            issues = list(issues) + [
+                f"{sum(len(v) for v in missing_fields.values())} field(s) other "
+                f"modules read are not declared in "
+                f"{', '.join(sorted(missing_fields)[:4])}"
+            ]
+
+        # And a table the code queries that nothing creates. Repaired where the
+        # other CREATE TABLEs are — never where the traceback points, which is
+        # wherever the query happens to run.
+        missing_tables = dict(getattr(self, "_sql_schema_targets", {}) or {})
+        for path in missing_tables:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if missing_tables:
+            issues = list(issues) + [
+                f"{sum(len(v) for v in missing_tables.values())} table(s) the "
+                f"code queries are never created in "
+                f"{', '.join(sorted(missing_tables)[:4])}"
+            ]
+
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
             report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
@@ -1874,6 +1920,8 @@ class Pipeline:
                         failed_paths,
                         runtime_errors=runtime_errors,
                         missing_definitions=missing_definitions,
+                        missing_fields=missing_fields,
+                        missing_tables=missing_tables,
                     )
                     # Merge the fresh results over the stale ones so the DB
                     # scores reflect the repaired state, not the pre-repair one.
@@ -1946,6 +1994,53 @@ class Pipeline:
                         ]
                 except Exception as e:
                     logger.warning(f"  ⚠️  module_ref re-check skipped: {e}")
+
+            if missing_fields:
+                try:
+                    from tools.schema_attr_check import check_schema_attributes
+                    root = result.architecture.get("root_folder", "")
+                    again = check_schema_attributes(root) if root else None
+                    missing_fields = dict(
+                        (again.evidence.get("repair_targets") or {})
+                        if again is not None else {}
+                    )
+                    self._schema_attr_targets = dict(missing_fields)
+                    if not missing_fields:
+                        logger.info(
+                            "  ✅ Every field other modules read is now declared")
+                    else:
+                        for path in missing_fields:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            f"{sum(len(v) for v in missing_fields.values())} "
+                            f"field(s) other modules read are still not declared"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  schema_attr re-check skipped: {e}")
+
+            if missing_tables:
+                try:
+                    from tools.sql_schema_check import check_sql_schema
+                    root = result.architecture.get("root_folder", "")
+                    sql_again = check_sql_schema(root) if root else None
+                    missing_tables = dict(
+                        (sql_again.evidence.get("repair_targets") or {})
+                        if sql_again is not None else {}
+                    )
+                    self._sql_schema_targets = dict(missing_tables)
+                    if not missing_tables:
+                        logger.info("  ✅ Every table the code queries now exists")
+                    else:
+                        for path in missing_tables:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            f"{sum(len(v) for v in missing_tables.values())} "
+                            f"table(s) the code queries are still never created"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  sql_schema re-check skipped: {e}")
 
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the

@@ -102,6 +102,12 @@ class AttrReport:
     declared: dict = field(default_factory=dict)  # name -> frozenset(fields)
     issues: list = field(default_factory=list)   # AttrIssue
     open_models: set = field(default_factory=set)  # names deliberately not checked
+    #: model name -> the file that DEFINES it, OUTPUT_DIR-relative. Not
+    #: `AttrIssue.file`, which is where the attribute is read. Row 3 on
+    #: 2026-09-03 failed on `product.price`: the finding named `ProductCreate`
+    #: and the file to edit, and the evidence carried neither, so the repair
+    #: passes never saw it.
+    files: dict = field(default_factory=dict)
 
 
 # ── Collecting the models ─────────────────────────────────────────────────────
@@ -353,6 +359,21 @@ def check_project_attributes(root: str) -> AttrReport:
     if not report.models:
         return report
 
+    # Where each model is DEFINED, which is the file a repair has to edit — and
+    # it is never `AttrIssue.file`, which is where the attribute is *read*. The
+    # sources are already in hand here, so this costs one walk instead of a
+    # re-parse of the project per model (`find_model_definition` does that, and
+    # stays for its single-model callers).
+    for path, source in sources.items():
+        try:
+            tree = ast.parse(source)
+            rel = str(path.relative_to(base)).replace("\\", "/")
+        except Exception:
+            continue
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name in report.models:
+                report.files.setdefault(node.name, rel)
+
     for path, source in sources.items():
         try:
             tree = ast.parse(source)
@@ -507,8 +528,21 @@ def check_schema_attributes(root: str) -> VerificationOutcome:
         f"({len(report.open_models)} skipped as open)"
     )
     if report.issues:
+        targets: dict = {}
+        for issue in report.issues:
+            rel = report.files.get(issue.model)
+            if rel:
+                targets.setdefault(rel, []).append(str(issue))
         return VerificationOutcome.failed(
             "schema_attr", [str(i) for i in report.issues], detail=detail,
-            evidence={"undeclared": [f"{i.model}.{i.attr}" for i in report.issues]},
+            evidence={
+                "undeclared": [f"{i.model}.{i.attr}" for i in report.issues],
+                # The file each defect must be repaired IN — the module that
+                # DEFINES the model, not the one that reads the attribute. Same
+                # gap `module_ref` had until 2026-09-03, and the same cost: the
+                # finding names the repair, the advisory list cannot act on it,
+                # and the repair passes edit whatever file the traceback named.
+                "repair_targets": targets,
+            },
         )
     return VerificationOutcome.verified("schema_attr", detail=detail)

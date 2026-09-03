@@ -28,6 +28,95 @@ Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
 
 ---
 
+## 0.-10 The other two instances, closed — and a check that had been silent for months
+
+§0.-9 closed one instance of "the repair is aimed at the file the traceback
+names, not the file that must change" and named two more. Both are now closed,
+and each was measured on the build row 3 actually shipped rather than argued.
+
+### `schema_attr` — the identical gap, one check over
+
+Its evidence was `{"undeclared": [...]}`: the finding names the model that must
+gain the field and nothing could act on it. It now publishes `repair_targets`
+the same way `module_ref` does, built from a model→file map collected while the
+sources are already in hand (`find_model_definition` stays for its single-model
+callers). The repair is `Debugger.run(missing_fields=...)`, and it **rewrites**
+rather than appends — a field belongs inside an existing class, so there is
+nothing to append to the end of the file, and `accept_generated_fix` applies
+again because its `too_large` rule is no obstacle to adding one line.
+
+### `sql_schema` — which had never run during a build, and could not have worked if it had
+
+Two defects, one on top of the other.
+
+**It was never wired into the pipeline.** It existed only in
+`tools/verify_corpus.py`, over projects that had already shipped. The one check
+that can see a query and a schema disagree had never run during a build.
+
+**And it was inert.** `_CREATE_TABLE` ended in `\)\s*;` — it required a
+semicolon after the closing bracket. A statement passed to
+`cursor.execute("CREATE TABLE ...")` has none and needs none, so `parse_schema`
+returned `{}`, and with no schema **not one column was ever checked**. It
+reported nothing rather than reporting that it could not run. Replaced with a
+bracket-matching scan, which also handles `price DECIMAL(10, 2)` — the case the
+semicolon was there for. Four corpus projects went `not_applicable -> verified`
+the moment it could read their DDL: they had never been checked at all.
+
+**Then the new report.** A queried table that no `CREATE TABLE` creates. The
+module's standing rule is to stay silent on this, because "the schema may live
+in a migration or an ORM" — right in general, and wrong in the checkable case
+where the project creates its *other* tables inline three lines up. Guarded on
+both sides: an ORM marker or a `migrations/` directory anywhere in the project
+silences it, and so does a project that creates no tables at all.
+
+### The falsification, which is the part that matters
+
+Across all 48 corpus projects, **7 changes and no false positives**:
+
+| change | projects | what it means |
+|---|---|---|
+| `not_applicable -> verified` | 4 | the inert parser fixed; these had never been checked |
+| `not_applicable -> failed` | 1 | `c2d4a4d4`, with both missing tables named — the true positive |
+| a check going quiet on a broken build | **0** | |
+| a check newly firing on a working build | **0** | |
+
+### Measured on the build, not asserted
+
+Driving the real debugger at a clone of `c2d4a4d4`, three probe runs at ~4,200
+tokens each:
+
+| | before | after |
+|---|---|---|
+| endpoints responding | 13/22 | **20/22** |
+| `schema_attr` | failed | **verified** |
+| `sql_schema` | failed | **verified** |
+
+Two findings came out of the probe that no amount of reading would have given:
+
+1. **The first version half-worked.** It created the tables and the endpoints
+   traded `no such table` for **`no such column: movement_type`** — the repair
+   had invented a plausible schema. `MissingTable` now carries the columns the
+   queries actually read, so the finding describes the table the code expects.
+2. **The field repair was flaky** — with the prose finding alone it returned a
+   file that did not declare the field about half the time. The post-check
+   caught it every time and restored the original, which is the correct outcome
+   and a wasted call. The prompt now leads with `- add \`price\` to class
+   \`ProductCreate\`` and the reasoning follows. Three runs, three landings.
+
+The remaining 2 of 22 are ordinary code bugs with clean tracebacks — a NOT NULL
+insert and a `sqlite3.Connection` passed as a query parameter — which is the
+channel that already existed, and the real pipeline re-smokes and gets another
+pass at them where the probe does not.
+
+### What is still not proven
+
+**A row.** Everything above is a clone plus 48 static projects. A clone cannot
+exercise generation, the tester, or the second remediation pass, and the fast
+model was at ~47,000 when this was written against a ~114K row. `test_phase23.py`
+is **899/899**.
+
+---
+
 ## 0.-9 The eleventh session (2026-09-02) — row 3 ran, and the finding that named its own repair was advisory text
 
 Row 3 (`d1b98d57`) reached **`done_with_context`** in 997s for **117,191
