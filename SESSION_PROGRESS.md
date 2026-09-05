@@ -1,37 +1,39 @@
 # Session Progress — start here
 
-**Last session: 2026-09-03 (Phase 23 — the eleventh session).** `test_phase23.py`
-is **899/899**, up from 854. Row 3 ran **three times**. All three instances of
-one systemic defect were closed and each held on the next run — and each row then
-failed on something new. The phase does not close.
+**Last session: 2026-09-05 (Phase 23 — the twelfth session).** `test_phase23.py`
+is **943/943**, up from 899. The fourth instance of the misaimed-repair pattern
+is closed and **proven live**: `dead_events` reads `verified` on the row that
+followed it. The row still failed. The phase does not close.
 
-> ## ▶ Next session: one static fix, then one row
+> ## ▶ Next session: the symptom, not the next cause
 >
-> **Quota first.** At 07:00 on 2026-09-03 the fast model was at **3,445** and
-> heavy at **45,091**; a row costs ~114K and the fast floor is 90,000. That is
-> roughly a **10-hour** wait. `run_live_matrix.py --dry-run` is the authority.
+> **Quota.** After row 4 on 2026-09-05: heavy **130,782** left, fast **150,902**,
+> against a ~123K row and a 90,000 fast floor. **A row is affordable now** — this
+> is the first session in several to hand over a spendable budget. Confirm with
+> `run_live_matrix.py --dry-run`, which is the authority, and remember the ledger
+> under-reports by ~51K.
 >
-> **1. Fix the defect the third row died on (no quota, static, ~1 hour).**
-> The generator wrote:
+> **1. Write the route-presence check (no quota, static, ~1 hour).**
+> A `web_api` build that declares **no route handler anywhere** serves nothing.
+> Zero `@router.get/post/...` decorators outside tests, and no `add_api_route`
+> call, means `unusable` — statically, with no execution. Fully specified in
+> `PHASE23_HANDOFF.md` §0.-12, including the guards and the batched-append repair
+> shape it needs.
 >
-> ```python
-> app = FastAPI(lifespan=lifespan)
+> **Why this one and not another cause-specific check.** Two consecutive rows
+> shipped **zero routes for two entirely different reasons**, and the check
+> written from the first (`dead_events`) correctly stayed silent on the second.
+> The symptom has recurred where no cause has. This check catches both.
 >
-> @app.on_event("startup")
-> def include_routers():
->     app.include_router(product.router)
-> ```
+> **2. Fix `feature_coverage`'s verdict (no quota).** It reported
+> `verified, 6/6, "0 route(s)"` on a `web_api` build serving nothing — the **same
+> false green it gave row 3**, and the first defect in this phase to recur. A
+> verdict of `verified` against 0 routes is indefensible whatever the noise level
+> of its findings. §0.-1 routed its *findings* to manual; this is its *verdict*.
 >
-> **Starlette ignores `on_event` when a `lifespan` is supplied**, so no route is
-> ever registered and the app serves nothing — `unusable`. It is statically
-> detectable with certainty: a FastAPI app constructed with `lifespan=` that also
-> declares `@app.on_event(...)` is always wrong. Give it a `repair_target` on the
-> file that builds the app, exactly as `module_ref`, `schema_attr` and
-> `sql_schema` now do — this is the **fourth** instance of that same pattern.
-> Falsify it against the corpus first (`tools/verify_corpus.py`), which is how
-> the last two were kept honest.
->
-> **2. Then one row**, and grade it with `tools/assert_row.py <build_id> row.log`.
+> **3. Then one row**, graded with
+> `tools/assert_row.py <build_id> <log>` — note the build id is the **full UUID**,
+> not the 8-char prefix the log prints.
 >
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
@@ -40,16 +42,53 @@ failed on something new. The phase does not close.
 > venv/Scripts/python.exe run_live_matrix.py --rows 3
 > ```
 >
-> **The build log works now** (`fe7465d`). For four sessions alembic's
-> `fileConfig()` had been replacing the root log handlers during the startup
-> migration, so the platform silenced itself before building anything. This row
-> is the first chance to measure `grep -c "does not parse"` and §4.41's
-> `RATIO_LOG` — both still unmeasured.
->
-> Full detail: `PHASE23_HANDOFF.md` §0.-11 (this row and the log fix), §0.-10
-> (schema_attr and sql_schema), §0.-9 (module_ref, and the first live proof).
+> Full detail: `PHASE23_HANDOFF.md` §0.-14 (this row and what it showed),
+> §0.-13 (the `dead_events` check and the two guards that were not predicted),
+> §0.-12 (the next check, specified).
 
-## §0.-4 The three rows, and what each one proved
+## §0.-4b The four rows, and the thing that changed at row 4
+
+| run | architecture | outcome | why |
+|---|---|---|---|
+| `d1b98d57` | single router, raw sqlite3 | `done_with_context`, 1/22 endpoints | `routes.py` called 23 functions `services.py` did not define |
+| `c2d4a4d4` | multi-file, raw sqlite3 | `done_with_context`, 13/22 | a model field never declared; 2 tables never created |
+| `e3894a9e` | SQLAlchemy, `routers/` package | **`unusable`**, 0 routes | routers registered in an `on_event` that a `lifespan` disables |
+| `9733027d` | SQLAlchemy, single `routes.py` | **`unusable`**, 0 routes | six routers declared and wired, **zero route handlers anywhere** |
+
+**Every fix still holds.** `module_ref`, `schema_attr` and `dead_events` all read
+`verified` on row 4; `sql_schema` correctly `not_applicable`. No closed defect
+has ever come back.
+
+**But the SYMPTOM recurred, and that is new.** Rows 3 and 4 both shipped an
+application with zero routes, from causes with nothing in common. Until row 4
+the honest headline was "no defect has recurred, so the repairs are generalising";
+that is now only true of *causes*. The repairs generalise and the checks do not,
+because each check was written from the one row that produced it.
+
+**`feature_coverage` recurred too, and it is a check, not a build.** It read
+`verified, 6/6, "0 route(s)"` on both rows — printing its own disproof beside its
+verdict. It is the one component that has now vouched for two builds that serve
+nothing.
+
+**The finding existed and nothing could act on it — for the fourth session
+running.** On row 4 the BackendDeveloper diagnosed the empty router exactly
+("this file creates an APIRouter but defines no route handlers") and its repair
+was thrown away by `accept_generated_fix` as *"an oversized rewrite"*. An empty
+router gaining ~22 handlers can only grow, and the guard forbids growth. That
+guard has now blocked a *correct* repair three times (§0.-12).
+
+**The build log works and is measured.** 75KB+ of full agent trace, against the
+1,567-byte stubs of four sessions. `grep -c "does not parse"` is **0**;
+§4.41's `RATIO_LOG` has **1** near-miss, and it is a test file — weak evidence
+that the 0.6 shrink threshold is not what is costing repairs. The growth rule is.
+
+## §0.-4 The three rows, and what each one proved  *(superseded by §0.-4b)*
+
+> **Superseded 2026-09-05 by §0.-4b, and kept.** Its closing claim — *"no
+> defect has recurred"* — was true of the three rows it describes and is no
+> longer true of four: row 4 repeated row 3's **symptom** from an unrelated
+> cause, and `feature_coverage` repeated its false green outright. How that
+> conclusion looked right on three rows is the useful part, so it stands.
 
 | run | architecture | outcome | why |
 |---|---|---|---|

@@ -1,5 +1,12 @@
 # Phase 23 Handoff
 
+*Updated 2026-09-05 at the end of the TWELFTH session: the fourth instance of
+the misaimed-repair pattern is closed and proven live — `dead_events` reads
+`verified` on the row that followed it. The row still failed: zero routes for a
+second consecutive run, from a cause `dead_events` cannot see. The symptom has
+now recurred where no cause has, and so has `feature_coverage`'s false green.
+Earlier notes follow.*
+
 *Updated 2026-09-02 at the end of the ELEVENTH session: row 3 ran again, failed
 again, and the cause was again a repair the pipeline could not aim. It is fixed
 and the fix is measured — 1/22 endpoints responding became 16/22 on the build
@@ -25,6 +32,311 @@ current state. This file is the per-defect detail behind it, and
 
 Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
+
+---
+
+## 0.-14 The fourth defect closed, the fourth row run — and the symptom outlived the cause
+
+*Twelfth session, 2026-09-05. One static fix shipped and proven live; one row
+run and failed. `dead_events` is `verified` on the row. The row is `unusable`
+anyway, with **zero routes for the second consecutive run and a completely
+different cause**, which is the finding that should shape the next session.*
+
+### The row
+
+`9733027d`, `unusable`, 988.6s, **123,430 tokens** (prompt 94,064 / completion
+29,366). Scores: debug 9/9, review 6.2, test 9/12.
+
+| check | result |
+|---|---|
+| `runtime_smoke` | **failed** — "the app at backend/main.py boots and declares 0 routes" |
+| `dead_events` | **verified** — 1 app built with a lifespan, 16 files. *New this session; first live run.* |
+| `module_ref` | verified — 16 modules checked |
+| `schema_attr` | verified — 14 models checked |
+| `sql_schema` | `not_applicable` — correct, SQLAlchemy |
+| `feature_coverage` | **verified, 6/6** — against `0 route(s)` |
+| `generated_tests` | failed — 2 error, 21 failed, 8 passed (routed to manual) |
+
+`tools/assert_row.py`: 11 passed, 2 failed. Both failures are the same fact as
+row 3 — the terminal state, and "at least one check executed the artifact".
+
+### The defect: routers that exist, are wired, and have no handlers
+
+`backend/routes.py` shipped **23 lines**, and its own comment says what it is:
+
+```python
+# Define placeholder routers for each resource
+suppliers_router = APIRouter()
+products_router  = APIRouter()
+...
+router = APIRouter()
+router.include_router(suppliers_router, prefix="/suppliers", tags=["Suppliers"])
+...
+__all__ = ["router"]
+```
+
+`grep -rE "@(router|app)\.(get|post|put|patch|delete)"` over the whole project,
+excluding tests, returns **nothing**. Six routers defined, five wired into a
+parent, zero route handlers anywhere. The application imports cleanly, boots
+cleanly, and serves nothing.
+
+**The generator diagnosed it correctly and nothing could act on it.** The
+BackendDeveloper's own post-generation check said, in the log at 22:16:18:
+
+> *this file creates an APIRouter but defines no route handlers, so the
+> application exposes no endpoints at all. Define the actual
+> @router.get/post/put/delete handlers here.*
+
+It then attempted the repair, and `accept_generated_fix` **rejected it**:
+
+> *rejecting repair — appears to contain multiple files or an oversized rewrite*
+
+An empty router that must gain ~22 handlers can only grow, and the guard rejects
+growth beyond 1.6x or +1800 chars by design. This is the same wall §0.-9 hit with
+`module_ref` — which is precisely why definitions are **appended in batches**
+rather than rewritten. The finding was correct, was raised by the right agent at
+the right moment, and the one channel that could have acted on it was closed.
+
+### The pattern the two rows actually show
+
+This is the fourth session in a row to end with "the finding existed and nothing
+could act on it", and the fifth instance overall. But the sharper lesson is a
+different one:
+
+| run | cause of 0 routes | would `dead_events` catch it? |
+|---|---|---|
+| `e3894a9e` | routers registered in an `on_event` a lifespan disables | **yes** |
+| `9733027d` | routers declared and wired with no handlers at all | **no** |
+
+**The symptom recurred; the cause did not.** `dead_events` is a cause-specific
+check, written from one row, and it correctly stayed silent on a build with the
+identical failure. The check that would have caught **both** is the symptom-level
+one nobody has written: *a `web_api` build must declare at least one route.*
+
+That check is trivially decidable, needs no execution, and is the obvious next
+item. It is specified in §0.-12 below and **deliberately not shipped**, for the
+reason §0.-10 gives: the remaining quota does not cover a row to prove it, and
+this file's standing rule is not to ship a repair channel that no row has
+exercised.
+
+### `feature_coverage` is the first defect to RECUR
+
+It reported **`verified, 6/6, "0 route(s)"`** on a `web_api` build that serves
+nothing — the same false green it gave `e3894a9e`. Its detail string even prints
+the disproof next to the verdict.
+
+The current headline in `SESSION_PROGRESS.md` — *"no defect has recurred, so the
+repairs are generalising"* — is **no longer true**, and this is the exception.
+It is also the worst kind to leave standing: a check actively vouching for a
+build that serves nothing. §0.-1 routed it to manual rather than tightening it,
+on the evidence that ~2/3 of its findings are false. That decision was about its
+*findings*; this is about its *verdict*, and a verdict of `verified` on 0 routes
+is indefensible regardless of how noisy its findings are.
+
+### The build log worked, and two metrics are measured for the first time
+
+`fe7465d` holds. The log ran to 75KB+ with the full agent trace, against the
+1,567-byte stubs of the previous four sessions. Both long-unmeasured numbers now
+have values:
+
+| metric | value |
+|---|---|
+| phantom-defect count, `grep -c "does not parse"` | **0** |
+| §4.41 `RATIO_LOG` near-miss lines | **1** — a test file rejected at ratio 0.50 |
+
+The single near-miss is a *test* file, not application code, which is weak
+evidence that the 0.6 threshold is not the thing costing repairs. The rejection
+that mattered on this row was the `too_large` growth rule, not the shrink ratio.
+
+### An unrelated defect the log exposed: a 400 rotates every key
+
+Four `HTTP 400`s, on four *different* keys, all on `routes.py` repairs.
+`llm_client.py:1879` handles 429 and 401/403 explicitly and lets everything else
+fall through to `continue`, which rotates to the next key. A 400 is a *request*
+problem: rotating keys retries the same malformed request against all eight in
+turn, and the response body carrying the reason is discarded — only httpx's
+generic string is logged, so the reason is currently unknowable.
+
+Cheap to fix, and it spends real quota the ledger never records, which compounds
+the known ~51K under-report.
+
+---
+
+## 0.-13 The fourth instance itself: a startup handler the framework never calls
+
+`tools/dead_event_check.py`. Statically certain, zero tokens, and it reports the
+defect that made row 3's third run `unusable` while four checks stood verified
+on it.
+
+### The rule, and why it is safe to act on
+
+A FastAPI app built with `lifespan=` that also declares `@app.on_event(...)` is
+always wrong: the two are alternative spellings of the same hook, not layers of
+it, and the supplied lifespan wins. The handler never runs.
+
+This was **measured against the pinned versions rather than argued from the
+docs** (fastapi 0.136.1 / starlette 1.6.0), because the whole check rests on it:
+
+| source | `/ping` | `app.routes` after startup |
+|---|---|---|
+| `FastAPI(lifespan=ls)` + `on_event("startup")` registering the route | **404** | empty |
+| `FastAPI(lifespan=None)` + the same handler | **200** | the route is there |
+
+The second row is why `lifespan=None` is a guard and not a defect — the
+framework only swaps the event handlers out when the argument is truthy, so the
+literal `None` is the documented way to say "no lifespan". A check that fired on
+it would have failed working builds.
+
+### What it gives up to be certain
+
+Precision over recall, the same stance as the other static checks. It stays
+silent unless the module imports fastapi, and unless the app name is bound
+**exactly once** in the module — a name bound twice may be the app at one line
+and something else at the next, and the decorator's target cannot then be
+proved. A `lifespan` variable that happens to hold `None` reads as live; that is
+the recall given up to keep the false-positive rate at zero.
+
+### The falsification
+
+46 corpus projects, through `tools/verify_corpus.py`:
+
+| result | projects | what it means |
+|---|---|---|
+| `not_applicable` | 34 | no FastAPI app with a lifespan |
+| `verified` | 11 | a lifespan app whose handlers are correctly placed |
+| `failed` | 1 | `e3894a9e` — the build this was written for |
+| a check newly firing on a working build | **0** | |
+| an existing check changing status anywhere | **0** | |
+
+The 11 `verified` are the number that matters: eleven builds that construct a
+lifespan app, every one of them left alone.
+
+### Two guards that were not predicted, and were found by driving the repair
+
+The channel was written the way the other three were — publish `repair_targets`,
+add a `Debugger.run(dead_events=...)` channel, rewrite the file. Then the real
+repair was driven at a clone of `e3894a9e` with a stubbed reply, which cost
+nothing and is what §0.-10 means by "measured on the build, not asserted". Two
+defects came out of it, and **the first would have made the whole channel
+inert**:
+
+| trial | before | after |
+|---|---|---|
+| the correct fix — body moved into the lifespan | **rejected**: "it removes top-level `include_routers`" | applied, check `verified` |
+| the handler deleted, routes lost | applied — reported a repair | **refused**, original restored, still `failed` |
+| the `lifespan=` argument deleted instead | applied — check went `not_applicable` | **refused**, original restored |
+
+1. **The correct fix necessarily deletes a top-level name.** Removing the
+   now-empty handler *is* the repair, and `accept_generated_fix`'s rule 3
+   refuses to remove any top-level name. Every correct rewrite was rejected.
+   `allow_removed` now excuses the handlers named in the findings and nothing
+   else — a per-call allowance of named symbols, so a reply that deletes the
+   handler *and* something else is still refused. Without this the channel would
+   have been inert in exactly the way `sql_schema`'s trailing `;` was: present,
+   wired in, and incapable of ever doing anything.
+
+2. **There are two ways to silence this check without fixing anything.**
+   Deleting the handler is the obvious one, and the wiring count catches it.
+   The other is deleting the `lifespan=` argument: `on_event` then works again
+   and the check *correctly* reports `not_applicable` — while whatever the
+   lifespan was doing sits in a function nothing calls. On the clone that left
+   an app which registered its routes and never created its tables, and the
+   repair called it a success. The lifespan count is now asserted too.
+
+Both are the same lesson the corpus keeps teaching: the cheapest way to make a
+finding go away is to delete the evidence, and a repair that is not verified
+against the *defect* rather than the *finding* will take it.
+
+### Wired everywhere, and asserted to be
+
+`sql_schema` existed for months without ever running during a build. Every seam
+is now pinned by a test rather than trusted: the pipeline's check list, the
+repair-target capture, the debugger channel, the post-repair re-check, the
+per-build clearing of stale targets, `verify_corpus`, and `assert_row`.
+`assert_row` also re-runs it against the shipped tree rather than trusting the
+record — row 3's third run is the reason that distinction exists.
+
+`test_phase23.py`: **943/943**, up from 899.
+`tools/verify_repairs.py`: unchanged against its baseline — 1 harmed file, the
+known-open `ai_pdf_reader/backend/search.py`.
+
+---
+
+## 0.-12 The next check, specified — a web_api that declares no route
+
+Written up rather than shipped, because the quota left after row 4 does not
+cover a row to prove it and §0.-10's rule is not to ship a repair channel no row
+has exercised. Everything needed to build it in an hour is here.
+
+### The rule
+
+A project whose shape is `web_api` and which declares **no route handler
+anywhere** serves nothing. Statically certain, no execution, no tokens:
+
+* count `@<name>.get/post/put/patch/delete/head/options` decorators, plus
+  `add_api_route(...)` and `add_route(...)` calls, over every non-test module;
+* if the count is 0 and the project builds a FastAPI app, the build is
+  `unusable` — mark it fatal, exactly as `dead_events` does for a dead handler
+  that wires routes.
+
+### Why it is worth more than the check it generalises
+
+It catches both of the last two rows, and it does not care why:
+
+| run | cause | `dead_events` | this |
+|---|---|---|---|
+| `e3894a9e` | routers in an `on_event` a lifespan disables | caught | caught |
+| `9733027d` | routers declared and wired with no handlers | missed | caught |
+
+`dead_events` is a cause-specific check written from one row. This is the
+symptom, and the symptom is what has now recurred twice.
+
+### The guards it needs
+
+Same stance as the other static checks — precision over recall:
+
+* **only when the shape is `web_api`.** A library or CLI that imports fastapi
+  for something else must not be judged by this.
+* **routes registered through a variable or a loop.** A project doing
+  `for path, fn in TABLE: app.add_api_route(path, fn)` declares routes this
+  cannot count. Counting `add_api_route` as a call site rather than resolving
+  its arguments handles the common form; anything more dynamic must be skipped,
+  not guessed at.
+* **test modules never count** toward the total, and never make it fire.
+* a module that does not parse is skipped — something else reports that.
+
+### The repair is the hard half, and must not be a whole-file rewrite
+
+This is where the row's evidence matters most. The BackendDeveloper already
+found this defect on `9733027d` and its repair was rejected as *"an oversized
+rewrite"*: an empty router gaining ~22 handlers can only grow, and
+`accept_generated_fix` rejects growth beyond 1.6x or +1800 chars.
+
+So the repair has to be shaped like `_repair_missing_definitions`, not like
+`_repair_missing_fields`:
+
+* **append in batches**, a few handlers at a time, because a whole-file rewrite
+  fits neither Groq's 8,000-token minute nor the growth guard;
+* the batch prompt must carry the **schemas and the model fields**, since a
+  handler that does not match its Pydantic model is the `d1b98d57` failure over
+  again — the name existing is not the call working (§0.-2);
+* **land-check by re-counting the decorators**, never by "the file changed".
+
+### The guard question this raises, which is now the third instance
+
+`accept_generated_fix` has blocked a *correct* repair twice in one session:
+
+1. `dead_events` — the correct fix deletes the now-empty handler, and rule 3
+   forbids removing any top-level name. Fixed with `allow_removed`.
+2. this defect — the correct fix multiplies the file's size, and the `too_large`
+   rule forbids that.
+
+and it shaped a third, `module_ref`, into batched appends for the same reason.
+The guard's blanket rules are right for the *average* repair and wrong for every
+repair whose whole job is a shape the guard treats as damage. Three instances is
+enough to stop adding exceptions one at a time: the next session should consider
+giving each repair channel an explicit contract — what it may add, what it may
+remove — rather than a global rule plus a growing list of escapes.
 
 ---
 
