@@ -59,6 +59,9 @@ check("module_ref is verified, not failed",
 check("schema_attr reports nothing and is not not_applicable",
       by.get("schema_attr", {}).get("status") == "verified",
       str(by.get("schema_attr", {}).get("status")))
+check("dead_events is verified or not_applicable, never failed",
+      by.get("dead_events", {}).get("status") in ("verified", "not_applicable"),
+      str(by.get("dead_events", {}).get("status")))
 ran = [o for o in outcomes if o["status"] == "verified"
        and o["check"] in ("runtime_smoke", "cli_smoke", "package_smoke", "static_smoke")]
 check("at least one check EXECUTED the artifact", bool(ran), str([o["check"] for o in ran]))
@@ -105,6 +108,16 @@ check("module_ref re-run on disk agrees with the record",
       (live.status.value if hasattr(live.status, "value") else str(live.status)).lower().endswith(
           "verified" if by.get("module_ref", {}).get("status") == "verified" else "failed"),
       f"{live.status} with {len(live.findings)} finding(s)")
+
+# dead_events on disk. Row 3's third run shipped an app that served nothing with
+# four checks verified on it, so "the record says verified" is exactly the claim
+# that needs re-checking against the artifact.
+from tools.dead_event_check import check_dead_events
+ev = check_dead_events(root)
+check("no startup handler on disk is disabled by a supplied lifespan",
+      not ev.findings, f"{ev.status} with {len(ev.findings)} finding(s)")
+for f in ev.findings[:3]:
+    print(f"        - {str(f)[:150]}")
 
 # ── the log, which is readable now ───────────────────────────────────────────
 print("\n=== the build log ===")

@@ -404,6 +404,45 @@ def _missing_tables(findings) -> list:
     return out
 
 
+#: `DeadEvent.__str__` from `tools/dead_event_check.py`, pinned by
+#: `test_phase23.py` against the real dataclass.
+_DEAD_EVENT_RE = re.compile(
+    r"^`(?P<app>\w+)\.on_event\(\"(?P<event>\w+)\"\)` at line \d+ is dead "
+    r"code:.*?— `(?P<handler>\w+)` never runs")
+
+
+def _dead_event_handlers(findings) -> list:
+    """`[(app, event, handler), ...]` a batch of `dead_events` findings names."""
+    out: list = []
+    for finding in findings or ():
+        m = _DEAD_EVENT_RE.match(str(finding).strip())
+        if m:
+            triple = (m.group("app"), m.group("event"), m.group("handler"))
+            if triple not in out:
+                out.append(triple)
+    return out
+
+
+#: The calls that put routes on an app. Counted before and after an event repair
+#: so a rewrite cannot make the finding go away by deleting the wiring it was
+#: complaining about — see `_repair_dead_events`.
+_WIRING_CALLS = ("include_router", "add_api_route", "mount")
+
+
+def _wiring_calls(source: str) -> int:
+    """How many route-wiring calls this source makes. -1 when it will not parse."""
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return -1
+    return sum(
+        1 for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _WIRING_CALLS
+    )
+
+
 def _declares_field(source: str, model: str, attr: str) -> bool:
     """Does `model` declare `attr` as a class-level name in this source?"""
     try:
@@ -605,6 +644,7 @@ class Debugger(BaseAgent):
         missing_definitions: dict | None = None,
         missing_fields: dict | None = None,
         missing_tables: dict | None = None,
+        dead_events: dict | None = None,
     ) -> list[FileDebugResult]:
         """
         `runtime_errors` maps a file to a failure the *running* app produced —
@@ -627,11 +667,20 @@ class Debugger(BaseAgent):
         defect: nothing is wrong *in* this file, it is incomplete. Row 3 on
         2026-09-02 shipped `services.py` defining 3 of the 23 functions its
         routes call, and both repair passes rewrote the routes.
+
+        `dead_events` maps a file to `@app.on_event(...)` handlers the app's own
+        `lifespan=` argument makes unreachable (`dead_events`' findings). It is
+        the same shape of gap once more, and the most invisible of the four: such
+        a file imports cleanly, runs cleanly, passes every static check, and the
+        application it builds still serves nothing. Row 3's third run on
+        2026-09-03 shipped `unusable` with four checks verified and
+        `feature_coverage` reporting 6/6 against zero live routes.
         """
         runtime_errors = runtime_errors or {}
         missing_definitions = missing_definitions or {}
         missing_fields = missing_fields or {}
         missing_tables = missing_tables or {}
+        dead_events = dead_events or {}
         py_files = [
             f for f in file_paths
             if f.endswith(".py")
@@ -672,6 +721,7 @@ class Debugger(BaseAgent):
                 missing_defs=missing_definitions.get(fp, ()),
                 missing_flds=missing_fields.get(fp, ()),
                 missing_tbls=missing_tables.get(fp, ()),
+                dead_evts=dead_events.get(fp, ()),
             )
             results[fp] = r
             logger.info(str(r))
@@ -1735,7 +1785,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
     def _debug_file(self, file_path: str, runtime_error: str = "",
                     missing_defs: tuple = (),
                     missing_flds: tuple = (),
-                    missing_tbls: tuple = ()) -> FileDebugResult:
+                    missing_tbls: tuple = (),
+                    dead_evts: tuple = ()) -> FileDebugResult:
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
@@ -1757,6 +1808,10 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             _try_definition_repair()
             _try_field_repair()
             _try_table_repair()
+            # Last, and deliberately so: this one rewrites the file that BUILDS
+            # the app, and it must act on whatever the earlier repairs left
+            # behind rather than being overwritten by them.
+            _try_dead_event_repair()
 
         def _try_definition_repair() -> None:
             nonlocal definition_repair_tried
@@ -1779,10 +1834,18 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 self._repair_missing_tables(
                     file_path, list(missing_tbls), result)
 
+        def _try_dead_event_repair() -> None:
+            nonlocal dead_event_repair_tried
+            if dead_evts and not dead_event_repair_tried:
+                dead_event_repair_tried = True
+                self._repair_dead_events(
+                    file_path, list(dead_evts), result)
+
         runtime_repair_tried = False
         definition_repair_tried = False
         field_repair_tried = False
         table_repair_tried = False
+        dead_event_repair_tried = False
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             result.attempts = attempt
@@ -1936,20 +1999,26 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
     ) -> set[str]:
         return _rg_symbols_by_regex(source, defined_only=defined_only)
 
-    def _accept_generated_fix(self, file_path: str, fixed: str) -> bool:
+    def _accept_generated_fix(self, file_path: str, fixed: str,
+                              allow_removed: set | None = None) -> bool:
         """
         Reject LLM "fixes" that damage the file instead of repairing it.
 
         The rules are in tools/repair_guard.accept_generated_fix; this resolves
         the OUTPUT_DIR-relative path the rest of the debugger speaks in and logs
         the refusal.
+
+        `allow_removed` is passed through for the one repair whose job is to
+        delete a top-level name — see `_repair_dead_events`. Every caller that
+        omits it keeps the unconditional rule.
         """
         try:
             current = read_file(file_path)
         except Exception:
             current = ""
 
-        ok, reason = accept_generated_fix(current, fixed)
+        ok, reason = accept_generated_fix(current, fixed,
+                                          allow_removed=allow_removed)
         if not ok:
             logger.warning(f"  Rejecting LLM fix for {file_path}: {reason}.")
         return ok
@@ -2235,6 +2304,164 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         logger.info(
             f"  ✅ [{file_path}] Schema repair applied: {len(landed)}/{len(wanted)}")
         return True
+
+    def _repair_dead_events(
+        self, file_path: str, findings: list, result: FileDebugResult
+    ) -> bool:
+        """
+        Move an `@app.on_event(...)` body somewhere the framework will run it.
+
+        Rewrites, like the field and schema repairs: the code has to move INTO
+        the lifespan function, and there is nothing to append.
+
+        The landing check is stricter here than anywhere else, because the
+        cheapest way to make this finding go away is to delete the handler — and
+        that leaves the routes exactly as unregistered as they were while
+        reporting a repair. So two things are asserted, not one: the dead handler
+        is gone AND the file still makes at least as many `include_router` /
+        `add_api_route` / `mount` calls as it did before. A rewrite that silences
+        the check by deleting the wiring is restored, the same way a field repair
+        that declared no field is.
+        """
+        wanted = _dead_event_handlers(findings)
+        if not wanted:
+            return False
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for event repair: {e}")
+            return False
+
+        before = _wiring_calls(original)
+        try:
+            from tools.dead_event_check import count_lifespan_apps
+            lifespans_before = count_lifespan_apps(original)
+        except Exception:
+            lifespans_before = -1
+        logger.info(
+            f"  🪦 [{file_path}] Rehoming {len(wanted)} unreachable handler(s) "
+            f"({before} route-wiring call(s) to preserve)"
+        )
+        fixed = self._generate_dead_events_fix(file_path, original, findings)
+        # The handlers named in the findings are the ONLY names this repair may
+        # delete — deleting them is what it is for. Everything else in the file
+        # is still guarded, so a reply that takes the routes with it is refused.
+        if not fixed or not self._accept_generated_fix(
+                file_path, fixed, allow_removed={h for _, _, h in wanted}):
+            logger.warning(f"  ⚠️  [{file_path}] Event repair rejected or empty")
+            return False
+
+        create_file(file_path, fixed)
+        self._preflight_fix(file_path)
+        self._inject_syspath(file_path)
+
+        verify = run_python(file_path)
+        if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+            logger.warning(
+                f"  ↩️  [{file_path}] Event repair broke the import check — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+
+        current = read_file(file_path)
+        try:
+            from tools.dead_event_check import has_dead_events
+            still_dead = has_dead_events(current)
+        except Exception:
+            still_dead = True
+        if still_dead:
+            logger.warning(
+                f"  ↩️  [{file_path}] Event repair left the handler unreachable — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+
+        # The second way to silence this check without fixing anything: delete
+        # the `lifespan=` argument instead of the handler. `on_event` then works
+        # again and the check goes `not_applicable` — but whatever the lifespan
+        # was doing now sits in a function nothing calls, so the app registers
+        # its routes and never creates its tables.
+        try:
+            from tools.dead_event_check import count_lifespan_apps
+            lifespans_after = count_lifespan_apps(current)
+        except Exception:
+            lifespans_after = lifespans_before
+        if lifespans_before > 0 and lifespans_after < lifespans_before:
+            logger.warning(
+                f"  ↩️  [{file_path}] Event repair removed the lifespan "
+                f"({lifespans_before} -> {lifespans_after}) instead of moving "
+                f"the handler — restoring the original")
+            create_file(file_path, original)
+            return False
+
+        after = _wiring_calls(current)
+        if after < before:
+            # The finding is gone because the code is gone. That is the defect
+            # with its evidence removed, which is worse than the defect.
+            logger.warning(
+                f"  ↩️  [{file_path}] Event repair dropped route wiring "
+                f"({before} -> {after}) — restoring the original")
+            create_file(file_path, original)
+            return False
+
+        result.fixes_applied.append(
+            f"Rehomed {len(wanted)} unreachable startup handler(s) in {file_path}")
+        logger.info(
+            f"  ✅ [{file_path}] Event repair applied: {len(wanted)} handler(s), "
+            f"{after} wiring call(s) intact")
+        return True
+
+    def _generate_dead_events_fix(
+        self, file_path: str, current_code: str, findings: list
+    ) -> str | None:
+        """
+        The prompt for a file whose startup handler the framework never calls.
+
+        It has to say plainly what the model will otherwise do, which is delete
+        the handler: the finding reads "this code never runs", and removing code
+        that never runs is a defensible edit in isolation and catastrophic here,
+        because the code that never runs is what registers the routes.
+        """
+        wanted = "\n".join(f"- {f}" for f in findings)
+        names = ", ".join(f"`{h}`" for _, _, h in _dead_event_handlers(findings))
+        prompt = f"""This file builds a FastAPI application with a `lifespan=` argument
+AND registers `@app.on_event(...)` handlers. When a lifespan is supplied the
+framework IGNORES every `on_event` handler, so the code in {names} never runs.
+The application starts cleanly and serves nothing.
+
+FILE: {file_path}
+CURRENT CODE:
+{current_code}
+
+EXACTLY WHAT TO DO:
+- Move the BODY of each `on_event("startup")` handler into the lifespan
+  function, BEFORE the `yield`, keeping the statements in their existing order
+  and after whatever the lifespan already does.
+- Move the BODY of each `on_event("shutdown")` handler into the lifespan
+  function AFTER the `yield`.
+- Delete the now-empty handler function and its `@app.on_event(...)` decorator.
+
+WHY, IN FULL:
+{wanted}
+
+RULES:
+- Router registration is the whole point. Every `include_router`,
+  `add_api_route` and `mount` call in this file must still be there when you are
+  done, against the same app object, with the same arguments.
+- Do NOT solve this by deleting the handler and its body. The body is what
+  registers the application's routes; deleting it makes the check pass and the
+  application still serve nothing.
+- Do NOT solve this by removing the `lifespan=` argument. Whatever the lifespan
+  does — creating tables, opening a pool — is needed too.
+- Router registration belongs at module level if it can go there. Moving it into
+  the lifespan is correct and always works; module level is better when the
+  imports allow it.
+- Change nothing else. Keep every import, every route and every middleware call
+  this file already has.
+
+Return ONLY the complete fixed Python code for this file."""
+        logger.info(f"  🧠 LLM rehoming startup handlers: {file_path}")
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
 
     def _generate_missing_tables_fix(
         self, file_path: str, current_code: str, findings: list

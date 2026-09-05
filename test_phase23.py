@@ -1920,15 +1920,18 @@ check("the ceiling is llm_client's, and it is always known",
 # without the budget is the same bug again, so count the call sites.
 _dbg_src = Path("agents/debugger.py").read_text(encoding="utf-8")
 check("every rewrite call passes a sized budget",
-      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 6
+      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 7
       and "self.think(prompt, max_tokens=_rewrite_budget(self, block.source))" in _dbg_src
       and "self.think(prompt)\n" not in _dbg_src,
       f"whole-file={_dbg_src.count('_rewrite_budget(self, current_code)')} "
       f"block={_dbg_src.count('_rewrite_budget(self, block.source)')}")
 # The count above is brittle on purpose — it fails when a prompt is added — but
-# a count alone cannot say WHY, so assert the property too. Six whole-file
+# a count alone cannot say WHY, so assert the property too. Seven whole-file
 # rewrites: the import fix, the runtime fix, the targeted retry's fallback, the
-# missing-field fix and the missing-table fix. The definition repair is the one
+# missing-field fix, the missing-table fix and the dead-event fix. The one added
+# on 2026-09-05 moves a startup handler's body into the lifespan, which is a
+# whole-file edit for the same reason the field repair is — the code has to land
+# INSIDE an existing function. The definition repair is the one
 # deliberate exception: it APPENDS, so its budget is sized to the names it must
 # add rather than to the file it was handed, and sizing that one to the current
 # text would cap the reply at roughly what already exists.
@@ -7709,6 +7712,271 @@ check("...and a project that creates no tables at all reports nothing",
       _under60(_cps60, "app60none", []).missing == []
       and _under60(_css60, "app60none").status.name == "NOT_APPLICABLE",
       str(_under60(_css60, "app60none").status))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [61] A startup handler the framework never calls
+# ══════════════════════════════════════════════════════════════════════════════
+# Row 3's third run (`e3894a9e`, 2026-09-03) shipped `unusable` with four checks
+# verified on it. `main.py` built `FastAPI(lifespan=lifespan)` and registered
+# every router inside `@app.on_event("startup")`, which a supplied lifespan
+# disables — so the app booted clean, declared zero routes, and answered 404 to
+# every path it advertised. `feature_coverage` read `verified, 6/6, "5 route(s)"`
+# against it; `debug_score` 8/8; `review_score` 7.0. Only `runtime_smoke`, the
+# one check that EXECUTES the artifact, could say anything was wrong.
+#
+# This is the fourth instance of the §0.-9 pattern, and the only one whose
+# repair target is the file the finding is reported in — which is why it is the
+# clearest proof that publishing the target is what matters, not finding it.
+print("\n[61] a startup handler the supplied lifespan makes unreachable")
+
+from tools.dead_event_check import (               # noqa: E402
+    scan_source as _ss61, has_dead_events as _hde61,
+    check_dead_events as _cde61, DeadEvent as _DE61)
+
+_DEFECT61 = (
+    "from fastapi import FastAPI\n"
+    "from contextlib import asynccontextmanager\n"
+    "@asynccontextmanager\n"
+    "async def lifespan(app):\n"
+    "    yield\n"
+    "app = FastAPI(lifespan=lifespan)\n"
+    "@app.on_event(\"startup\")\n"
+    "def include_routers():\n"
+    "    app.include_router(product.router)\n"
+)
+
+check("the defect row 3 died on is reported",
+      len(_ss61(_DEFECT61)) == 1, str(_ss61(_DEFECT61)))
+check("...and it is known to be the fatal kind, because it wires routes",
+      _ss61(_DEFECT61)[0].registers_routes)
+check("...and the finding names the handler, not just the line",
+      _ss61(_DEFECT61)[0].handler == "include_routers")
+
+# ── The guards. Each one is a build that WORKS, and a check that fires on a
+# working build is worse than one that stays silent: it spends an LLM call
+# editing correct code and tells the user their build is broken.
+#
+# `lifespan=None` is the sharpest of them and the only one that had to be
+# measured rather than reasoned about — the framework only swaps the event
+# handlers out when the argument is truthy, so `FastAPI(lifespan=None)` with an
+# `on_event("startup")` serves its route 200, not 404.
+_LIFESPAN_NONE61 = _DEFECT61.replace("FastAPI(lifespan=lifespan)",
+                                     "FastAPI(lifespan=None)")
+check("`lifespan=None` is not a lifespan, and on_event still works — silent",
+      _ss61(_LIFESPAN_NONE61) == [], str(_ss61(_LIFESPAN_NONE61)))
+check("...and neither is no lifespan argument at all",
+      _ss61(_DEFECT61.replace("FastAPI(lifespan=lifespan)",
+                              "FastAPI(title=\"x\")")) == [])
+check("a lifespan with no on_event is the correct spelling — silent",
+      _ss61("from fastapi import FastAPI\n"
+            "app = FastAPI(lifespan=ls)\n"
+            "app.include_router(r)\n") == [])
+check("an app name bound twice is ambiguous, so nothing is asserted",
+      _ss61(_DEFECT61.replace("@app.on_event",
+                              "app = wrap(app)\n@app.on_event")) == [])
+check("a FastAPI that is not fastapi's is somebody else's object",
+      _ss61(_DEFECT61.replace("from fastapi import FastAPI",
+                              "from myframework import FastAPI")) == [])
+check("a file that does not parse is left to whatever reports that",
+      _ss61("def (((") == [])
+
+# The factory-function shape is not a guard but a case that must still fire:
+# the same defect, one indentation level in, and it is what an architect writes
+# when it has read anything about application factories.
+check("the same defect inside a create_app() factory is still reported",
+      len(_ss61("from fastapi import FastAPI\n"
+                "def create_app():\n"
+                "    app = FastAPI(lifespan=ls)\n"
+                "    @app.on_event(\"startup\")\n"
+                "    def go():\n"
+                "        app.include_router(r)\n"
+                "    return app\n")) == 1)
+
+# A shutdown handler is the same defect and NOT the fatal kind: nothing is
+# unregistered by it, the cleanup just never happens.
+_SHUTDOWN61 = (
+    "from fastapi import FastAPI\n"
+    "app = FastAPI(lifespan=ls)\n"
+    "@app.on_event(\"shutdown\")\n"
+    "async def bye():\n"
+    "    log.info(\"bye\")\n"
+)
+check("a dead shutdown handler is reported too",
+      len(_ss61(_SHUTDOWN61)) == 1)
+check("...but not as fatal, because it unregisters nothing",
+      not _ss61(_SHUTDOWN61)[0].registers_routes)
+
+# ── The outcome, and the repair target ───────────────────────────────────────
+_mk60("app61", {
+    "main.py": _DEFECT61,
+    "tests/test_main.py": "def test_x():\n    assert True\n",
+})
+_o61 = _under60(_cde61, "app61")
+_t61 = dict(_o61.evidence.get("repair_targets") or {})
+
+check("the build that serves nothing FAILS the check",
+      _o61.status.name == "FAILED", str(_o61.status))
+check("...and is marked fatal, because zero routes is `unusable`",
+      _o61.evidence.get("fatal") is True, str(_o61.evidence.get("fatal")))
+check("...and the repair is aimed at the file that BUILDS the app",
+      list(_t61) == ["app61/main.py"], str(list(_t61)))
+check("...and the target carries the finding, which says where the body goes",
+      bool(_t61) and "lifespan" in _t61["app61/main.py"][0], str(_t61))
+
+# The same project with the handler rehomed — this is what a repair must produce,
+# and the check must go quiet on it or the remediation loop never terminates.
+_mk60("app61fixed", {
+    "main.py": (
+        "from fastapi import FastAPI\n"
+        "from contextlib import asynccontextmanager\n"
+        "@asynccontextmanager\n"
+        "async def lifespan(app):\n"
+        "    app.include_router(product.router)\n"
+        "    yield\n"
+        "app = FastAPI(lifespan=lifespan)\n"
+    ),
+})
+check("the rehomed handler passes, so a repair can actually retire the issue",
+      _under60(_cde61, "app61fixed").status.name == "VERIFIED",
+      str(_under60(_cde61, "app61fixed").status))
+check("...and a project with no lifespan app at all is not_applicable",
+      _under60(_cde61, "app60none").status.name == "NOT_APPLICABLE",
+      str(_under60(_cde61, "app60none").status))
+
+# A dead handler in a test module is a broken test, not a broken build (§4.26),
+# so it is routed to manual testing and never given a repair target.
+_mk60("app61test", {
+    "svc.py": "def f():\n    return 1\n",
+    "tests/test_app.py": _DEFECT61,
+})
+_o61t = _under60(_cde61, "app61test")
+check("a dead handler in a test module gets no repair target",
+      dict(_o61t.evidence.get("repair_targets") or {}) == {},
+      str(_o61t.evidence.get("repair_targets")))
+check("...and is routed to manual testing instead",
+      len(_o61t.evidence.get("manual_findings") or []) == 1,
+      str(_o61t.evidence.get("manual_findings")))
+check("...and does not make the build unusable",
+      _o61t.evidence.get("fatal") is not True)
+
+# ── The finding is the channel, so its wording is load-bearing ───────────────
+# Pinned against the real dataclass: a reworded finding must fail HERE, loudly,
+# rather than parsing to nothing during a live build and silently skipping the
+# repair. That is exactly how `sql_schema` stayed inert for months.
+from agents.debugger import (                      # noqa: E402
+    _dead_event_handlers as _deh61, _wiring_calls as _wc61)
+
+_ev61 = _DE61(file="backend/main.py", line=51, app="app", event="startup",
+              handler="include_routers", lifespan_line=41,
+              registers_routes=True)
+check("the app, event and handler are read back out of the finding",
+      _deh61([str(_ev61)]) == [("app", "startup", "include_routers")],
+      str(_deh61([str(_ev61)])))
+check("...and an unparseable line is skipped rather than guessed at",
+      _deh61(["something else"]) == [])
+check("...and the real check's own finding parses, end to end",
+      _deh61(_o61.findings) == [("app", "startup", "include_routers")],
+      str(_deh61(_o61.findings)))
+
+# ── The anti-silencing guard ─────────────────────────────────────────────────
+# The cheapest way to make this finding go away is to delete the handler, which
+# leaves the routes exactly as unregistered as they were. `_repair_dead_events`
+# counts the wiring calls before and after and restores the original if the
+# rewrite dropped any — the same stance as the field repair that declared no
+# field. Without this the repair would report success on a build that still
+# serves nothing, which is the failure mode this whole section exists for.
+check("route wiring is counted so a repair cannot delete it",
+      _wc61(_DEFECT61) == 1 and _wc61("app.include_router(a)\napp.mount(b)\n") == 2,
+      f"{_wc61(_DEFECT61)} / {_wc61('app.include_router(a)')}")
+check("...and deleting the handler outright is caught as a drop",
+      _wc61("from fastapi import FastAPI\napp = FastAPI(lifespan=ls)\n") == 0)
+check("...and an unparseable rewrite is never read as zero wiring",
+      _wc61("def (((") == -1)
+# The deleted-handler rewrite is the one that matters: it PASSES the dead-event
+# check, so only the wiring count stands between it and being recorded a repair.
+check("the delete-the-handler rewrite passes the check but loses the routes",
+      not _hde61("from fastapi import FastAPI\napp = FastAPI(lifespan=ls)\n")
+      and _wc61("from fastapi import FastAPI\napp = FastAPI(lifespan=ls)\n")
+      < _wc61(_DEFECT61))
+
+# ── Wired in, not just written ───────────────────────────────────────────────
+# `sql_schema` existed for months and never ran during a build, because nothing
+# imported it outside `verify_corpus`. Assert every seam this time.
+_pipe61 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+_corp61 = Path("tools/verify_corpus.py").read_text(encoding="utf-8")
+_dbg61 = Path("agents/debugger.py").read_text(encoding="utf-8")
+check("the check runs during a build, not only in verify_corpus",
+      '("dead_events", check_dead_events)' in _pipe61)
+check("...and its repair targets are read off the outcome",
+      'outcome.check == "dead_events"' in _pipe61)
+check("...and reach the debugger through their own channel",
+      "dead_events=dead_events," in _pipe61
+      and "dead_events: dict | None = None" in _dbg61)
+check("...and are re-asked after the repair pass, so a fixed build stops",
+      "dead_events re-check skipped" in _pipe61)
+check("...and the targets are cleared before every build",
+      "self._dead_event_targets = {}" in _pipe61)
+check("...and the corpus harness runs it too",
+      '("dead_events",     check_dead_events)' in _corp61)
+check("the repair verifies the handler actually moved",
+      "has_dead_events" in _dbg61 and "_repair_dead_events" in _dbg61)
+
+# ── The two guards the repair could not work without ─────────────────────────
+# Both were found by driving the real `_repair_dead_events` at a clone of
+# `e3894a9e` with a stubbed reply, on 2026-09-05, BEFORE the channel had ever
+# run live. Neither was predicted when the channel was written.
+from tools.repair_guard import accept_generated_fix as _agf61   # noqa: E402
+from tools.dead_event_check import count_lifespan_apps as _cla61  # noqa: E402
+
+# 1. The correct fix DELETES a top-level name — that is what the repair is —
+#    and rule 3 of the guard refuses to remove any. So the correct rewrite was
+#    rejected with "it removes top-level include_routers", which would have made
+#    the whole channel inert exactly the way `sql_schema`'s missing `;` did.
+_BEFORE61 = (
+    "from fastapi import FastAPI\n"
+    "app = FastAPI(lifespan=ls)\n"
+    "def include_routers():\n"
+    "    app.include_router(r)\n"
+    "def other():\n"
+    "    return 1\n"
+)
+_AFTER61 = (
+    "from fastapi import FastAPI\n"
+    "async def ls(app):\n"
+    "    app.include_router(r)\n"
+    "    yield\n"
+    "app = FastAPI(lifespan=ls)\n"
+    "def other():\n"
+    "    return 1\n"
+)
+check("without the allowance the correct dead-event fix is refused",
+      not _agf61(_BEFORE61, _AFTER61)[0], _agf61(_BEFORE61, _AFTER61)[1])
+check("...and naming the handler lets exactly that one deletion through",
+      _agf61(_BEFORE61, _AFTER61, allow_removed={"include_routers"})[0],
+      _agf61(_BEFORE61, _AFTER61, allow_removed={"include_routers"})[1])
+check("...while everything NOT named is still guarded",
+      not _agf61(_BEFORE61, _AFTER61.replace("def other():\n    return 1\n", ""),
+                 allow_removed={"include_routers"})[0])
+check("...and the allowance is per-call, so other repairs keep the hard rule",
+      not _agf61(_BEFORE61, _AFTER61)[0])
+
+# 2. The other way to silence the check without fixing anything: delete the
+#    `lifespan=` argument. `on_event` then works again and the check correctly
+#    reports not_applicable — but whatever the lifespan did now sits in a
+#    function nothing calls. On the clone that left an app that registered its
+#    routes and never created its tables, and the repair called it a success.
+check("an app built with a lifespan is counted",
+      _cla61("from fastapi import FastAPI\napp = FastAPI(lifespan=ls)\n") == 1)
+check("...and dropping the lifespan argument is visible as a drop",
+      _cla61("from fastapi import FastAPI\napp = FastAPI()\n") == 0)
+check("...and `lifespan=None` was never a lifespan to begin with",
+      _cla61("from fastapi import FastAPI\napp = FastAPI(lifespan=None)\n") == 0)
+check("...and an unparseable rewrite is never read as zero lifespans",
+      _cla61("def (((") == -1)
+_dbg61b = Path("agents/debugger.py").read_text(encoding="utf-8")
+check("the repair restores the original when the lifespan went missing",
+      "removed the lifespan" in _dbg61b and "count_lifespan_apps" in _dbg61b)
 
 shutil.rmtree(_W60, ignore_errors=True)
 

@@ -941,6 +941,7 @@ class Pipeline:
         self._module_ref_targets = {}
         self._schema_attr_targets = {}
         self._sql_schema_targets = {}
+        self._dead_event_targets = {}
 
         root = result.architecture.get("root_folder", "")
         if not root:
@@ -966,6 +967,7 @@ class Pipeline:
             from tools.schema_attr_check import check_schema_attributes
             from tools.module_ref_check import check_module_refs
             from tools.sql_schema_check import check_sql_schema
+            from tools.dead_event_check import check_dead_events
             from tools.generated_tests import run_generated_tests
             from tools.static_smoke import smoke_test_static
             from tools.verification import collect_findings
@@ -1020,6 +1022,13 @@ class Pipeline:
             # import check cannot see, and the row that exposed this had 8 of
             # its 9 failing endpoints raising `no such table`.
             ("sql_schema", check_sql_schema),
+            # A startup handler the framework never calls. Row 3's third run
+            # built `FastAPI(lifespan=...)` and registered every router inside
+            # an `@app.on_event("startup")`, which a supplied lifespan disables:
+            # the app booted clean, declared 0 routes and shipped `unusable`
+            # while `feature_coverage` read verified 6/6 against it. Static and
+            # certain, so it runs before a token is spent rather than after.
+            ("dead_events", check_dead_events),
             # The suite the build ships. Row 2 shipped one in which every test
             # errored at fixture setup and was still recorded `verified: yes`,
             # because no other check executes the tests — a suite that cannot
@@ -1050,6 +1059,14 @@ class Pipeline:
                     outcome.evidence.get("repair_targets") or {})
             elif outcome.check == "sql_schema":
                 self._sql_schema_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "dead_events":
+                # The only one of the four whose target is the file the finding
+                # is reported in — and it was still missed, because nothing
+                # published it. `main.py` WAS repaired during that build, for an
+                # unrelated import error, and the repair left the dead handler
+                # alone because no channel carried it.
+                self._dead_event_targets = dict(
                     outcome.evidence.get("repair_targets") or {})
             elif outcome.check == "schema_attr":
                 # One level in from `module_ref`: that one asks whether the name
@@ -1794,6 +1811,21 @@ class Pipeline:
                 f"{', '.join(sorted(missing_tables)[:4])}"
             ]
 
+        # And a startup handler the framework never calls. The only one of these
+        # four whose file is the file the finding names — and the one that most
+        # needs the channel anyway, because such a file imports cleanly, runs
+        # cleanly, and passes every check that reads the source.
+        dead_events = dict(getattr(self, "_dead_event_targets", {}) or {})
+        for path in dead_events:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if dead_events:
+            issues = list(issues) + [
+                f"{sum(len(v) for v in dead_events.values())} startup handler(s) "
+                f"the supplied lifespan makes unreachable in "
+                f"{', '.join(sorted(dead_events)[:4])}"
+            ]
+
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
             report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
@@ -1922,6 +1954,7 @@ class Pipeline:
                         missing_definitions=missing_definitions,
                         missing_fields=missing_fields,
                         missing_tables=missing_tables,
+                        dead_events=dead_events,
                     )
                     # Merge the fresh results over the stale ones so the DB
                     # scores reflect the repaired state, not the pre-repair one.
@@ -2041,6 +2074,31 @@ class Pipeline:
                         ]
                 except Exception as e:
                     logger.warning(f"  ⚠️  sql_schema re-check skipped: {e}")
+
+            if dead_events:
+                try:
+                    from tools.dead_event_check import check_dead_events
+                    root = result.architecture.get("root_folder", "")
+                    ev_again = check_dead_events(root) if root else None
+                    dead_events = dict(
+                        (ev_again.evidence.get("repair_targets") or {})
+                        if ev_again is not None else {}
+                    )
+                    self._dead_event_targets = dict(dead_events)
+                    if not dead_events:
+                        logger.info(
+                            "  ✅ Every startup handler is somewhere the "
+                            "framework will run it")
+                    else:
+                        for path in dead_events:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            f"{sum(len(v) for v in dead_events.values())} "
+                            f"startup handler(s) are still unreachable"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  dead_events re-check skipped: {e}")
 
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the

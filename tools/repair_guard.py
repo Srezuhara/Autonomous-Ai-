@@ -172,7 +172,8 @@ def top_level_symbols(source: str, defined_only: bool = False) -> set[str]:
     return names
 
 
-def accept_generated_fix(current: str, fixed: str, label: str = "") -> tuple[bool, str]:
+def accept_generated_fix(current: str, fixed: str, label: str = "",
+                        allow_removed: set | None = None) -> tuple[bool, str]:
     """
     Should `fixed` be written over `current`? Returns (accept, reason_if_not).
 
@@ -188,6 +189,18 @@ def accept_generated_fix(current: str, fixed: str, label: str = "") -> tuple[boo
        import check passes" is a target the model can hit by removing code —
        and it does.
     3. It drops a top-level name another module imports.
+
+    `allow_removed` names the top-level symbols this particular repair is
+    SUPPOSED to delete, and it exists for exactly one caller. The dead-event
+    repair moves an `@app.on_event("startup")` handler's body into the lifespan
+    and deletes the now-empty handler — so removing that name is the repair, and
+    rule 3 rejected every correct fix. Measured on a clone of `e3894a9e` on
+    2026-09-05, before the channel had ever run live: the correct rewrite was
+    refused with "it removes top-level include_routers", which would have made
+    the whole channel inert in the same way `sql_schema`'s missing semicolon
+    did. It is deliberately a per-call allowance of NAMED symbols rather than a
+    flag: everything not named is still guarded, so a reply that deletes the
+    handler AND something else is still refused.
     """
     file_header_count = len(_FILE_HEADER_RE.findall(fixed))
     too_large = bool(current) and len(fixed) > max(len(current) * 1.6, len(current) + 1800)
@@ -205,6 +218,7 @@ def accept_generated_fix(current: str, fixed: str, label: str = "") -> tuple[boo
     # local copy and import the real one, and comparing definitions to
     # definitions rejected exactly that, leaving the endpoint broken.
     lost = top_level_symbols(current, defined_only=True) - top_level_symbols(fixed)
+    lost -= set(allow_removed or ())
     if lost:
         return False, (
             f"it removes top-level {', '.join(sorted(lost))} — a repair must "
