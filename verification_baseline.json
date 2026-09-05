@@ -6,6 +6,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "the request did not enumerate any features to check",
         "findings": [],
@@ -75,6 +80,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -148,6 +158,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 16 python file(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "feature_coverage": {
         "detail": "the request did not enumerate any features to check",
         "findings": [],
@@ -214,6 +229,11 @@
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 16 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "the request did not enumerate any features to check",
@@ -286,6 +306,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (19 route(s), 23 function(s) across web_api)",
         "findings": [],
@@ -345,6 +370,11 @@
           "the command-line tool ai_pdf_reader/cli_tool.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_pdf_reader\\cli_tool.py\", line 11, in <module>\n    from ai_pdf_reader.backend.va"
         ],
         "status": "failed"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
       },
       "feature_coverage": {
         "detail": "4/4 requested feature(s) have supporting code (4 route(s), 32 function(s) across web_api+cli+static_frontend)",
@@ -417,6 +447,11 @@
           "the command-line tool ai_report_generator/backend/main.py fails on `--help` (exit 1): Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"C:\\programes\\comppython\\Aiautonomous\\generated_projects\\ai_report_generator\\backend\\main.py\", line 3, in <module>\n    from routes import r"
         ],
         "status": "failed"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
       },
       "feature_coverage": {
         "detail": "4/5 requested feature(s) have supporting code (1 route(s), 17 function(s) across web_api+cli+static_frontend)",
@@ -513,6 +548,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "4/5 requested feature(s) have supporting code (4 route(s), 15 function(s) across web_api)",
         "findings": [
@@ -576,6 +616,11 @@
         ],
         "status": "failed"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "2/5 requested feature(s) have supporting code (3 route(s), 5 function(s) across web_api+cli)",
         "findings": [
@@ -636,6 +681,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -705,6 +755,11 @@
         ],
         "status": "failed"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "4/5 requested feature(s) have supporting code (1 route(s), 13 function(s) across cli)",
         "findings": [
@@ -768,6 +823,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -846,6 +906,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "4/5 requested feature(s) have supporting code (6 route(s), 33 function(s) across web_api)",
         "findings": [
@@ -911,6 +976,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "2/5 requested feature(s) have supporting code (4 route(s), 6 function(s) across web_api)",
         "findings": [
@@ -969,6 +1039,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1044,6 +1119,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "5/5 requested feature(s) have supporting code (4 route(s), 11 function(s) across package)",
         "findings": [],
@@ -1109,6 +1189,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "5/5 requested feature(s) have supporting code (1 route(s), 1 function(s) across package)",
         "findings": [],
@@ -1163,6 +1248,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1231,6 +1321,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "2 app(s) built with a lifespan, across 13 python file(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "feature_coverage": {
         "detail": "5/5 requested feature(s) have supporting code (7 route(s), 19 function(s) across web_api+static_frontend)",
         "findings": [],
@@ -1294,6 +1389,11 @@
         "findings": [],
         "status": "verified"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "4/4 requested feature(s) have supporting code (0 route(s), 15 function(s) across cli)",
         "findings": [],
@@ -1353,6 +1453,11 @@
         "detail": "ran 1 CLI entry point(s): bulk_file_renamer_ab57297e/bulk_file_renamer/cli.py",
         "findings": [],
         "status": "verified"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
       },
       "feature_coverage": {
         "detail": "4/4 requested feature(s) have supporting code (1 route(s), 26 function(s) across web_api+cli)",
@@ -1416,6 +1521,11 @@
         "findings": [],
         "status": "verified"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "3/3 requested feature(s) have supporting code (0 route(s), 17 function(s) across cli)",
         "findings": [],
@@ -1472,6 +1582,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -1538,6 +1653,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "1/1 requested feature(s) have supporting code (0 route(s), 2 function(s) across package)",
         "findings": [],
@@ -1599,6 +1719,11 @@
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 9 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (18 route(s), 24 function(s) across web_api)",
@@ -1669,6 +1794,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 21 python file(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (22 route(s), 27 function(s) across web_api)",
         "findings": [],
@@ -1734,6 +1864,11 @@
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 16 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (16 route(s), 22 function(s) across web_api)",
@@ -1809,6 +1944,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 13 python file(s)",
+        "findings": [],
+        "status": "verified"
+      },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (0 route(s), 10 function(s) across web_api)",
         "findings": [],
@@ -1878,12 +2018,89 @@
     },
     "shape": "web_api"
   },
+  "inventory_system_9733027d": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 16 python file(s)",
+        "findings": [],
+        "status": "verified"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "generated_tests": {
+        "detail": "pytest exit 1, 2 error, 21 failed, 8 passed",
+        "findings": [
+          "FAILED tests/test_main.py::test_lifespan_initializes_db - AssertionError: exp...",
+          "FAILED tests/test_products.py::test_create_product - assert 404 == 201",
+          "FAILED tests/test_products.py::test_delete_product - assert 404 == 201",
+          "FAILED tests/test_products.py::test_get_product - assert 404 == 201",
+          "FAILED tests/test_products.py::test_list_products - assert 404 == 201",
+          "FAILED tests/test_products.py::test_update_product - assert 404 == 201",
+          "FAILED tests/test_routes.py::test_router_includes_products_and_warehouses - a...",
+          "FAILED tests/test_routes.py::test_router_includes_suppliers - assert False",
+          "the project's own test suite does not run: 2 of its tests error before executing"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "16 module(s) checked name-by-name (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app loaded but declares no routes",
+        "findings": [
+          "the application starts but declares no routes"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "14 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
   "inventory_system_c2d4a4d4": {
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 12 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "the request did not enumerate any features to check",
@@ -1963,6 +2180,11 @@
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 15 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "the request did not enumerate any features to check",
@@ -2068,12 +2290,88 @@
     },
     "shape": "web_api"
   },
+  "inventory_system_e3894a9e": {
+    "checks": {
+      "cli_smoke": {
+        "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 15 python file(s)",
+        "findings": [
+          "`app.on_event(\"startup\")` at line 51 is dead code: `app` was built with `FastAPI(lifespan=...)` at line 41, and the framework ignores event handlers when a lifespan is supplied \u2014 `include_routers` never runs, so no route is ever registered and the app serves nothing. Move its body into the lifespan function, before the `yield`."
+        ],
+        "status": "failed"
+      },
+      "feature_coverage": {
+        "detail": "the request did not enumerate any features to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "generated_tests": {
+        "detail": "pytest exit 2, 5 error",
+        "findings": [
+          "ERROR tests/test_main.py - sqlalchemy.exc.ArgumentError: Could not parse SQLA...",
+          "ERROR tests/test_product.py - sqlalchemy.exc.ArgumentError: Could not parse S...",
+          "ERROR tests/test_products.py - sqlalchemy.exc.ArgumentError: Could not parse ...",
+          "ERROR tests/test_stock.py - sqlalchemy.exc.ArgumentError: Could not parse SQL...",
+          "ERROR tests/test_suppliers.py - sqlalchemy.exc.ArgumentError: Could not parse...",
+          "the project's own test suite does not run: 5 of its tests error before executing"
+        ],
+        "status": "failed"
+      },
+      "module_ref": {
+        "detail": "13 module(s) checked name-by-name (2 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "package_smoke": {
+        "detail": "this project is run, not imported; its own verifier covers it",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "runtime_smoke": {
+        "detail": "app loaded but declares no routes",
+        "findings": [
+          "the application starts but declares no routes"
+        ],
+        "status": "failed"
+      },
+      "schema_attr": {
+        "detail": "18 model(s) checked field-by-field (0 skipped as open)",
+        "findings": [],
+        "status": "verified"
+      },
+      "sql_schema": {
+        "detail": "this project contains no SQL to check",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "static_smoke": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "web_assets": {
+        "detail": "this project ships no HTML page",
+        "findings": [],
+        "status": "not_applicable"
+      }
+    },
+    "shape": "web_api"
+  },
   "inventory_system_e6a1da32": {
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 16 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (0 route(s), 6 function(s) across web_api)",
@@ -2135,6 +2433,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (19 route(s), 23 function(s) across web_api)",
         "findings": [],
@@ -2192,6 +2495,11 @@
         "detail": "this project declares no command-line entry point",
         "findings": [],
         "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "1 app(s) built with a lifespan, across 18 python file(s)",
+        "findings": [],
+        "status": "verified"
       },
       "feature_coverage": {
         "detail": "6/6 requested feature(s) have supporting code (19 route(s), 23 function(s) across web_api)",
@@ -2278,6 +2586,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "3/3 requested feature(s) have supporting code (6 route(s), 28 function(s) across web_api+static_frontend)",
         "findings": [],
@@ -2361,6 +2674,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "the request did not enumerate any features to check",
         "findings": [],
@@ -2423,6 +2741,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "the artifact exposes no readable names to compare against",
         "findings": [],
@@ -2481,6 +2804,11 @@
         ],
         "status": "failed"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "1/1 requested feature(s) have supporting code (2 route(s), 21 function(s) across web_api+cli)",
         "findings": [],
@@ -2537,6 +2865,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -2618,6 +2951,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "0/3 requested feature(s) have supporting code (5 route(s), 14 function(s) across web_api)",
         "findings": [
@@ -2688,6 +3026,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "0/3 requested feature(s) have supporting code (5 route(s), 8 function(s) across web_api)",
         "findings": [
@@ -2750,6 +3093,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -2817,6 +3165,11 @@
         "findings": [],
         "status": "verified"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "2/2 requested feature(s) have supporting code (2 route(s), 6 function(s) across web_api+cli)",
         "findings": [],
@@ -2878,6 +3231,11 @@
         "findings": [],
         "status": "not_applicable"
       },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
+        "findings": [],
+        "status": "not_applicable"
+      },
       "feature_coverage": {
         "detail": "the artifact exposes no readable names to compare against",
         "findings": [],
@@ -2930,6 +3288,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },
@@ -2998,6 +3361,11 @@
     "checks": {
       "cli_smoke": {
         "detail": "this project declares no command-line entry point",
+        "findings": [],
+        "status": "not_applicable"
+      },
+      "dead_events": {
+        "detail": "this project builds no FastAPI app with a lifespan, so there is no handler here that a lifespan could disable",
         "findings": [],
         "status": "not_applicable"
       },

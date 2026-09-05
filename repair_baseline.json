@@ -815,6 +815,22 @@
     "harm": [],
     "not_idempotent": []
   },
+  "inventory_system_9733027d": {
+    "changed": {
+      "inject_syspath": [
+        "backend/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_routes.py",
+        "tests/test_schemas.py"
+      ]
+    },
+    "clean_before": 15,
+    "files": 15,
+    "harm": [],
+    "not_idempotent": []
+  },
   "inventory_system_c2d4a4d4": {
     "changed": {
       "inject_syspath": [
@@ -840,6 +856,27 @@
         "tests/test_models.py",
         "tests/test_routes.py",
         "tests/test_services.py"
+      ]
+    },
+    "clean_before": 14,
+    "files": 14,
+    "harm": [],
+    "not_idempotent": []
+  },
+  "inventory_system_e3894a9e": {
+    "changed": {
+      "inject_syspath": [
+        "backend/routers/__init__.py",
+        "tests/__init__.py",
+        "tests/test_main.py",
+        "tests/test_models.py",
+        "tests/test_product.py",
+        "tests/test_schemas.py"
+      ],
+      "rewrite_dotted_imports": [
+        "tests/test_products.py",
+        "tests/test_stock.py",
+        "tests/test_suppliers.py"
       ]
     },
     "clean_before": 14,
