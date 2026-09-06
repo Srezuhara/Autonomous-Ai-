@@ -1920,13 +1920,13 @@ check("the ceiling is llm_client's, and it is always known",
 # without the budget is the same bug again, so count the call sites.
 _dbg_src = Path("agents/debugger.py").read_text(encoding="utf-8")
 check("every rewrite call passes a sized budget",
-      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 8
+      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 9
       and "self.think(prompt, max_tokens=_rewrite_budget(self, block.source))" in _dbg_src
       and "self.think(prompt)\n" not in _dbg_src,
       f"whole-file={_dbg_src.count('_rewrite_budget(self, current_code)')} "
       f"block={_dbg_src.count('_rewrite_budget(self, block.source)')}")
 # The count above is brittle on purpose — it fails when a prompt is added — but
-# a count alone cannot say WHY, so assert the property too. Eight prompts now
+# a count alone cannot say WHY, so assert the property too. Nine prompts now
 # size their budget to the file: the import fix, the runtime fix, the targeted
 # retry's fallback, the missing-field fix, the missing-table fix, the dead-event
 # fix, and the route fix. The dead-event one moves a startup handler's body into
@@ -1934,7 +1934,9 @@ check("every rewrite call passes a sized budget",
 # code has to land INSIDE an existing function. The route fix APPENDS like the
 # definition repair, but still sizes its budget to the file it was handed,
 # because the handlers it writes have to match that file's models and session
-# dependency. The definition repair is the one
+# dependency. The ninth, added 2026-09-06, corrects calls that cannot match the
+# definition they name — a rewrite for the same reason the field repair is, since
+# a call sits inside an existing function. The definition repair is the one
 # deliberate exception: it APPENDS, so its budget is sized to the names it must
 # add rather than to the file it was handed, and sizing that one to the current
 # text would cap the reply at roughly what already exists.
@@ -8401,6 +8403,179 @@ check("appending at end-of-file is what produced the false green",
       "this is the shape the repair used to write")
 check("...and the splice produces the correct ordering",
       _routes_before_include(_spliced64, "router"))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [65] Row 6's two defects: a call that cannot match, and an await on a `def`
+# ══════════════════════════════════════════════════════════════════════════════
+# Row 6 shipped `done_with_context` with EVERY static check verified — module_ref,
+# schema_attr, sql_schema, route_presence, dead_events, feature_coverage — and 19
+# of its 22 endpoints returning 500. Two independent defects, neither visible at
+# import time, and MEASURED on that build:
+#
+#     as shipped                  3/22 endpoints
+#     fixing the awaits only      3/22
+#     fixing the one call only    3/22
+#     fixing BOTH                17/22
+#
+# Neither alone explains the failure, which is why both checks exist.
+print("\n[65] a call that cannot match, and an await on a plain def")
+
+from tools.call_arity_check import (                     # noqa: E402
+    check_call_arity as _cca65, check_project_arity as _cpa65)
+from tools.await_sync_check import (                     # noqa: E402
+    check_await_sync as _cas65, repair_await as _ra65)
+
+# ── call_arity: the gap §0.-2 named and did not close ────────────────────────
+# `module_ref` asks whether a name EXISTS. Row 6's `get_connection` existed.
+_mk60("app65", {
+    "services.py": ("import sqlite3\n\n\n"
+                    "def get_connection():\n"
+                    "    return sqlite3.connect('x.db')\n\n\n"
+                    "def init_db(conn):\n"
+                    "    conn.execute('CREATE TABLE t (id INT)')\n"),
+    "main.py": ("import services\n\n"
+                "conn = services.get_connection('inventory.db')\n"
+                "services.init_db(conn)\n"),
+})
+_o65 = _under60(_cca65, "app65")
+check("a call passing more arguments than the definition takes FAILS",
+      _o65.status.name == "FAILED", str(_o65.status))
+check("...and the finding quotes the definition, not just the call",
+      "def get_connection()" in _o65.findings[0], _o65.findings[0])
+check("...and the repair is aimed at the CALLER, which is what must change",
+      list(_o65.evidence.get("repair_targets") or {}) == ["app65/main.py"],
+      str(list(_o65.evidence.get("repair_targets") or {})))
+check("...and `init_db(conn)`, which matches, is not reported",
+      len(_o65.findings) == 1, str(_o65.findings))
+
+# Too FEW arguments is the same defect from the other side.
+_mk60("app65few", {
+    "logger.py": "import logging\n\n\ndef get_logger(name):\n    return logging.getLogger(name)\n",
+    "main.py": "from logger import get_logger\n\nlog = get_logger()\n",
+})
+check("a call passing too few arguments is reported too",
+      _under60(_cca65, "app65few").status.name == "FAILED",
+      str(_under60(_cca65, "app65few").status))
+
+# A keyword that is not the parameter's name is the same failure.
+_mk60("app65kw", {
+    "ops.py": "def rename_files(directory, pattern):\n    return []\n",
+    "main.py": "import ops\n\nops.rename_files(target_dir='x', pattern='y')\n",
+})
+check("a keyword argument that is not a parameter name is reported",
+      _under60(_cca65, "app65kw").status.name == "FAILED",
+      str(_under60(_cca65, "app65kw").status))
+
+# ── The guards. Each is code that WORKS. ─────────────────────────────────────
+_mk60("app65ok", {
+    "services.py": "def make(a, b=2):\n    return a + b\n",
+    "main.py": ("import services\n\n"
+                "services.make(1)\nservices.make(1, 2)\nservices.make(1, b=3)\n"),
+})
+check("defaults are respected, so correct calls pass",
+      _under60(_cca65, "app65ok").status.name == "VERIFIED",
+      str(_under60(_cca65, "app65ok").detail))
+
+_mk60("app65var", {
+    "services.py": "def anything(*args, **kwargs):\n    return args\n",
+    "main.py": "import services\n\nservices.anything(1, 2, 3, x=4)\n",
+})
+check("a definition taking *args/**kwargs accepts anything — silent",
+      _under60(_cca65, "app65var").status.name in ("VERIFIED", "NOT_APPLICABLE"),
+      str(_under60(_cca65, "app65var").status))
+
+_mk60("app65dec", {
+    "services.py": ("def wrap(fn):\n    return fn\n\n\n"
+                    "@wrap\ndef handler(a, b):\n    return a\n"),
+    "main.py": "import services\n\nservices.handler()\n",
+})
+check("a DECORATED definition is skipped — a decorator may change the signature",
+      _under60(_cca65, "app65dec").status.name in ("VERIFIED", "NOT_APPLICABLE"),
+      str(_under60(_cca65, "app65dec").status))
+
+_mk60("app65star", {
+    "services.py": "def take(a, b):\n    return a\n",
+    "main.py": "import services\n\nargs = [1, 2]\nservices.take(*args)\n",
+})
+check("a call that unpacks cannot be counted, so it is skipped",
+      _under60(_cca65, "app65star").status.name in ("VERIFIED", "NOT_APPLICABLE"),
+      str(_under60(_cca65, "app65star").status))
+
+check("a third-party call is never judged",
+      _under60(_cca65, "app60none").status.name in ("VERIFIED", "NOT_APPLICABLE"),
+      str(_under60(_cca65, "app60none").status))
+
+# ── await_sync: 21 handlers awaiting a service layer with no async in it ─────
+_mk60("app65aw", {
+    "services.py": "def get_suppliers():\n    return []\n",
+    "routes.py": ("import services\n\n\n"
+                  "async def list_suppliers():\n"
+                  "    return await services.get_suppliers()\n"),
+})
+_a65 = _under60(_cas65, "app65aw")
+check("awaiting a plain `def` FAILS",
+      _a65.status.name == "FAILED", str(_a65.status))
+check("...and it is fatal, because every call raises",
+      _a65.evidence.get("fatal") is True)
+check("...and the finding names the module that defines it",
+      "services.py" in _a65.findings[0], _a65.findings[0])
+
+_mk60("app65awok", {
+    "services.py": "async def get_suppliers():\n    return []\n",
+    "routes.py": ("import services\n\n\n"
+                  "async def list_suppliers():\n"
+                  "    return await services.get_suppliers()\n"),
+})
+check("awaiting a real coroutine passes",
+      _under60(_cas65, "app65awok").status.name == "VERIFIED",
+      str(_under60(_cas65, "app65awok").detail))
+
+_mk60("app65awret", {
+    "services.py": ("async def inner():\n    return 1\n\n\n"
+                    "def outer():\n    return inner()\n"),
+    "routes.py": ("import services\n\n\n"
+                  "async def go():\n    return await services.outer()\n"),
+})
+check("a sync function RETURNING a coroutine is legal to await — silent",
+      _under60(_cas65, "app65awret").status.name == "VERIFIED",
+      str(_under60(_cas65, "app65awret").detail))
+
+# ── The deterministic repair ─────────────────────────────────────────────────
+# `await f(...)` where f is a plain `def` is fixed by deleting four characters,
+# so this one needs no model at all.
+_SRC65 = ("import services\n\n"
+          "async def a():\n    return await services.get_suppliers()\n\n"
+          "async def b():\n    return await services.other()\n")
+_fixed65, _n65 = _ra65(_SRC65, {"services.get_suppliers"})
+check("the repair strips exactly the await it was asked about",
+      _n65 == 1 and "await services.get_suppliers" not in _fixed65)
+check("...and leaves every other await alone",
+      "await services.other()" in _fixed65, _fixed65)
+check("...and changes nothing when there is nothing to strip",
+      _ra65(_SRC65, set()) == (_SRC65, 0))
+check("...and the result still parses",
+      bool(__import__("ast").parse(_fixed65)))
+
+# ── Wired in, not just written ───────────────────────────────────────────────
+_pipe65 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+_corp65 = Path("tools/verify_corpus.py").read_text(encoding="utf-8")
+_dbg65 = Path("agents/debugger.py").read_text(encoding="utf-8")
+check("both checks run during a build",
+      '("call_arity", check_call_arity)' in _pipe65
+      and '("await_sync", check_await_sync)' in _pipe65)
+check("...and the corpus harness runs them too",
+      '("call_arity",      check_call_arity)' in _corp65
+      and '("await_sync",      check_await_sync)' in _corp65)
+check("the await repair runs in the pipeline, with no LLM call",
+      "repair_await" in _pipe65 and "Removed " in _pipe65)
+check("...and the arity repair reaches the debugger through its own channel",
+      "bad_calls=bad_calls," in _pipe65
+      and "bad_calls: dict | None = None" in _dbg65)
+check("...and both are re-asked after the repair pass",
+      "call_arity re-check skipped" in _pipe65
+      and "Nothing awaits a non-async function now" in _pipe65)
+check("...and their targets are cleared before every build",
+      "self._call_targets = {}" in _pipe65 and "self._await_targets = {}" in _pipe65)
 
 shutil.rmtree(_W60, ignore_errors=True)
 

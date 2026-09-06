@@ -943,6 +943,8 @@ class Pipeline:
         self._sql_schema_targets = {}
         self._dead_event_targets = {}
         self._route_targets = {}
+        self._call_targets = {}
+        self._await_targets = {}
 
         root = result.architecture.get("root_folder", "")
         if not root:
@@ -970,6 +972,8 @@ class Pipeline:
             from tools.sql_schema_check import check_sql_schema
             from tools.dead_event_check import check_dead_events
             from tools.route_presence_check import check_route_presence
+            from tools.call_arity_check import check_call_arity
+            from tools.await_sync_check import check_await_sync
             from tools.generated_tests import run_generated_tests
             from tools.static_smoke import smoke_test_static
             from tools.verification import collect_findings
@@ -1038,6 +1042,22 @@ class Pipeline:
             # no route serves nothing, whatever the reason. Three corpus builds
             # fail it, and `runtime_smoke` independently fails all three.
             ("route_presence", check_route_presence),
+            # The two halves of row 6, which shipped every static check
+            # verified and 19 of 22 endpoints returning 500. Neither is
+            # visible at import time and neither alone explains the
+            # failure: fixing either one left the build at 3/22, and
+            # fixing both took it to 17/22.
+            #
+            # `call_arity` is the gap §0.-2 named and did not close —
+            # `module_ref` asks whether a name exists, not whether the
+            # call works. `services.get_connection(DB_PATH)` against
+            # `def get_connection()` raised inside the lifespan, so
+            # `init_db` never ran and every endpoint answered
+            # "no such table".
+            ("call_arity", check_call_arity),
+            # `await_sync`: 21 handlers awaited a service layer with no
+            # async function in it. Raises only once a request arrives.
+            ("await_sync", check_await_sync),
             # The suite the build ships. Row 2 shipped one in which every test
             # errored at fixture setup and was still recorded `verified: yes`,
             # because no other check executes the tests — a suite that cannot
@@ -1069,6 +1089,12 @@ class Pipeline:
             elif outcome.check == "sql_schema":
                 self._sql_schema_targets = dict(
                     outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "call_arity":
+                self._call_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "await_sync":
+                self._await_targets = dict(
+                    outcome.evidence.get("await_targets") or {})
             elif outcome.check == "route_presence":
                 self._route_targets = dict(
                     outcome.evidence.get("repair_targets") or {})
@@ -1851,6 +1877,48 @@ class Pipeline:
                 f"{', '.join(sorted(missing_routes)[:4])} must gain them"
             ]
 
+        # An `await` on a plain `def` is repaired by deleting the word, so it
+        # runs HERE rather than being sent to a model: deterministic, free, and
+        # verified by re-running the check afterwards.
+        await_targets = dict(getattr(self, "_await_targets", {}) or {})
+        if await_targets:
+            fixed_files = 0
+            try:
+                from tools.await_sync_check import repair_await, check_await_sync
+                from tools.file_writer import read_file, create_file
+                for path, callees in await_targets.items():
+                    try:
+                        before = read_file(path)
+                    except Exception:
+                        continue
+                    after, n = repair_await(before, set(callees))
+                    if n and after != before:
+                        create_file(path, after)
+                        fixed_files += 1
+                        logger.info(
+                            f"  ⏳ [{path}] Removed {n} await(s) on functions "
+                            f"that are not async")
+                root_now = result.architecture.get("root_folder", "")
+                again = check_await_sync(root_now) if root_now else None
+                if again is not None and again.ok:
+                    self._await_targets = {}
+                    logger.info("  ✅ Nothing awaits a non-async function now")
+            except Exception as e:
+                logger.warning(f"  ⚠️  await repair skipped: {e}")
+        # A call that cannot match its definition. The CALLER is what must
+        # change, which for once is the file a traceback would name — but the
+        # call raises only when it runs, so no traceback exists yet.
+        bad_calls = dict(getattr(self, "_call_targets", {}) or {})
+        for path in bad_calls:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if bad_calls:
+            issues = list(issues) + [
+                f"{sum(len(v) for v in bad_calls.values())} call(s) cannot "
+                f"match the definition they name in "
+                f"{', '.join(sorted(bad_calls)[:4])}"
+            ]
+
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
             report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
@@ -1981,6 +2049,7 @@ class Pipeline:
                         missing_tables=missing_tables,
                         dead_events=dead_events,
                         missing_routes=missing_routes,
+                        bad_calls=bad_calls,
                     )
                     # Merge the fresh results over the stale ones so the DB
                     # scores reflect the repaired state, not the pre-repair one.
@@ -2147,6 +2216,29 @@ class Pipeline:
                         ]
                 except Exception as e:
                     logger.warning(f"  ⚠️  route_presence re-check skipped: {e}")
+
+            if bad_calls:
+                try:
+                    from tools.call_arity_check import check_call_arity
+                    root = result.architecture.get("root_folder", "")
+                    ca_again = check_call_arity(root) if root else None
+                    bad_calls = dict(
+                        (ca_again.evidence.get("repair_targets") or {})
+                        if ca_again is not None else {}
+                    )
+                    self._call_targets = dict(bad_calls)
+                    if not bad_calls:
+                        logger.info("  ✅ Every call matches its definition now")
+                    else:
+                        for path in bad_calls:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            f"{sum(len(v) for v in bad_calls.values())} call(s) "
+                            f"still cannot match their definition"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  call_arity re-check skipped: {e}")
 
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the

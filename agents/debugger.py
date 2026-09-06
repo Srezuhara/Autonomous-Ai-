@@ -735,6 +735,7 @@ class Debugger(BaseAgent):
         missing_tables: dict | None = None,
         dead_events: dict | None = None,
         missing_routes: dict | None = None,
+        bad_calls: dict | None = None,
     ) -> list[FileDebugResult]:
         """
         `runtime_errors` maps a file to a failure the *running* app produced —
@@ -778,6 +779,7 @@ class Debugger(BaseAgent):
         missing_tables = missing_tables or {}
         dead_events = dead_events or {}
         missing_routes = missing_routes or {}
+        bad_calls = bad_calls or {}
         py_files = [
             f for f in file_paths
             if f.endswith(".py")
@@ -820,6 +822,7 @@ class Debugger(BaseAgent):
                 missing_tbls=missing_tables.get(fp, ()),
                 dead_evts=dead_events.get(fp, ()),
                 no_routes=bool(missing_routes.get(fp)),
+                bad_call_findings=bad_calls.get(fp, ()),
             )
             results[fp] = r
             logger.info(str(r))
@@ -1885,7 +1888,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                     missing_flds: tuple = (),
                     missing_tbls: tuple = (),
                     dead_evts: tuple = (),
-                    no_routes: bool = False) -> FileDebugResult:
+                    no_routes: bool = False,
+                    bad_call_findings: tuple = ()) -> FileDebugResult:
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
@@ -1914,6 +1918,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             # Last of all: this one APPENDS handlers, so it must run after every
             # repair that rewrites the file, or its work is overwritten.
             _try_route_repair()
+            _try_call_repair()
 
         def _try_definition_repair() -> None:
             nonlocal definition_repair_tried
@@ -1936,6 +1941,13 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 self._repair_missing_tables(
                     file_path, list(missing_tbls), result)
 
+        def _try_call_repair() -> None:
+            nonlocal call_repair_tried
+            if bad_call_findings and not call_repair_tried:
+                call_repair_tried = True
+                self._repair_bad_calls(
+                    file_path, list(bad_call_findings), result)
+
         def _try_route_repair() -> None:
             nonlocal route_repair_tried
             if no_routes and not route_repair_tried:
@@ -1955,6 +1967,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         table_repair_tried = False
         dead_event_repair_tried = False
         route_repair_tried = False
+        call_repair_tried = False
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             result.attempts = attempt
@@ -2363,6 +2376,118 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             "EVERY NAME YOU MAY IMPORT, with the signature you must call it by.\n"
             "Import the NAME only — the parameters are shown so that your call "
             "matches the definition:\n" + "\n".join(lines))
+
+    def _repair_bad_calls(
+        self, file_path: str, findings: list, result: FileDebugResult
+    ) -> bool:
+        """
+        Fix calls that cannot match the definition they name.
+
+        REWRITES, like the field repair and for the same reason: a call sits
+        inside an existing function, so there is nothing to append to. The
+        `too_large` rule is no obstacle — correcting an argument list is not
+        growth of that order.
+
+        The defect is invisible until the line runs, which is why it needs its
+        own channel: the module imports perfectly and every gate in `_debug_file`
+        passes it. Row 6 shipped `services.get_connection(DB_PATH)` against
+        `def get_connection()`; it raised inside the lifespan, `init_db` never
+        ran, and all 22 endpoints answered "no such table" while `module_ref`,
+        `sql_schema` and `route_presence` were all verified.
+
+        The landing check re-runs the arity check over the result: a rewrite that
+        leaves the call unmatched has not fixed anything.
+        """
+        if not findings:
+            return False
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for call repair: {e}")
+            return False
+
+        logger.info(
+            f"  🔢 [{file_path}] Correcting {len(findings)} call(s) that cannot "
+            f"match their definition")
+        fixed = self._generate_bad_calls_fix(file_path, original, findings)
+        if not fixed or not self._accept_generated_fix(file_path, fixed):
+            logger.warning(f"  ⚠️  [{file_path}] Call repair rejected or empty")
+            return False
+
+        create_file(file_path, fixed)
+        self._preflight_fix(file_path)
+        self._inject_syspath(file_path)
+
+        verify = run_python(file_path)
+        if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+            logger.warning(
+                f"  ↩️  [{file_path}] Call repair broke the import check — "
+                f"restoring the original: {self._trim_error(verify.stderr)}")
+            create_file(file_path, original)
+            return False
+
+        # Did the mismatches actually go? Counted over the project, because a
+        # call is only judgeable against the definition it names.
+        try:
+            from tools.call_arity_check import check_project_arity
+            root = file_path.replace("\\", "/").split("/")[0]
+            still = [i for i in check_project_arity(root).issues
+                     if f"{root}/{i.file}" == file_path.replace("\\", "/")]
+        except Exception:
+            still = []
+        if len(still) >= len(findings):
+            logger.warning(
+                f"  ↩️  [{file_path}] Call repair fixed none of "
+                f"{len(findings)} mismatch(es) — restoring the original")
+            create_file(file_path, original)
+            return False
+
+        landed = len(findings) - len(still)
+        result.fixes_applied.append(
+            f"Corrected {landed} mismatched call(s) in {file_path}")
+        logger.info(
+            f"  ✅ [{file_path}] Call repair applied: {landed}/{len(findings)}")
+        return True
+
+    def _generate_bad_calls_fix(
+        self, file_path: str, current_code: str, findings: list
+    ) -> str | None:
+        """
+        The prompt for a file whose calls do not match the functions they name.
+
+        The findings already carry the definition and the count, so they are
+        passed through verbatim — the same stance as the field repair, and for
+        the same reason: the instruction and the reasoning are different jobs.
+        """
+        wanted = "\n".join(f"- {f}" for f in findings)
+        prompt = f"""This file calls functions with the wrong arguments. Each call
+below raises TypeError the moment it runs — never at import, so the module loads
+and the failure only appears once that line executes.
+
+FILE: {file_path}
+CURRENT CODE:
+{current_code}
+
+EXACTLY WHAT IS WRONG:
+{wanted}
+
+RULES:
+- Fix the CALL to match the definition quoted in each finding. The definition is
+  the truth here; do not invent parameters it does not have.
+- If the caller genuinely needs to pass that value, find the right way to give it
+  — a module-level constant the callee already reads, or a different function
+  that does take it. Do not add a parameter to a function you cannot see.
+- A keyword argument must use the parameter's real name. `f(target_dir=x)`
+  against `def f(directory)` is the same defect as passing too many arguments.
+- Change nothing else. Keep every import, every function and every route this
+  file already has — other modules import them and a dropped name is a new
+  failure.
+- Do not silence the call by wrapping it in try/except or deleting it. A call
+  that no longer happens is not a call that works.
+
+Return ONLY the complete fixed Python code for this file."""
+        logger.info(f"  🧠 LLM correcting calls: {file_path}")
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
 
     def _repair_missing_routes(
         self, file_path: str, result: FileDebugResult

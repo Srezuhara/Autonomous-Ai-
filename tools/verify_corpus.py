@@ -55,6 +55,8 @@ from tools.generated_tests import run_generated_tests      # noqa: E402
 from tools.module_ref_check import check_module_refs        # noqa: E402
 from tools.dead_event_check import check_dead_events        # noqa: E402
 from tools.route_presence_check import check_route_presence  # noqa: E402
+from tools.call_arity_check import check_call_arity          # noqa: E402
+from tools.await_sync_check import check_await_sync          # noqa: E402
 from tools.static_smoke import smoke_test_static           # noqa: E402
 from tools.verification import VerificationOutcome         # noqa: E402
 from tools.web_asset_check import check_web_assets         # noqa: E402
@@ -252,6 +254,8 @@ def verify_one(name: str, intents: dict, keep: bool = False) -> dict:
             ("module_ref",      check_module_refs),
             ("dead_events",     check_dead_events),
             ("route_presence",  check_route_presence),
+            ("call_arity",      check_call_arity),
+            ("await_sync",      check_await_sync),
         ):
             record["checks"][check] = _guarded(check, fn, clone)
 

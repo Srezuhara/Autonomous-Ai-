@@ -10,6 +10,17 @@ alone. Costs nothing: no LLM, no tokens.
 import json, re, sys, urllib.request
 from pathlib import Path
 
+# Findings quote generated code and tracebacks, which carry arrows, box glyphs
+# and whatever else the model wrote. On a cp1252 console `print` then raises
+# UnicodeEncodeError and the grader dies partway through its own report — which
+# is how row 6 produced a half-written verdict. Force UTF-8 and replace anything
+# the terminal genuinely cannot render.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 sys.path.insert(0, r"C:\programes\comppython\Aiautonomous")
 import config
 sys.path.insert(0, str(Path(config.OUTPUT_DIR).parent))
