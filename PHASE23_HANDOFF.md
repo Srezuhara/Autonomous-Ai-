@@ -1,5 +1,12 @@
 # Phase 23 Handoff
 
+*Updated 2026-09-06, later the same session: **the first row in this project's
+history to PASS its own criterion** — `1134f369`, `done_with_context`, 21/21
+routes responding, all six §B2 assertions green. It passed because the architect
+produced a working program, not because of the checks written that day, and one
+row is not the >= 3 of 4 criterion. Rows 1, 2 and 4 have never run against this
+code. Earlier notes follow.*
+
 *Updated 2026-09-06 at the end of the THIRTEENTH session: the fifth row ran.
 Every check fired correctly, including two that had never run live — and the row
 is `unusable` anyway, with zero routes for a THIRD consecutive time from a third
@@ -40,6 +47,224 @@ current state. This file is the per-defect detail behind it, and
 
 Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
+
+---
+
+## 0.-16 The first passing row — and why it is not the phase closing
+
+*Thirteenth session, 2026-09-06, continued. Row 3 ran twice more. The second of
+those is the **first row in this project's history to pass its own criterion**:
+`done_with_context`, **21/21 routes responding**, `driver verdict: PASS`. Read
+the "what this does NOT establish" section before drawing a conclusion from it.*
+
+### Row 7 — `1134f369`
+
+`done_with_context`, 964.8s, **128,676 tokens**. Scores: debug 12/12, review 6.8,
+test 6/9. `tools/assert_row.py`: **all 6 §B2 assertions pass**, including the one
+that had failed every previous row — *"at least one check EXECUTED the
+artifact"*.
+
+| check | result |
+|---|---|
+| `runtime_smoke` | **verified — 21/21 routes responded without a server error** |
+| `feature_coverage` | verified — 6/6, 21 routes |
+| `schema_attr` | verified — 15 models |
+| `module_ref` | verified — 17 modules |
+| `route_presence` | verified — 21 routes |
+| `dead_events` | verified |
+| `call_arity` | verified — 1 call checked |
+| `await_sync` | `not_applicable` — this project awaits nothing |
+| `sql_schema` | `not_applicable` — correct |
+| `generated_tests` | failed — routed to manual (§4.26) |
+
+`driver verdict: PASS — verified by runtime_smoke; for manual testing:
+generated_tests`.
+
+### What this does NOT establish, and it matters
+
+**The row passed because the architect produced a working program, not because
+of the checks written that day.** `call_arity` checked one call and passed;
+`await_sync` was `not_applicable`. Both correctly stayed silent — the build did
+not have those defects. Claiming credit for the pass would be exactly the
+reasoning error this file keeps recording.
+
+What is fairly claimed is narrower: **no check fired on a working build**, which
+is the property that costs an LLM call and a false accusation when it fails, and
+**the verdict is now trustworthy in both directions** — the false greens that
+used to accompany dead builds are closed.
+
+**One row is not the criterion.** The bar is >= 3 of 4 rows at
+`done`/`done_with_context` with something having executed the artifact. Only row
+3 has been run against the current code. Rows 1, 2 and 4 are untested.
+
+### Row 6 — `78097ea4`, and the two defects it took to diagnose it
+
+`done_with_context`, 1095.3s, 140,637 tokens, **3 of 22 endpoints**, with EVERY
+static check verified: `module_ref`, `schema_attr`, `sql_schema`,
+`route_presence`, `dead_events`, `feature_coverage`. The application was
+structurally correct and did not work.
+
+Two independent defects, each individually fatal. **Measured one at a time on a
+clone, which is the only reason the second was found:**
+
+| fixed | endpoints |
+|---|---|
+| nothing | 3/22 |
+| the awaits only | 3/22 |
+| the one call only | 3/22 |
+| **both** | **17/22** |
+
+Neither alone moves it. That is why remediation managed +1 across two passes: it
+never had both.
+
+**`call_arity` — the gap §0.-2 named and did not close.** `module_ref` asks
+whether a name EXISTS, not whether the CALL works, and §0.-2 recorded exactly
+that after a probe added 23 names and the endpoints still 500'd. Row 6:
+
+    main.py      conn = services.get_connection(DB_PATH)
+    services.py  def get_connection() -> sqlite3.Connection:
+
+One extra argument. It raised inside the lifespan, so `init_db(conn)` on the
+next line never ran, no table was ever created, and every database endpoint
+answered `no such table` — while `sql_schema` verified that four tables are
+created, in code that never executes.
+
+**`await_sync` — awaiting a function that is not async.** `routes.py` wrote 21
+`await services.*` calls against a service layer declaring 29 functions and no
+coroutine among them. It raises only once a request arrives, so the module
+imports, the app boots, the routes register, and each one 500s when called. The
+repair is deterministic — delete the word — so it runs in the pipeline with no
+LLM call.
+
+### Falsification for both
+
+| check | n/a | verified | failed | cross-check |
+|---|---|---|---|---|
+| `call_arity` | 29 | 13 | 7 | **4 of the 7 independently failed by `runtime_smoke`** |
+| `await_sync` | 43 | 3 | 3 | 2 independently confirmed |
+
+**Neither fires on any build `runtime_smoke` calls working.** The findings that
+could not be cross-checked that way were read back against source and are all
+real: `get_logger()` against `def get_logger(name)`; a four-argument call to a
+two-parameter function; and `rename_files(target_dir=...)` against
+`def rename_files(directory, ...)` — a keyword-NAME mismatch, the same failure
+from a third direction.
+
+Corpus: 145 changes, every one explained — 141 are the new checks appearing, 2
+are new builds, 2 are the intended `feature_coverage: verified -> not_run`. **No
+existing check changed status on any project.** Repair pre-flight unchanged: 1
+harmed file, the known-open one.
+
+`test_phase23.py`: **1029/1029**.
+
+### Row 5's route repair, made to land
+
+The channel had never worked outside a stubbed clone. Driven live at row 5's
+build it failed four times, each a different one-line problem:
+
+| # | failure | fix |
+|---|---|---|
+| 1 | `from ..services import …` — relative import | run `_normalise_sibling_imports`, which already existed and this repair was not calling |
+| 2 | `cannot import name 'get_db' from 'services'` | the project map truncates to **4 names per module**; the model saw 3 of 25 and invented one. Gave this prompt the complete import surface, with signatures |
+| 3 | `NameError: get_db is not defined` | retry once with the error fed back, instead of predicting a fifth rule |
+| 4 | routes declared, app served **0 routes** | **the false green** — handlers appended below `app.include_router(router)`, which copies routes when it runs. `_splice_routes` now places them before it |
+
+Result: the app went from serving nothing to serving five registered, reachable
+routes. #4 is the one worth remembering: a landing check that counts what you
+added is satisfied by a change that adds nothing reachable.
+
+---
+
+## 0.-17 Decisions taken on 2026-09-06, and what remains
+
+Recorded because each one is a fork another session could reasonably take
+differently, and the reasoning is not recoverable from the diff.
+
+### The decisions
+
+**`feature_coverage` returns NOT_RUN, not FAILED, on a web API with no routes.**
+`route_presence` already reports that defect, and filing one fact under two
+check names is how a clean build acquires phantom findings. NOT_RUN is the
+accurate verdict — the check should have had something to say and could not —
+and it is *loud*: it fails a row and trips `assert_row`'s "zero not_run" gate,
+which is correct for a build serving nothing.
+
+**The `await` repair is deterministic, and lives in the pipeline rather than the
+debugger.** `await f(...)` where `f` is a plain `def` is fixed by deleting four
+characters. There is nothing for a model to decide, so it costs no tokens and
+cannot be refused by a guard. The arity repair is NOT deterministic — the fix
+may belong to the call or to the definition — so that one goes to the LLM.
+
+**A 4xx is retried, bounded, not abandoned.** The first version of this stopped
+on the first 400 on the reasoning that a 4xx is a request problem. That is true
+of a malformed request and false of the 400 this system produces
+("Tool choice is none, but model called a tool" — stochastic). Row 4's log
+settles it: all four of its 400s recovered on the next attempt. Bounded at 3, and
+giving up now RAISES: falling out of the loop returned `None` from a function
+whose callers were written against "returns text or raises", and that `None`
+reached a regex three frames away. See [[a-fix-can-be-a-regression]].
+
+**Route handlers are spliced BEFORE `include_router`, never appended.** See
+§0.-16. Appending passed every static check and served nothing.
+
+**The quota floor was overridden deliberately for row 7** (user's call). Fast was
+at 76,118 against the driver's 90,000 floor; the build was posted straight to
+`POST /projects/`. It completed at 128,676 tokens. The fast->heavy fallback
+(§0.-11) is now proven twice. The floor is still the right default — this was an
+informed exception, not evidence the gate is wrong.
+
+**Two harnesses must not run concurrently.** `verify_repairs` reported
+`NEW HARM — ai_report_generator/tests/test_ai_generated_summaries.py` while a
+diagnostic clone was being created in OUTPUT_DIR beneath it. Disproved twice: 0
+harmed in isolation, 1 harmed (the known one) on a clean serial run. Anything
+that writes to `generated_projects/` while a harness enumerates it produces
+phantom results. Run them serially, and clean up probe clones.
+
+### What is left, in order
+
+**1. Rows 1, 2 and 4 have never run against the current code.** This is the
+whole remaining gap to closing the phase, and it is now a matter of *running*
+rather than of finding defects. The criterion is >= 3 of 4.
+
+* Row 1 — simple FastAPI + SQLite CRUD
+* Row 2 — FastAPI + a plain HTML/JS frontend (exercises `web_assets` and
+  `static_smoke`, neither of which row 3 touches)
+* Row 4 — a CLI (exercises `cli_smoke`; `route_presence`, `dead_events`,
+  `await_sync` should all be `not_applicable`, and that is worth confirming
+  rather than assuming)
+
+Budget: ~130K per row, so roughly a full day's quota for all three.
+
+**2. `generated_tests` fails on essentially every build.** Row 7 passed with it
+failing, because §4.26 routes it to manual when something executed the artifact —
+which is correct, and also means the shipped test suite is reliably broken. It
+has never been the subject of a repair channel. Worth measuring before building
+one: `run_generated_tests` over the corpus, and ask whether the failures are
+test defects or source defects (`tools/test_blame.py` exists for exactly this).
+
+**3. The repair-guard contract.** `accept_generated_fix` has refused a CORRECT
+repair four times, each patched with its own escape hatch. Give each channel an
+explicit contract — what it may add, what it may remove — instead of a global
+rule plus a growing list of exceptions. See
+[[a-guard-can-block-the-correct-repair]].
+
+**4. Still open, unchanged.** One harmed file
+(`ai_pdf_reader/backend/search.py`, a flattened import colliding with a root
+`ocr/` package), recorded in `repair_baseline.json`. A plain-JS frontend is never
+executed. `node_frontend` has no executing verifier.
+
+### The shape of the last four rows
+
+| run | endpoints | what it cost to learn |
+|---|---|---|
+| `e3894a9e` | 0 routes | routers in an `on_event` a lifespan disables → `dead_events` |
+| `9733027d` | 0 routes | routers declared, no handlers → `route_presence` |
+| `51d80952` | 0 routes | router modules never written → route repair made to land |
+| `78097ea4` | 3/22 | a call arity mismatch AND an await on a `def` → `call_arity`, `await_sync` |
+| `1134f369` | **21/21** | — |
+
+Five defect classes, each found by measuring one build rather than reasoning
+about it, and none of them visible at import time.
 
 ---
 

@@ -1,45 +1,93 @@
 # Session Progress — start here
 
 **Last session: 2026-09-06 (Phase 23 — the thirteenth session).**
-`test_phase23.py` is **995/995**. The fifth row ran. Every check fired correctly,
-including two that had never run live — and the row is `unusable` anyway. The
-phase does **not** close.
+`test_phase23.py` is **1029/1029**. Four rows ran. The last one is the **first
+row in this project's history to PASS its own criterion**: `1134f369`,
+`done_with_context`, **21/21 routes responding**, all six §B2 assertions green,
+`driver verdict: PASS`.
 
-> ## ▶ Next session: the repair is the blocker now, not the checks
+**The phase still does not close, and the reason is not a defect.** The criterion
+is >= 3 of 4 rows, and only row 3 has run against this code.
+
+> ## ▶ Next session: run rows 1, 2 and 4
 >
-> **This is the finding to carry.** Five rows, none passing. But the checks now
-> catch the failure reliably and it is the REPAIRS that do not land. Three
-> separate findings this session were repairs that were correct and were thrown
-> away or cut short. Two are closed; the third is the next job.
+> **This is now a matter of running, not of finding defects.** Five defect
+> classes were found and closed across four rows; the checks catch every failure
+> mode seen so far and none of them fires on a working build.
 >
-> **1. Make the route repair land (no quota until you test it live).**
-> `_repair_missing_routes` fired on row 5, wrote handlers, and they broke the
-> import check — so the guard restored the original, correctly. It now logs the
-> trimmed stderr, which row 5 did not, so the next run will say WHY. Read that
-> first; do not guess. The likely shapes are a schema name that does not exist
-> or an import the file does not have.
->
-> Consider a second attempt that feeds the import error back, the way
-> `_debug_file` does for ordinary failures — one retry with the error is cheap
-> and the current code gives each router exactly one shot.
->
-> **2. Then the guard contract (§0.-12).** `accept_generated_fix` has refused a
-> **correct** repair four times, each patched with its own escape hatch. Give
-> each channel an explicit contract — what it may add, what it may remove —
-> instead of a global rule plus a growing list of exceptions.
->
-> **3. Then a row.** `tools/assert_row.py <FULL-UUID> <log>` — the full UUID,
-> not the 8-char prefix the log prints; get it from `GET /projects/`.
+> **Quota: ~1 day.** Three rows at ~130K each. Check with
+> `run_live_matrix.py --dry-run`, which is the authority, and note the ledger
+> under-reports by ~51K.
 >
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
 > venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
 > venv/Scripts/python.exe run_live_matrix.py --dry-run
-> venv/Scripts/python.exe run_live_matrix.py --rows 3
+> venv/Scripts/python.exe run_live_matrix.py --rows 1,2,4
+> venv/Scripts/python.exe tools/assert_row.py <FULL-UUID> row.log     # per row
 > ```
 >
-> Full detail: `PHASE23_HANDOFF.md` §0.-15 (this row, and the regression it
-> caught), §0.-12 (the guard question).
+> **What each row exercises that row 3 does not.** Row 2 is the only one with a
+> frontend (`web_assets`, `static_smoke`); row 4 is the only CLI (`cli_smoke`,
+> and `route_presence`/`dead_events`/`await_sync` should all report
+> `not_applicable` — confirm that rather than assume it). Row 1 is the simple
+> shape and should be the cheapest pass.
+>
+> **Then, if a row still fails:** `generated_tests` fails on essentially every
+> build and has never had a repair channel. Measure before building one —
+> `tools/test_blame.py` exists to say whether the failures are test defects or
+> source defects. And the repair-guard contract (§0.-17) is the standing
+> structural item.
+>
+> Full detail: `PHASE23_HANDOFF.md` §0.-16 (both rows), §0.-17 (the decisions
+> taken, and what remains).
+
+## §0.-4f Seven rows, and what each one cost to learn
+
+| run | outcome | endpoints | the defect it exposed |
+|---|---|---|---|
+| `d1b98d57` | `done_with_context` | 1/22 | 23 undefined service functions → `module_ref` repair targets |
+| `c2d4a4d4` | `done_with_context` | 13/22 | a model field never declared; 2 tables never created |
+| `e3894a9e` | **`unusable`** | 0 routes | routers in an `on_event` a `lifespan` disables → `dead_events` |
+| `9733027d` | **`unusable`** | 0 routes | routers declared and wired, no handlers → `route_presence` |
+| `51d80952` | **`unusable`** | 0 routes | the `routers/` package held only `__init__.py`; route repair made to land |
+| `78097ea4` | `done_with_context` | 3/22 | a call arity mismatch AND an await on a `def` → `call_arity`, `await_sync` |
+| `1134f369` | `done_with_context` | **21/21** | — **PASS** |
+
+**Five defect classes, none visible at import time, every one found by measuring
+a build rather than reasoning about it.**
+
+## §0.-4g What the passing row does and does not prove
+
+**It passed because the architect produced a working program.** `call_arity`
+checked one call and passed; `await_sync` was `not_applicable`. Both correctly
+stayed silent. Claiming the new checks caused the pass would be the same
+reasoning error this file keeps recording.
+
+**What IS established:** no check fires on a working build — the property whose
+failure costs an LLM call and tells a user their working build is broken — and
+the verdict is trustworthy in both directions now. `feature_coverage` can no
+longer read `verified, 6/6` against 0 routes, which it did on four builds.
+
+**What is NOT established:** anything about rows 1, 2 and 4. One row is not the
+criterion.
+
+## §0.-4h The measurement that mattered most
+
+Row 6 shipped with EVERY static check verified and 3 of 22 endpoints working.
+Fixing the two defects one at a time, on a clone:
+
+| fixed | endpoints |
+|---|---|
+| nothing | 3/22 |
+| the awaits only | 3/22 |
+| the one call only | 3/22 |
+| **both** | **17/22** |
+
+Neither alone moves it, which is why two remediation passes achieved +1. **A
+defect that does not improve the number when fixed alone is not thereby the
+wrong defect** — and the only way to know was to fix them one at a time and
+re-run the probe.
 
 ## §0.-4d Five rows, and the symptom that will not go away
 
