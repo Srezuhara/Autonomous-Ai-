@@ -577,6 +577,34 @@ def _accept_definitions(current: str, fragment: str, wanted: list) -> tuple:
     # reply containing the file re-defines what the file already defines.
     return True, "", text
 
+def _splice_routes(current: str, fragment: str, router: str) -> str:
+    """Put new handlers where they will actually be registered.
+
+    Appending them at end-of-file passes every static check and serves nothing.
+    `include_router` copies a router's routes AT THE MOMENT IT IS CALLED, so a
+    handler added below that line is never seen — the app boots clean and
+    declares zero routes, which is the very symptom this repair exists to fix.
+
+    Measured, not reasoned: appending five handlers to row 5's `main.py` moved
+    `route_presence` to VERIFIED and left `smoke_test_app` still reporting "app
+    loaded but declares no routes". A landing check that counts what you added
+    is satisfied by a change that adds nothing reachable.
+
+    So the fragment goes in BEFORE the first line that includes this router.
+    With no such line, end-of-file is correct and is what happens.
+    """
+    lines = current.rstrip().splitlines()
+    pattern = re.compile(
+        r"\.include_router\s*\(\s*" + re.escape(router) + r"\b")
+    cut = next((i for i, line in enumerate(lines) if pattern.search(line)), None)
+    block = fragment.strip("\n")
+    if cut is None:
+        return "\n".join(lines) + "\n\n\n" + block + "\n"
+    head, tail = lines[:cut], lines[cut:]
+    return ("\n".join(head).rstrip() + "\n\n\n" + block + "\n\n\n"
+            + "\n".join(tail).rstrip() + "\n")
+
+
 def _accept_routes(current: str, fragment: str) -> tuple:
     """
     Should this fragment of route handlers be appended? `(accept, why_not, text)`.
@@ -2264,6 +2292,78 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             f"{len(added_total)}/{len(wanted)} name(s)")
         return True
 
+    def _importable_names(self, file_path: str, per_module: int = 60) -> str:
+        """Every top-level name the sibling modules of `file_path` export.
+
+        `_scan_project_structure` truncates to the first four names of the first
+        thirty lines, which is right for a general orientation map and fatal
+        here. Measured on a clone of row 5's build: the model was shown
+        `services.py -> exports: create_supplier, get_supplier, list_suppliers`
+        — three of twenty-five — found no session dependency in the list, and
+        invented `get_db`. The repair then died on
+        `ImportError: cannot import name 'get_db' from 'services'`.
+
+        A handler cannot be written without knowing what it may call, so this
+        prompt gets the full list. Tests are excluded: importing a test module
+        from the application is never the answer.
+        """
+        try:
+            base = Path(config.OUTPUT_DIR)
+            target = (base / file_path).resolve()
+            folder = target.parent
+        except Exception:
+            return ""
+
+        lines: list[str] = []
+        try:
+            siblings = sorted(folder.glob("*.py"))
+        except Exception:
+            return ""
+
+        for path in siblings:
+            if path.name.startswith("test_") or path.name == "__init__.py":
+                continue
+            if path.resolve() == target:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                continue
+            # SIGNATURES, not names. §0.-2's lesson, which this repair walked
+            # straight into: "the name existing is not the call working". Given
+            # only names, the model wrote `list_suppliers()` for a function
+            # declared `list_suppliers(db, skip=0, limit=100)` and every route
+            # 500'd with "missing 1 required positional argument: 'db'". The
+            # parameters cost a few tokens and are the difference between a
+            # route that answers and one that raises.
+            names = []
+            for n in tree.body:
+                if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef)):
+                    continue
+                if n.name.startswith("_"):
+                    continue
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    try:
+                        names.append(f"{n.name}{ast.unparse(n.args).join(('(', ')'))}")
+                    except Exception:
+                        names.append(f"{n.name}(...)")
+                elif isinstance(n, ast.ClassDef):
+                    names.append(n.name)
+            if not names:
+                continue
+            shown = names[:per_module]
+            more = "" if len(names) <= per_module else f" (+{len(names) - per_module} more)"
+            lines.append(f"  from {path.stem} import "
+                         f"{', '.join(shown)}{more}")
+
+        if not lines:
+            return ""
+        return (
+            "EVERY NAME YOU MAY IMPORT, with the signature you must call it by.\n"
+            "Import the NAME only — the parameters are shown so that your call "
+            "matches the definition:\n" + "\n".join(lines))
+
     def _repair_missing_routes(
         self, file_path: str, result: FileDebugResult
     ) -> bool:
@@ -2320,25 +2420,54 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         before_total = count_routes(current)
 
         for n, router in enumerate(targets, 1):
+          # Two attempts, and the second is handed the error the first produced.
+          #
+          # Driven live at a clone of row 5's build three times, this failed
+          # three DIFFERENT one-line ways: a relative import; then a name that
+          # does not exist (`get_db` imported from `services`); then that same
+          # name used without being defined. Each was one prompt rule away, and
+          # predicting the fourth is a losing game. `_debug_file` already settles
+          # this class by handing the model its own traceback, and that
+          # generalises where another rule does not.
+          previous_error = ""
+          for attempt in (1, 2):
             fragment = self._generate_missing_routes_fix(
-                file_path, current, router)
+                file_path, current, router, previous_error)
             ok, why, cleaned = _accept_routes(current, fragment)
             if not ok:
                 logger.warning(
-                    f"  ⚠️  [{file_path}] Router {n}/{len(targets)} "
-                    f"({router}) rejected: {why}")
+                    f"  ⚠️  [{file_path}] Router {n}/{len(targets)} ({router}) "
+                    f"attempt {attempt} rejected: {why}")
+                previous_error = f"Your previous reply was rejected: {why}"
                 continue
 
-            candidate = current.rstrip() + "\n\n\n" + cleaned + "\n"
+            candidate = _splice_routes(current, cleaned, router)
             # The reply is only worth writing if it actually declares routes.
             if count_routes(candidate) <= count_routes(current):
                 logger.warning(
                     f"  ⚠️  [{file_path}] Router {n}/{len(targets)} ({router}) "
-                    f"added no route — discarding the batch")
+                    f"attempt {attempt} added no route — discarding it")
+                previous_error = (
+                    "Your previous reply declared no route at all. Every "
+                    "function you return must carry an @router decorator.")
                 continue
 
             create_file(file_path, candidate)
             self._preflight_fix(file_path)
+            # The handlers need the project's models and services, so the reply
+            # brings imports with it — and it writes them in the spelling the
+            # prompt forbids. Measured on a clone of row 5's build: the reply was
+            # good code and died on
+            #     from ..services import create_supplier
+            #     ImportError: attempted relative import beyond top-level package
+            # `_normalise_sibling_imports` exists for exactly this and already
+            # runs over every file in `run()`; this repair was calling only
+            # `_preflight_fix`, which does not touch leading-dot imports. Running
+            # it here costs nothing and is the difference between the repair
+            # landing and being restored.
+            for fix in self._normalise_sibling_imports([file_path]):
+                logger.info(f"  🔄 [{file_path}] {fix}")
+            self._rewrite_dotted_imports(file_path)
             self._inject_syspath(file_path)
 
             verify = run_python(file_path)
@@ -2349,17 +2478,23 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 # schema that does not exist, imported a missing module, or
                 # something else. The repair cannot be improved from a record
                 # that does not say what went wrong.
+                trimmed = self._trim_error(verify.stderr)
                 logger.warning(
                     f"  ↩️  [{file_path}] Router {n}/{len(targets)} ({router}) "
-                    f"broke the import check — restoring what worked: "
-                    f"{self._trim_error(verify.stderr)}")
+                    f"attempt {attempt} broke the import check — restoring what "
+                    f"worked: {trimmed}")
                 create_file(file_path, current)
+                previous_error = (
+                    "Your previous reply was appended to the file and it failed "
+                    "the import check, so it was discarded. Fix exactly this and "
+                    "return the handlers again:\n" + trimmed)
                 continue
 
             current = read_file(file_path)
             logger.info(
                 f"  ✅ [{file_path}] Router {n}/{len(targets)} ({router}): "
                 f"{count_routes(current)} route(s) declared so far")
+            break
 
         added = count_routes(current) - before_total
         if added <= 0:
@@ -2375,7 +2510,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         return True
 
     def _generate_missing_routes_fix(
-        self, file_path: str, current_code: str, router: str
+        self, file_path: str, current_code: str, router: str,
+        previous_error: str = ""
     ) -> str | None:
         """
         Ask for one router's handlers ONLY — never the file back.
@@ -2386,6 +2522,9 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         refuses.
         """
         project_map = self._scan_project_structure(file_path)
+        importable = self._importable_names(file_path)
+        if importable:
+            project_map = (project_map + "\n\n" + importable).strip()
         resource = re.sub(r"_?router$", "", router) or "resource"
         prompt = f"""This file builds an APIRouter called `{router}` and declares NO
 route handlers on it, so the application serves nothing and every requested
@@ -2408,6 +2547,19 @@ RULES:
 - Use the request/response models and the DB session dependency this project
   already defines — the map above names them. Import nothing that does not
   exist; a name this project does not have is a new failure, not a fix.
+- Put any import your handlers need at the TOP of what you return, and write it
+  in the FLAT SIBLING form: `from schemas import ProductCreate`, never
+  `from ..schemas import ...` and never `from backend.schemas import ...`.
+  Every file here is a sibling of every other and a relative import raises
+  "attempted relative import beyond top-level package" at import time — which is
+  what killed this exact repair on 2026-09-06.
+- Import ONLY names listed above. The list is complete, so a name that is not on
+  it does not exist, and importing it fails at import time and loses the whole
+  repair. This is not hypothetical: the attempt before this one invented
+  `get_db` and died on `cannot import name 'get_db' from 'services'`.
+- If the project has NO database session dependency in that list, define one in
+  what you return, above the handlers, and use it with `Depends(...)`. Do not
+  import a session helper that is not listed.
 - The parameters must match the models. A handler taking fields the schema does
   not declare is the same defect one level down.
 - No placeholders, no `pass`, no `TODO`, no `raise NotImplementedError`. A
@@ -2415,6 +2567,11 @@ RULES:
   reports as present.
 
 Return ONLY the handler functions, as plain Python."""
+        if previous_error:
+            prompt += f"""
+
+THE ATTEMPT BEFORE THIS ONE FAILED. Do not repeat it:
+{previous_error}"""
         logger.info(f"  🧠 LLM declaring routes for {router}: {file_path}")
         return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
 

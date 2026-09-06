@@ -8335,6 +8335,73 @@ check("a diagnostic that cannot read the body returns '' rather than raising",
       llm_client._error_body(_Explodes63()) == "",
       "a diagnostic that throws during error handling is worse than none")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# [64] Where a route handler is written decides whether it exists
+# ══════════════════════════════════════════════════════════════════════════════
+# The route repair landed five handlers, `route_presence` went VERIFIED, and the
+# running app still reported "app loaded but declares no routes".
+#
+# `include_router` copies a router's routes AT THE MOMENT IT IS CALLED. The
+# handlers were appended at end-of-file, below `app.include_router(router)`, so
+# nothing ever saw them. A landing check that counts what you added is satisfied
+# by a change that adds nothing reachable — which is the same false green the
+# whole `route_presence` check exists to prevent, reintroduced by its own repair.
+print("\n[64] a handler written after include_router does not exist")
+
+from agents.debugger import _splice_routes as _sr64     # noqa: E402
+from tools.route_presence_check import count_routes as _cr64   # noqa: E402
+
+_HANDLER64 = '@router.get("/x")\ndef x():\n    return []\n'
+_APP64 = ("from fastapi import FastAPI, APIRouter\n"
+          "router = APIRouter()\n"
+          "app = FastAPI()\n"
+          "app.include_router(router)\n")
+
+_spliced64 = _sr64(_APP64, _HANDLER64, "router")
+check("the handler is placed BEFORE the include_router call",
+      _spliced64.index("@router.get") < _spliced64.index("include_router"),
+      _spliced64)
+check("...and the file still parses",
+      bool(__import__("ast").parse(_spliced64)))
+check("...and the route is counted",
+      _cr64(_spliced64) == 1, str(_cr64(_spliced64)))
+check("...and include_router survives the move",
+      _spliced64.count("include_router") == 1)
+
+# Appending is correct when there is nothing to be after.
+_NOINC64 = "from fastapi import APIRouter\nrouter = APIRouter()\n"
+check("with no include_router, the handler is appended at the end",
+      _sr64(_NOINC64, _HANDLER64, "router").strip().endswith("return []"))
+
+# Only the router being repaired matters; another router's include is not a cut
+# point, or the handlers land above code they do not belong before.
+_TWO64 = ("router = APIRouter()\n"
+          "other = APIRouter()\n"
+          "app.include_router(other)\n"
+          "app.include_router(router)\n")
+_s64 = _sr64(_TWO64, _HANDLER64, "router")
+check("the cut is the include of THIS router, not of another one",
+      _s64.index("include_router(other)") < _s64.index("@router.get")
+      < _s64.index("include_router(router)"), _s64)
+
+# The whole point, stated as the property that was violated: every route
+# decorator must precede the line that registers its router.
+def _routes_before_include(source: str, router: str) -> bool:
+    import re as _re
+    inc = _re.search(r"\.include_router\s*\(\s*" + _re.escape(router) + r"\b", source)
+    if not inc:
+        return True
+    return all(m.start() < inc.start()
+               for m in _re.finditer(r"@" + _re.escape(router) + r"\.", source))
+
+
+check("appending at end-of-file is what produced the false green",
+      not _routes_before_include(
+          _APP64.rstrip() + "\n\n" + _HANDLER64, "router"),
+      "this is the shape the repair used to write")
+check("...and the splice produces the correct ordering",
+      _routes_before_include(_spliced64, "router"))
+
 shutil.rmtree(_W60, ignore_errors=True)
 
 
