@@ -8248,10 +8248,55 @@ check("a CLI is not caught by the web-API guard",
 # — it counts only 2xx calls.
 print("\n[63b] a 400 is a request problem, not a key problem")
 
-_llm63 = Path("llm_client.py").read_text(encoding="utf-8")
-check("a 4xx that is not 401/403/429 stops instead of rotating keys",
-      "rotating keys cannot help" in _llm63 and
-      "if 400 <= e.response.status_code < 500:" in _llm63)
+# The first fix here was WRONG, and row 5 disproved it within the hour. The
+# reasoning was "a 4xx is a problem with the request, so rotating keys cannot
+# help", so it gave up on the first 400. But the 400 this actually produces is
+# "Tool choice is none, but model called a tool" — the model emitting a tool call
+# that was never offered, which is stochastic. Row 4's log settles it: every one
+# of its four 400s was followed by a successful 200 on the next attempt.
+#
+# Giving up immediately cost row 5 an entire remediation pass, and did it twice
+# over: the `break` also returned None from a function whose callers were written
+# against "returns text or raises", and the None reached a regex three frames
+# away as "expected string or bytes-like object, got 'NoneType'".
+#
+# Asserted against the module's BEHAVIOUR, not its prose. The previous version of
+# this check tested for a comment string, and it kept passing after the code was
+# corrected because the new comment quotes the old wrong reasoning to explain it.
+# That is the §[41] rule — do not let an assertion match its own documentation.
+import llm_client as _lc63
+
+check("a client error is retried rather than abandoned on the first 400",
+      _lc63.GROQ_CLIENT_ERROR_MAX_RETRIES >= 1,
+      str(_lc63.GROQ_CLIENT_ERROR_MAX_RETRIES))
+check("...but the retry is BOUNDED, so it cannot walk the whole key pool",
+      _lc63.GROQ_CLIENT_ERROR_MAX_RETRIES < 8,
+      f"{_lc63.GROQ_CLIENT_ERROR_MAX_RETRIES} vs 8 keys")
+
+
+def _client_error_paths():
+    """The give-up branch, read off the source: does it raise or fall through?"""
+    import ast as _ast, inspect as _inspect
+    src = _inspect.getsource(_lc63)
+    tree = _ast.parse(src)
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.If):
+            continue
+        test = _ast.unparse(node.test)
+        if "client_errors" not in test or "MAX_RETRIES" not in test:
+            continue
+        kinds = {type(n).__name__ for n in _ast.walk(node) if
+                 isinstance(n, (_ast.Raise, _ast.Break, _ast.Continue))}
+        return kinds
+    return set()
+
+
+_paths63 = _client_error_paths()
+check("giving up RAISES rather than returning None implicitly",
+      "Raise" in _paths63, str(_paths63))
+check("...and does not `break` out of the loop, which returned None",
+      "Break" not in _paths63, str(_paths63),
+      )
 
 # And the reason was being discarded: httpx stringifies to "Client error '400
 # Bad Request' for url ...", which names the status and nothing else.

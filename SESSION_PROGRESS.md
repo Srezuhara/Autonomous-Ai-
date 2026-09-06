@@ -1,40 +1,94 @@
 # Session Progress — start here
 
-**Last session: 2026-09-05 (Phase 23 — the twelfth session).** `test_phase23.py`
-is **992/992**, up from 899. Two static checks shipped, one of them proven live;
-`feature_coverage` stopped certifying dead builds; one row run and failed. The
-phase does not close.
+**Last session: 2026-09-06 (Phase 23 — the thirteenth session).**
+`test_phase23.py` is **995/995**. The fifth row ran. Every check fired correctly,
+including two that had never run live — and the row is `unusable` anyway. The
+phase does **not** close.
 
-> ## ▶ Next session: one row, and the guard question
+> ## ▶ Next session: the repair is the blocker now, not the checks
 >
-> **Everything offline is done.** Four fixes landed this session and all four
-> are falsified against the corpus. What is left needs a row.
+> **This is the finding to carry.** Five rows, none passing. But the checks now
+> catch the failure reliably and it is the REPAIRS that do not land. Three
+> separate findings this session were repairs that were correct and were thrown
+> away or cut short. Two are closed; the third is the next job.
 >
-> **1. Run a row and grade it.** Quota after row 4: heavy **130,782**, fast
-> **150,902**, against a ~123K row and a 90,000 fast floor — spendable.
+> **1. Make the route repair land (no quota until you test it live).**
+> `_repair_missing_routes` fired on row 5, wrote handlers, and they broke the
+> import check — so the guard restored the original, correctly. It now logs the
+> trimmed stderr, which row 5 did not, so the next run will say WHY. Read that
+> first; do not guess. The likely shapes are a schema name that does not exist
+> or an import the file does not have.
+>
+> Consider a second attempt that feeds the import error back, the way
+> `_debug_file` does for ordinary failures — one retry with the error is cheap
+> and the current code gives each router exactly one shot.
+>
+> **2. Then the guard contract (§0.-12).** `accept_generated_fix` has refused a
+> **correct** repair four times, each patched with its own escape hatch. Give
+> each channel an explicit contract — what it may add, what it may remove —
+> instead of a global rule plus a growing list of exceptions.
+>
+> **3. Then a row.** `tools/assert_row.py <FULL-UUID> <log>` — the full UUID,
+> not the 8-char prefix the log prints; get it from `GET /projects/`.
 >
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
 > venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
 > venv/Scripts/python.exe run_live_matrix.py --dry-run
 > venv/Scripts/python.exe run_live_matrix.py --rows 3
-> venv/Scripts/python.exe tools/assert_row.py <FULL-UUID> row.log
 > ```
 >
-> `assert_row` needs the **full build UUID**, not the 8-char prefix the log
-> prints — get it from `GET /projects/`.
->
-> **What the row is testing.** `route_presence` and its append-based repair have
-> never run live. Three corpus builds fail the check; the repair has only been
-> driven at a clone with stubbed replies. Watch for `🛣️  Declaring routes on
-> N router(s)` in the log.
->
-> **2. Then the guard question (§0.-12), which is now the real blocker.**
-> `accept_generated_fix` has refused a **correct** repair four times. Every new
-> repair channel whose job is a shape the guard treats as damage hits the wall,
-> and each has been fixed with its own escape hatch. Four is enough: give each
-> channel an explicit contract — what it may add, what it may remove — instead
-> of a global rule plus a growing list of exceptions.
+> Full detail: `PHASE23_HANDOFF.md` §0.-15 (this row, and the regression it
+> caught), §0.-12 (the guard question).
+
+## §0.-4d Five rows, and the symptom that will not go away
+
+| run | architecture | outcome | cause |
+|---|---|---|---|
+| `d1b98d57` | single router, raw sqlite3 | `done_with_context`, 1/22 | 23 undefined service functions |
+| `c2d4a4d4` | multi-file, raw sqlite3 | `done_with_context`, 13/22 | a model field never declared; 2 tables never created |
+| `e3894a9e` | SQLAlchemy, `routers/` package | **`unusable`**, 0 routes | routers in an `on_event` a `lifespan` disables |
+| `9733027d` | SQLAlchemy, single `routes.py` | **`unusable`**, 0 routes | six routers declared and wired, **no handlers written** |
+| `51d80952` | SQLAlchemy, `routers/` package | **`unusable`**, 0 routes | the `routers/` package holds **only `__init__.py`** |
+
+**Zero routes, three consecutive rows, three unrelated causes.** No cause has
+ever recurred. The symptom has now recurred twice.
+
+**Every closed defect still holds.** `module_ref`, `schema_attr` and
+`dead_events` all verified on row 5; `sql_schema` correctly `not_applicable`.
+
+**The checks are no longer the gap.** On row 5 `route_presence` fired, named the
+file, and published a working repair target; `feature_coverage` returned NOT_RUN
+instead of the `verified, 6/6` it used to give a dead build. Both ran live for
+the first time and both were right.
+
+**The repairs are the gap.** The route repair fired
+(`🛣️  Declaring routes on 1 router(s)`), generated handlers, and they failed the
+import check — restored, correctly, but not fixed. Two other correct repairs
+were lost the same day: one to the guard, one to a regression below.
+
+## §0.-4e The regression the row caught, which this project introduced itself
+
+The twelfth session changed `llm_client` so a 4xx stops instead of rotating keys.
+The reasoning — *"a 4xx is a problem with the request, so rotating cannot help"* —
+is true of a malformed request and **false of the 400 this system produces**.
+
+The same commit's other half proved it. Logging the response body printed the
+reason for the first time: **"Tool choice is none, but model called a tool"** —
+the model emitting a tool call that was never offered, which is stochastic. Row
+4's log settles it: all four of its 400s recovered on the very next attempt.
+
+It cost row 5 a whole remediation pass, twice over — the `break` also returned
+`None` from a function whose callers expect "text or raises", and that `None`
+reached a regex three frames away.
+
+Fixed: a bounded retry (3), and giving up now raises with the server's reason.
+
+**And the test for it passed for the wrong reason.** It asserted a comment
+string, and the corrected code still contained that string — in a comment
+quoting the old reasoning to explain it. Rewritten to read the branch's control
+flow out of the AST. This is the "do not let an assertion match its own
+documentation" rule failing in the wild.
 
 ## §0.-4c What the twelfth session shipped, and what each was falsified against
 

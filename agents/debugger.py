@@ -2343,9 +2343,16 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
 
             verify = run_python(file_path)
             if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+                # Log WHY. Row 5's route repair fired, wrote handlers, broke the
+                # import and restored — and the log recorded only "Command
+                # failed (exit 1)", so nothing said whether the reply had named a
+                # schema that does not exist, imported a missing module, or
+                # something else. The repair cannot be improved from a record
+                # that does not say what went wrong.
                 logger.warning(
                     f"  ↩️  [{file_path}] Router {n}/{len(targets)} ({router}) "
-                    f"broke the import check — restoring what worked")
+                    f"broke the import check — restoring what worked: "
+                    f"{self._trim_error(verify.stderr)}")
                 create_file(file_path, current)
                 continue
 

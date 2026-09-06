@@ -59,6 +59,13 @@ MAX_DAILY_QUOTA_ROTATIONS_PER_CALL = int(
 )
 GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "900"))
 GROQ_RATE_LIMIT_MAX_RETRIES = int(os.getenv("GROQ_RATE_LIMIT_MAX_RETRIES", "20"))
+#: How many 4xx replies to retry before giving up on a single call.
+#: Groq returns a 400 for "Tool choice is none, but model called a tool" —
+#: a stochastic model-output failure that a retry clears, not a malformed
+#: request. Row 4 recovered from all four of its 400s on the next attempt;
+#: row 5 aborted a whole remediation pass when a first version of this gave
+#: up immediately. Bounded so recovery is kept without walking the pool.
+GROQ_CLIENT_ERROR_MAX_RETRIES = int(os.getenv("GROQ_CLIENT_ERROR_MAX_RETRIES", "3"))
 GROQ_TPM_SAFETY_TOKENS = int(os.getenv("GROQ_TPM_SAFETY_TOKENS", "800"))
 # The tokens-per-minute ceiling, covering prompt AND completion together, used
 # until a real `x-ratelimit-limit-tokens` header replaces it. Without a starting
@@ -1725,6 +1732,9 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
 
     tried_keys: set[str] = set()
     temporary_rate_retries = 0
+    #: 4xx replies seen for THIS call. Bounded so a stochastic 400 can recover
+    #: without the retry walking every key in the pool — see the handler below.
+    client_errors = 0
     model_lock = _get_model_lock(model)
     retry_key: Optional[str] = None
 
@@ -1916,21 +1926,47 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                 # being thrown away — only httpx's generic "Client error '400
                 # Bad Request'" reached the log, which says nothing actionable.
                 detail = _error_body(e.response)
-                # A 4xx that is not 401/403/429 is a problem with the REQUEST,
-                # not with this key. Falling through to `continue` rotated to
-                # the next key and re-sent the identical malformed request:
-                # row 4 (2026-09-05) burned four keys on four 400s for the same
-                # `routes.py` repair, and every one of them was doomed. Rotating
-                # cannot fix a request the server refuses to parse, and the
-                # retries spend real quota the ledger never records, because it
-                # only counts 2xx calls.
                 if 400 <= e.response.status_code < 500:
+                    # A bounded retry, and the bound is the whole point.
+                    #
+                    # The first version of this broke on the same day it was
+                    # written. The reasoning was "a 4xx is a problem with the
+                    # REQUEST, so rotating keys cannot help" — true of a
+                    # malformed request, and FALSE of the 400 this actually
+                    # produces. Row 5 logged it for the first time (because of
+                    # the `detail` above): "Tool choice is none, but model called
+                    # a tool" — the model emitted a tool call that was never
+                    # offered. That is the model being stochastic, not the
+                    # request being wrong, and row 4's log settles it: every one
+                    # of its four 400s was followed by a successful 200 on the
+                    # next attempt.
+                    #
+                    # So retrying is right and must stay. What was actually
+                    # wrong is that it retried WITHOUT LIMIT across all eight
+                    # keys, spending quota the ledger cannot see — it counts only
+                    # 2xx calls. Bounded, the recovery is kept and the waste is
+                    # not.
+                    client_errors += 1
+                    if client_errors > GROQ_CLIENT_ERROR_MAX_RETRIES:
+                        # RAISE, do not break. Falling out of this loop returns
+                        # None implicitly, and every caller here was written
+                        # against a function that either returns text or raises
+                        # — exhausting the key pool has always raised. A first
+                        # version of this used `break`, and the None reached a
+                        # regex in the debugger: row 5 lost a whole remediation
+                        # pass to "expected string or bytes-like object, got
+                        # 'NoneType'", with the real cause three frames away.
+                        raise RuntimeError(
+                            f"Groq [{model}] returned HTTP "
+                            f"{e.response.status_code} on {client_errors} "
+                            f"consecutive attempts: {detail}"
+                        )
                     logger.warning(
-                        f"Groq HTTP {e.response.status_code} on [{model}] — the "
-                        f"REQUEST was rejected, so rotating keys cannot help: "
-                        f"{detail}"
+                        f"Groq HTTP {e.response.status_code} on [{model}] "
+                        f"(attempt {client_errors}/"
+                        f"{GROQ_CLIENT_ERROR_MAX_RETRIES}), retrying: {detail}"
                     )
-                    break
+                    continue
                 logger.warning(
                     f"Groq HTTP error ({e.response.status_code}) on key "
                     f"...{key[-8:]}: {detail or e}"

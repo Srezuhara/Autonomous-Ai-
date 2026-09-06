@@ -1,5 +1,13 @@
 # Phase 23 Handoff
 
+*Updated 2026-09-06 at the end of the THIRTEENTH session: the fifth row ran.
+Every check fired correctly, including two that had never run live — and the row
+is `unusable` anyway, with zero routes for a THIRD consecutive time from a third
+unrelated cause. The row also caught a regression the twelfth session had
+introduced: a 4xx that stopped retrying, when the 400 this system produces is
+stochastic and was recovering. The blocker has moved from the checks to the
+repairs. Earlier notes follow.*
+
 *Updated 2026-09-05 at the end of the TWELFTH session: the fourth instance of
 the misaimed-repair pattern is closed and proven live — `dead_events` reads
 `verified` on the row that followed it. The row still failed: zero routes for a
@@ -32,6 +40,121 @@ current state. This file is the per-defect detail behind it, and
 
 Full evidence for the earlier sessions: **`PHASE23_LIVE_VALIDATION.md`**.
 Original plan: **`PHASE23_PLAN.md`** (Phases B and C are still untouched).
+
+---
+
+## 0.-15 The fifth row: every check fired, the phase still does not close
+
+*Thirteenth session, 2026-09-06. `route_presence` and `feature_coverage`'s new
+verdict both ran live for the first time and both were right. The row is
+`unusable` anyway — **zero routes for a third consecutive row, from a third
+unrelated cause**. And the row caught a regression this session had introduced
+the day before.*
+
+### The row
+
+`51d80952`, `unusable`, 704.5s, **96,304 tokens**. Scores: debug 11/11,
+review 7.2, test 9/10. `tools/assert_row.py`: 10 passed, 3 failed.
+
+| check | result |
+|---|---|
+| `route_presence` | **failed** — "0 route(s) declared across 17 python file(s)". *First live run.* |
+| `feature_coverage` | **not_run** — "a web API that declares no routes… matching words would prove nothing". *First live run of the new verdict.* |
+| `dead_events` | verified |
+| `module_ref` | verified — 16 modules |
+| `schema_attr` | verified — 15 models |
+| `sql_schema` | `not_applicable` — correct |
+| `runtime_smoke` | **failed** — "boots and declares 0 routes" |
+
+The three §B2 failures: the terminal state, `feature_coverage` being NOT_RUN,
+and "at least one check executed the artifact". The second is **the new verdict
+working as designed** — NOT_RUN is a hole, it is supposed to fail a row, and it
+replaced a `verified` that was certifying a dead build.
+
+### The third cause of the same symptom
+
+| run | cause of 0 routes |
+|---|---|
+| `e3894a9e` | routers registered in an `on_event` a `lifespan` disables |
+| `9733027d` | six routers declared and wired, no handlers written |
+| `51d80952` | a `routers/` package containing **only `__init__.py`** — the modules were never written, and `main.py` holds a bare `router = APIRouter()` |
+
+Three rows, three causes, one symptom. This is the case for the symptom-level
+check made twice over: `route_presence` caught this one having been written from
+the previous one, which is exactly what a cause-specific check cannot do.
+
+### The repair fired live, and did not land
+
+`🛣️  Declaring routes on 1 router(s): router` — the first time that channel has
+run outside a stubbed clone. It generated handlers, grew `main.py` from 922 to
+2,754 chars, the import check failed, and the guard restored the original. The
+build was not made worse, and it was not fixed.
+
+**And the log could not say why.** `code_executor` recorded "Command failed
+(exit 1)" and `_repair_missing_routes` discarded `verify.stderr`, so nothing
+recorded whether the reply named a schema that does not exist, imported a
+missing module, or something else. Fixed — it now logs the trimmed error. This
+is the same defect as the discarded 400 body below, one layer up: **a repair
+that cannot say why it failed cannot be improved.**
+
+### The regression this session introduced, and the row that caught it
+
+§0.-14 changed `llm_client` so a 4xx stops instead of rotating keys, reasoning
+that *"a 4xx is a problem with the REQUEST, so rotating keys cannot help"*. That
+reasoning is true of a malformed request and **false of the 400 this system
+actually produces.**
+
+The same commit's other half is what exposed it. Logging the response body
+printed the reason for the first time:
+
+> `Groq HTTP 400 … Tool choice is none, but model called a tool`
+
+That is the model emitting a tool call that was never offered — **stochastic**,
+not malformed. Row 4's log settles it: every one of its four 400s was followed
+by a successful 200 on the next attempt. Rotating was recovering.
+
+It failed twice over:
+
+1. **Giving up immediately** removed a working retry.
+2. **`break` returned `None`** from a function whose callers were written
+   against "returns text or raises" — exhausting the key pool has always raised.
+   The `None` reached a regex three frames away, and row 5 lost an entire
+   remediation pass to `expected string or bytes-like object, got 'NoneType'`,
+   with the real cause invisible.
+
+Fixed: a **bounded** retry (`GROQ_CLIENT_ERROR_MAX_RETRIES = 3`), which keeps the
+recovery without walking all eight keys, and giving up now **raises** with the
+server's reason in the message.
+
+### The test that passed for the wrong reason
+
+The check written for the original fix asserted `"rotating keys cannot help" in
+llm_client.py`. After the behaviour was corrected it **still passed** — because
+the new comment quotes the old wrong reasoning in order to explain it.
+
+That is §[41]'s rule breaking in the wild: *do not let an assertion match its own
+documentation*. Rewritten to assert behaviour — `GROQ_CLIENT_ERROR_MAX_RETRIES`
+is between 1 and 8, and the give-up branch's control flow, read out of the AST,
+contains `Raise` and not `Break`.
+
+### Falsification
+
+* `test_phase23.py`: **995/995**, up from 992.
+* Corpus, 50 changes and all explainable: 47 are `route_presence` appearing,
+  1 is row 5's build being new, and **2 are the intended
+  `feature_coverage: verified -> not_run`**. No other check moved on any project.
+
+### Where the phase stands
+
+**Not closable.** Five rows, none passing. The criterion is >= 3 of 4 rows at
+`done`/`done_with_context` with at least one check having executed the artifact.
+
+But the blocker has moved, and that is worth stating plainly. **The checks now
+catch this reliably; the repairs are what do not land.** Three of this session's
+findings were repairs that were correct and were thrown away or cut short — the
+guard refusing them (§0.-12), a 400 aborting a pass, and route handlers failing
+their import with no logged reason. The first two are closed. The third now
+logs enough for the next session to close it.
 
 ---
 
