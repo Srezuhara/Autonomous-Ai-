@@ -1920,18 +1920,21 @@ check("the ceiling is llm_client's, and it is always known",
 # without the budget is the same bug again, so count the call sites.
 _dbg_src = Path("agents/debugger.py").read_text(encoding="utf-8")
 check("every rewrite call passes a sized budget",
-      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 7
+      _dbg_src.count("self.think(prompt, max_tokens=_rewrite_budget(self, current_code))") == 8
       and "self.think(prompt, max_tokens=_rewrite_budget(self, block.source))" in _dbg_src
       and "self.think(prompt)\n" not in _dbg_src,
       f"whole-file={_dbg_src.count('_rewrite_budget(self, current_code)')} "
       f"block={_dbg_src.count('_rewrite_budget(self, block.source)')}")
 # The count above is brittle on purpose — it fails when a prompt is added — but
-# a count alone cannot say WHY, so assert the property too. Seven whole-file
-# rewrites: the import fix, the runtime fix, the targeted retry's fallback, the
-# missing-field fix, the missing-table fix and the dead-event fix. The one added
-# on 2026-09-05 moves a startup handler's body into the lifespan, which is a
-# whole-file edit for the same reason the field repair is — the code has to land
-# INSIDE an existing function. The definition repair is the one
+# a count alone cannot say WHY, so assert the property too. Eight prompts now
+# size their budget to the file: the import fix, the runtime fix, the targeted
+# retry's fallback, the missing-field fix, the missing-table fix, the dead-event
+# fix, and the route fix. The dead-event one moves a startup handler's body into
+# the lifespan — a whole-file edit for the same reason the field repair is, the
+# code has to land INSIDE an existing function. The route fix APPENDS like the
+# definition repair, but still sizes its budget to the file it was handed,
+# because the handlers it writes have to match that file's models and session
+# dependency. The definition repair is the one
 # deliberate exception: it APPENDS, so its budget is sized to the names it must
 # add rather than to the file it was handed, and sizing that one to the current
 # text would cap the reply at roughly what already exists.
@@ -7977,6 +7980,315 @@ check("...and an unparseable rewrite is never read as zero lifespans",
 _dbg61b = Path("agents/debugger.py").read_text(encoding="utf-8")
 check("the repair restores the original when the lifespan went missing",
       "removed the lifespan" in _dbg61b and "count_lifespan_apps" in _dbg61b)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [62] A web API that declares no route at all
+# ══════════════════════════════════════════════════════════════════════════════
+# Two consecutive rows shipped zero routes from causes with nothing in common:
+# `e3894a9e` registered its routers inside an `on_event` a lifespan disables,
+# and `9733027d` declared six `APIRouter()` objects, wired five of them, and
+# wrote no handler anywhere. `dead_events` was written from the first and
+# correctly stayed silent on the second.
+#
+# So this checks the SYMPTOM. Every check on this project was written from the
+# one row that produced it; the repairs generalise across architectures and the
+# checks do not, because nothing generates the next cause.
+print("\n[62] a web API that declares no route at all")
+
+from tools.route_presence_check import (          # noqa: E402
+    scan_source as _ss62, count_routes as _cr62, router_names as _rn62,
+    check_route_presence as _crp62, check_project_routes as _cpr62)
+
+check("a decorated handler is a route",
+      _cr62('@router.get("/x")\ndef f(): pass\n') == 1)
+check("...whatever the method",
+      _cr62('@app.post("/a")\ndef a(): pass\n@app.delete("/b")\ndef b(): pass\n') == 2)
+check("...including an async handler",
+      _cr62('@router.put("/x")\nasync def f(): pass\n') == 1)
+check("...and a websocket route",
+      _cr62('@app.websocket("/ws")\nasync def w(s): pass\n') == 1)
+check("a route registered without a decorator counts too",
+      _cr62('app.add_api_route("/x", handler)\n') == 1,
+      "a project registering routes in a loop declares routes this cannot "
+      "enumerate — but it can see that it declares some, and that is the "
+      "only question being asked")
+check("a bare router with no handlers declares nothing",
+      _cr62("from fastapi import APIRouter\nr = APIRouter()\n") == 0)
+check("...and neither does an unparseable file",
+      _cr62("def (((") == 0)
+check("the routers a repair could hang handlers on are named",
+      _rn62("from fastapi import APIRouter\n"
+            "a_router = APIRouter()\nb_router = APIRouter()\n")
+      == ["a_router", "b_router"],
+      str(_rn62("a_router = APIRouter()\nb_router = APIRouter()\n")))
+
+# ── The defect row 4 shipped, exactly as it shipped it ───────────────────────
+_ROW4 = '''from fastapi import APIRouter
+
+# Define placeholder routers for each resource
+suppliers_router = APIRouter()
+products_router = APIRouter()
+
+router = APIRouter()
+router.include_router(suppliers_router, prefix="/suppliers", tags=["Suppliers"])
+router.include_router(products_router, prefix="/products", tags=["Products"])
+
+__all__ = ["router"]
+'''
+check("row 4's routes.py declares no route",
+      _cr62(_ROW4) == 0, str(_cr62(_ROW4)))
+check("...and every router in it is named for the repair",
+      _rn62(_ROW4) == ["suppliers_router", "products_router", "router"],
+      str(_rn62(_ROW4)))
+
+_mk60("app62", {
+    "main.py": ("from fastapi import FastAPI\nfrom routes import router\n"
+                "app = FastAPI()\napp.include_router(router)\n"),
+    "routes.py": _ROW4,
+    "tests/test_routes.py": '@router.get("/x")\ndef t(): pass\n',
+})
+_o62 = _under60(_crp62, "app62")
+_t62 = dict(_o62.evidence.get("repair_targets") or {})
+
+check("a web API declaring no route FAILS",
+      _o62.status.name == "FAILED", str(_o62.status))
+check("...and is fatal, because it answers 404 to everything it advertises",
+      _o62.evidence.get("fatal") is True)
+check("...and a route declared in a TEST does not rescue it",
+      _o62.evidence.get("routes_in_tests") == 1,
+      str(_o62.evidence.get("routes_in_tests")))
+check("...and the repair is aimed where the bare routers are, not at main.py",
+      list(_t62) == ["app62/routes.py"], str(list(_t62)))
+
+# Picking the shallowest path would have chosen main.py and written CRUD
+# handlers into the file that assembles the app. That was the first version.
+check("...which is NOT the file that builds the FastAPI() app",
+      "app62/main.py" not in _t62, str(list(_t62)))
+
+# ── The guards ───────────────────────────────────────────────────────────────
+_mk60("app62ok", {
+    "main.py": ("from fastapi import FastAPI\napp = FastAPI()\n"
+                '@app.get("/health")\ndef health(): return {"ok": True}\n'),
+})
+check("a web API with one route passes",
+      _under60(_crp62, "app62ok").status.name == "VERIFIED",
+      str(_under60(_crp62, "app62ok").status))
+
+_mk60("app62cli", {
+    "cli.py": ("import argparse\n\ndef main():\n"
+               "    p = argparse.ArgumentParser()\n    p.parse_args()\n"
+               "if __name__ == '__main__':\n    main()\n"),
+})
+check("a CLI is never judged by this — it is not expected to serve routes",
+      _under60(_crp62, "app62cli").status.name == "NOT_APPLICABLE",
+      str(_under60(_crp62, "app62cli").status))
+
+_mk60("app62dyn", {
+    "main.py": ("from fastapi import FastAPI\napp = FastAPI()\n"
+                "TABLE = [('/a', a), ('/b', b)]\n"
+                "for path, fn in TABLE:\n    app.add_api_route(path, fn)\n"),
+})
+check("routes registered in a loop are seen, so the check stays silent",
+      _under60(_crp62, "app62dyn").status.name == "VERIFIED",
+      str(_under60(_crp62, "app62dyn").status))
+
+# The row-3 SHAPE is the case that proves this check does NOT replace
+# `dead_events`, and vice versa. Its handlers ARE declared, in a router module;
+# they are simply never registered, because the `on_event` that would have
+# included them never runs. So this check passes it and `dead_events` fails it.
+# Two checks, two different questions, one symptom — which is exactly why the
+# handoff's first draft, claiming this check "catches both rows", was wrong.
+_ROW3_MAIN = '\n'.join([
+    "from fastapi import FastAPI",
+    "from contextlib import asynccontextmanager",
+    "@asynccontextmanager",
+    "async def lifespan(app):",
+    "    yield",
+    "app = FastAPI(lifespan=lifespan)",
+    '@app.on_event("startup")',
+    "def include_routers():",
+    "    app.include_router(product.router)",
+    "",
+])
+_ROW3_ROUTER = '\n'.join([
+    "from fastapi import APIRouter",
+    "router = APIRouter()",
+    '@router.get("/")',
+    "def list_products(): return []",
+    '@router.post("/")',
+    "def create_product(p): return p",
+    "",
+])
+_mk60("app62row3", {
+    "main.py": _ROW3_MAIN,
+    "routers/product.py": _ROW3_ROUTER,
+})
+check("row 3's shape PASSES this check — its handlers are declared",
+      _under60(_crp62, "app62row3").status.name == "VERIFIED",
+      str(_under60(_crp62, "app62row3").detail))
+check("...and `dead_events` is the check that catches it",
+      _under60(_cde61, "app62row3").status.name == "FAILED",
+      str(_under60(_cde61, "app62row3").status))
+check("...so neither check replaces the other; they are complementary",
+      _under60(_crp62, "app62row3").status.name == "VERIFIED"
+      and _under60(_crp62, "app62").status.name == "FAILED"
+      and _under60(_cde61, "app62").status.name in ("VERIFIED", "NOT_APPLICABLE"))
+
+# ── The repair, and the two guards found by driving it at a clone ────────────
+from agents.debugger import _accept_routes as _ar62      # noqa: E402
+
+_FRAG_OK = '@suppliers_router.get("/")\ndef list_suppliers():\n    return []\n'
+check("a fragment of real handlers is accepted",
+      _ar62(_ROW4, _FRAG_OK)[0], _ar62(_ROW4, _FRAG_OK)[1])
+check("...and a markdown fence is stripped rather than written into the file",
+      _ar62(_ROW4, "```python\n" + _FRAG_OK + "```")[0])
+check("a reply that defines helpers but declares no route is refused",
+      not _ar62(_ROW4, "def helper():\n    return 1\n")[0],
+      _ar62(_ROW4, "def helper():\n    return 1\n")[1])
+check("...and so is one that does not parse",
+      not _ar62(_ROW4, "def (((")[0])
+check("...and an empty reply",
+      not _ar62(_ROW4, "")[0])
+
+# The one that mattered. Row 4's routes.py defines NO functions — it is nothing
+# but `x = APIRouter()` assignments — so a clash rule that looks only at
+# def/class had nothing to clash on, and a reply re-emitting the whole file plus
+# one handler was ACCEPTED. Appending it rebinds every router name; the
+# `include_router` calls above have already run against the OLD objects, so the
+# new handlers hang off routers nothing includes. `count_routes` then reads 1
+# and the check goes green over an app that still serves nothing.
+_REWRITE62 = _ROW4 + "\n" + _FRAG_OK
+check("a reply that re-emits the whole file is refused",
+      not _ar62(_ROW4, _REWRITE62)[0], _ar62(_ROW4, _REWRITE62)[1])
+check("...and the reason names a rebound ROUTER, not a redefined function",
+      "router" in _ar62(_ROW4, _REWRITE62)[1],
+      _ar62(_ROW4, _REWRITE62)[1])
+
+# ── Wired in, not just written ───────────────────────────────────────────────
+_pipe62 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+_corp62 = Path("tools/verify_corpus.py").read_text(encoding="utf-8")
+_dbg62 = Path("agents/debugger.py").read_text(encoding="utf-8")
+check("the check runs during a build",
+      '("route_presence", check_route_presence)' in _pipe62)
+check("...and its repair targets are read off the outcome",
+      'outcome.check == "route_presence"' in _pipe62)
+check("...and reach the debugger through their own channel",
+      "missing_routes=missing_routes," in _pipe62
+      and "missing_routes: dict | None = None" in _dbg62)
+check("...and are re-asked after the repair pass",
+      "route_presence re-check skipped" in _pipe62)
+check("...and the targets are cleared before every build",
+      "self._route_targets = {}" in _pipe62)
+check("...and the corpus harness runs it too",
+      '("route_presence",  check_route_presence)' in _corp62)
+check("the repair appends per router rather than rewriting the file",
+      "_repair_missing_routes" in _dbg62
+      and "_accept_routes(current, fragment)" in _dbg62)
+check("...and a parent router that only aggregates gets no handlers of its own",
+      "aggregators" in _dbg62)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [63] The two checks that vouched for dead builds, and a 400 that burned keys
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n[63] feature_coverage stops certifying an app with no routes")
+
+# `feature_coverage` read `verified, 6/6, "0 route(s)"` on FOUR builds that
+# `runtime_smoke` independently found to serve nothing: rows 3 and 4
+# (`e3894a9e`, `9733027d`) and corpus builds `9600d11d` and `e6a1da32`. It
+# printed the disproof inside its own detail string. It is the first defect in
+# this phase to recur, and the worst kind — a check certifying a dead build.
+from tools.feature_coverage import check_feature_coverage as _cfc63  # noqa: E402
+
+_FEATURES63 = {"features": ["CRUD for Supplier", "low stock report"]}
+
+_mk60("app63dead", {
+    "main.py": _ROW3_MAIN.replace(
+        '@app.on_event("startup")', "# no handlers anywhere").replace(
+        "def include_routers():", "").replace(
+        "    app.include_router(product.router)", ""),
+    "routes.py": _ROW4,
+})
+_o63 = _under60(lambda r: _cfc63(r, _FEATURES63), "app63dead")
+check("a web API with no routes is NOT verified by feature_coverage",
+      _o63.status.name != "VERIFIED", str(_o63.status))
+check("...it is NOT_RUN — the check could not speak, which is not a pass",
+      _o63.status.name == "NOT_RUN", str(_o63.status))
+check("...and it says why, in a sentence an operator can act on",
+      "declares no routes" in _o63.detail, _o63.detail)
+
+# NOT_RUN rather than FAILED is deliberate: `route_presence` already reports
+# this defect, and filing one fact twice under two check names is how a clean
+# build acquires phantom findings.
+check("...and files no finding, because route_presence already reports it",
+      not _o63.findings, str(_o63.findings))
+
+_mk60("app63live", {
+    "main.py": ("from fastapi import FastAPI\napp = FastAPI()\n"
+                '@app.get("/suppliers")\ndef list_suppliers(): return []\n'
+                '@app.get("/reports/low-stock")\ndef low_stock(): return []\n'),
+})
+_o63b = _under60(lambda r: _cfc63(r, _FEATURES63), "app63live")
+check("a web API that DOES declare routes is judged normally",
+      _o63b.status.name in ("VERIFIED", "FAILED"), str(_o63b.status))
+check("...and the guard is keyed on routes, not on the check being disabled",
+      "declares no routes" not in (_o63b.detail or ""), _o63b.detail)
+
+# A CLI has no routes and never should; the guard must not fire on it.
+_o63c = _under60(lambda r: _cfc63(r, {"features": ["rename files in bulk"]}),
+                 "app62cli")
+check("a CLI is not caught by the web-API guard",
+      _o63c.status.name != "NOT_RUN", str(_o63c.status))
+
+# ── The 400 that rotated every key ───────────────────────────────────────────
+# Row 4 produced four HTTP 400s on four DIFFERENT keys, all for the same
+# `routes.py` repair. `llm_client` handled 429 and 401/403 explicitly and let
+# everything else fall through to `continue`, which rotates to the next key and
+# re-sends the identical malformed request. Rotating cannot fix a request the
+# server refuses to parse, and each retry spends quota the ledger never records
+# — it counts only 2xx calls.
+print("\n[63b] a 400 is a request problem, not a key problem")
+
+_llm63 = Path("llm_client.py").read_text(encoding="utf-8")
+check("a 4xx that is not 401/403/429 stops instead of rotating keys",
+      "rotating keys cannot help" in _llm63 and
+      "if 400 <= e.response.status_code < 500:" in _llm63)
+
+# And the reason was being discarded: httpx stringifies to "Client error '400
+# Bad Request' for url ...", which names the status and nothing else.
+
+
+class _Resp63:
+    def __init__(self, payload=None, text=""):
+        self._payload, self.text = payload, text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+check("the server's own message is read out of the response body",
+      llm_client._error_body(
+          _Resp63({"error": {"message": "model has been decommissioned"}}))
+      == "model has been decommissioned")
+check("...falling back to the raw text when the body is not JSON",
+      llm_client._error_body(_Resp63(None, "  upstream exploded  "))
+      == "upstream exploded")
+check("...and a string-valued error field is handled too",
+      llm_client._error_body(_Resp63({"error": "bad request"})) == "bad request")
+check("...and it is capped, so a huge body cannot flood the log",
+      len(llm_client._error_body(_Resp63(None, "x" * 5000))) == 400)
+
+
+class _Explodes63:
+    def json(self): raise ValueError("no")
+    @property
+    def text(self): raise RuntimeError("boom")
+
+
+check("a diagnostic that cannot read the body returns '' rather than raising",
+      llm_client._error_body(_Explodes63()) == "",
+      "a diagnostic that throws during error handling is worse than none")
 
 shutil.rmtree(_W60, ignore_errors=True)
 

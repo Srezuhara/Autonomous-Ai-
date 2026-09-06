@@ -1496,6 +1496,41 @@ def get_rate_limit_status() -> dict:
     }
 
 
+def _error_body(resp, limit: int = 400) -> str:
+    """The server's own explanation for a failed call, or "".
+
+    httpx's `HTTPStatusError` stringifies to "Client error '400 Bad Request' for
+    url ...", which names the status and nothing else. Groq puts the actual
+    reason in the body — which model is decommissioned, which parameter is out
+    of range, which message is malformed — and that body was being discarded on
+    every non-429 error.
+
+    Row 4 (2026-09-05) produced four 400s and the log could not say why any of
+    them happened. Never raises: a diagnostic that can throw during error
+    handling is worse than no diagnostic.
+    """
+    try:
+        payload = resp.json()
+    except Exception:
+        try:
+            text = (resp.text or "").strip()
+        except Exception:
+            return ""
+        return text[:limit]
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message") or err.get("code") or ""
+            if msg:
+                return str(msg)[:limit]
+        if isinstance(err, str) and err:
+            return err[:limit]
+    try:
+        return str(payload)[:limit]
+    except Exception:
+        return ""
+
+
 def _classify_429(resp) -> RateLimitInfo:
     retry_after = _parse_wait_seconds(resp.headers.get("retry-after"))
     reset_tokens = _parse_wait_seconds(resp.headers.get("x-ratelimit-reset-tokens"))
@@ -1655,7 +1690,8 @@ def _call_groq_legacy_unused(prompt: str, system: str, max_tokens: int, model: s
                         tried_keys.discard(key)
                         continue
                 logger.warning(
-                    f"⚠️  Groq HTTP error ({e.response.status_code}) on key ...{key[-8:]}: {e}"
+                    f"⚠️  Groq HTTP error ({e.response.status_code}) on key "
+                    f"...{key[-8:]}: {_error_body(e.response) or e}"
                 )
                 break
 
@@ -1876,8 +1912,28 @@ def _call_groq(prompt: str, system: str, max_tokens: int, model: str) -> str:
                 if e.response.status_code in (401, 403):
                     _mark_key_invalid(key, reason=f"HTTP {e.response.status_code}")
                     continue
+                # The reason a 4xx happened is in the RESPONSE BODY, and it was
+                # being thrown away — only httpx's generic "Client error '400
+                # Bad Request'" reached the log, which says nothing actionable.
+                detail = _error_body(e.response)
+                # A 4xx that is not 401/403/429 is a problem with the REQUEST,
+                # not with this key. Falling through to `continue` rotated to
+                # the next key and re-sent the identical malformed request:
+                # row 4 (2026-09-05) burned four keys on four 400s for the same
+                # `routes.py` repair, and every one of them was doomed. Rotating
+                # cannot fix a request the server refuses to parse, and the
+                # retries spend real quota the ledger never records, because it
+                # only counts 2xx calls.
+                if 400 <= e.response.status_code < 500:
+                    logger.warning(
+                        f"Groq HTTP {e.response.status_code} on [{model}] — the "
+                        f"REQUEST was rejected, so rotating keys cannot help: "
+                        f"{detail}"
+                    )
+                    break
                 logger.warning(
-                    f"Groq HTTP error ({e.response.status_code}) on key ...{key[-8:]}: {e}"
+                    f"Groq HTTP error ({e.response.status_code}) on key "
+                    f"...{key[-8:]}: {detail or e}"
                 )
                 continue
             except httpx.TimeoutException:

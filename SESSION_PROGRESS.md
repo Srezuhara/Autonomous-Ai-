@@ -1,50 +1,55 @@
 # Session Progress — start here
 
 **Last session: 2026-09-05 (Phase 23 — the twelfth session).** `test_phase23.py`
-is **943/943**, up from 899. The fourth instance of the misaimed-repair pattern
-is closed and **proven live**: `dead_events` reads `verified` on the row that
-followed it. The row still failed. The phase does not close.
+is **992/992**, up from 899. Two static checks shipped, one of them proven live;
+`feature_coverage` stopped certifying dead builds; one row run and failed. The
+phase does not close.
 
-> ## ▶ Next session: the symptom, not the next cause
+> ## ▶ Next session: one row, and the guard question
 >
-> **Quota.** After row 4 on 2026-09-05: heavy **130,782** left, fast **150,902**,
-> against a ~123K row and a 90,000 fast floor. **A row is affordable now** — this
-> is the first session in several to hand over a spendable budget. Confirm with
-> `run_live_matrix.py --dry-run`, which is the authority, and remember the ledger
-> under-reports by ~51K.
+> **Everything offline is done.** Four fixes landed this session and all four
+> are falsified against the corpus. What is left needs a row.
 >
-> **1. Write the route-presence check (no quota, static, ~1 hour).**
-> A `web_api` build that declares **no route handler anywhere** serves nothing.
-> Zero `@router.get/post/...` decorators outside tests, and no `add_api_route`
-> call, means `unusable` — statically, with no execution. Fully specified in
-> `PHASE23_HANDOFF.md` §0.-12, including the guards and the batched-append repair
-> shape it needs.
->
-> **Why this one and not another cause-specific check.** Two consecutive rows
-> shipped **zero routes for two entirely different reasons**, and the check
-> written from the first (`dead_events`) correctly stayed silent on the second.
-> The symptom has recurred where no cause has. This check catches both.
->
-> **2. Fix `feature_coverage`'s verdict (no quota).** It reported
-> `verified, 6/6, "0 route(s)"` on a `web_api` build serving nothing — the **same
-> false green it gave row 3**, and the first defect in this phase to recur. A
-> verdict of `verified` against 0 routes is indefensible whatever the noise level
-> of its findings. §0.-1 routed its *findings* to manual; this is its *verdict*.
->
-> **3. Then one row**, graded with
-> `tools/assert_row.py <build_id> <log>` — note the build id is the **full UUID**,
-> not the 8-char prefix the log prints.
+> **1. Run a row and grade it.** Quota after row 4: heavy **130,782**, fast
+> **150,902**, against a ~123K row and a 90,000 fast floor — spendable.
 >
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
 > venv/Scripts/python.exe tools/verify_repairs.py --baseline repair_baseline.json
 > venv/Scripts/python.exe run_live_matrix.py --dry-run
 > venv/Scripts/python.exe run_live_matrix.py --rows 3
+> venv/Scripts/python.exe tools/assert_row.py <FULL-UUID> row.log
 > ```
 >
-> Full detail: `PHASE23_HANDOFF.md` §0.-14 (this row and what it showed),
-> §0.-13 (the `dead_events` check and the two guards that were not predicted),
-> §0.-12 (the next check, specified).
+> `assert_row` needs the **full build UUID**, not the 8-char prefix the log
+> prints — get it from `GET /projects/`.
+>
+> **What the row is testing.** `route_presence` and its append-based repair have
+> never run live. Three corpus builds fail the check; the repair has only been
+> driven at a clone with stubbed replies. Watch for `🛣️  Declaring routes on
+> N router(s)` in the log.
+>
+> **2. Then the guard question (§0.-12), which is now the real blocker.**
+> `accept_generated_fix` has refused a **correct** repair four times. Every new
+> repair channel whose job is a shape the guard treats as damage hits the wall,
+> and each has been fixed with its own escape hatch. Four is enough: give each
+> channel an explicit contract — what it may add, what it may remove — instead
+> of a global rule plus a growing list of exceptions.
+
+## §0.-4c What the twelfth session shipped, and what each was falsified against
+
+| change | what it does | falsification |
+|---|---|---|
+| `tools/dead_event_check.py` | an `@app.on_event` a supplied `lifespan=` disables | 46 projects: 11 verified, 1 true positive, **0 false positives**. **Proven live: `verified` on row 4.** |
+| `tools/route_presence_check.py` | a `web_api` that declares no route at all | 48 projects: 35 verified, **3 failed — `runtime_smoke` independently fails all 3**, and 2 were unknown before |
+| `feature_coverage` verdict | stops reporting `verified` against 0 routes | the entire corpus diff is 2 builds going `verified -> not_run`; nothing else moved |
+| `llm_client` 4xx handling | a 400 stops instead of rotating all 8 keys, and the body is logged | unit-tested; row 4 burned 4 keys on 4 doomed 400s |
+
+**The two checks are complementary, not redundant** — and an earlier draft of the
+handoff got this wrong. `route_presence` reports row 3's build as `verified`,
+correctly: its handlers ARE declared, in `routers/product.py`, and merely never
+registered. `dead_events` is what catches that one. The symptom needed a check
+of its own *in addition to* the cause-specific one, not instead of it.
 
 ## §0.-4b The four rows, and the thing that changed at row 4
 

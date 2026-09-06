@@ -321,6 +321,43 @@ def check_feature_coverage(root: str, intent: dict) -> VerificationOutcome:
         )
 
     shapes = detect_shapes(project_dir, rel_to=Path(config.OUTPUT_DIR))
+
+    # A web API that declares NO route cannot have its features "covered" by
+    # anything, and this check must not say otherwise.
+    #
+    # It said otherwise four times. On rows 3 and 4 (`e3894a9e`, `9733027d`) and
+    # on two corpus builds (`9600d11d`, `e6a1da32`) it reported
+    # `verified, 6/6, "0 route(s)"` — printing the disproof inside its own
+    # detail string — against applications `runtime_smoke` independently found
+    # to serve nothing. It is the first defect in this phase to recur, and the
+    # worst kind: a check certifying a dead build.
+    #
+    # The verdict is NOT_RUN rather than FAILED, deliberately. `route_presence`
+    # already reports the defect, and filing one fact twice under two check
+    # names is how a clean build acquires phantom findings. What is true here is
+    # narrower and is exactly what NOT_RUN means: the check should have had
+    # something to say and could not: matching feature words against an artifact
+    # that exposes no endpoints proves nothing either way. A hole in the
+    # evidence, and a hole is never a pass.
+    #
+    # Counted with `route_presence`'s AST scan rather than this module's regex,
+    # so the two cannot drift into disagreeing about how many routes exist.
+    if shapes.is_web:
+        try:
+            from tools.route_presence_check import check_project_routes
+            declared = len(check_project_routes(root).routes)
+        except Exception:
+            declared = len(ev["routes"])
+        if declared == 0:
+            return VerificationOutcome.not_run(
+                "feature_coverage", shape=shapes.describe(),
+                detail=("this project is a web API that declares no routes at "
+                        "all, so there is nothing for its requested features to "
+                        "be covered BY — matching words against it would prove "
+                        "nothing"),
+                evidence={"routes": 0, "features": len(features)},
+            )
+
     missing: list[str] = []
     covered = 0
 

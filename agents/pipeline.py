@@ -942,6 +942,7 @@ class Pipeline:
         self._schema_attr_targets = {}
         self._sql_schema_targets = {}
         self._dead_event_targets = {}
+        self._route_targets = {}
 
         root = result.architecture.get("root_folder", "")
         if not root:
@@ -968,6 +969,7 @@ class Pipeline:
             from tools.module_ref_check import check_module_refs
             from tools.sql_schema_check import check_sql_schema
             from tools.dead_event_check import check_dead_events
+            from tools.route_presence_check import check_route_presence
             from tools.generated_tests import run_generated_tests
             from tools.static_smoke import smoke_test_static
             from tools.verification import collect_findings
@@ -1029,6 +1031,13 @@ class Pipeline:
             # while `feature_coverage` read verified 6/6 against it. Static and
             # certain, so it runs before a token is spent rather than after.
             ("dead_events", check_dead_events),
+            # The symptom `dead_events` catches one cause of. Two consecutive
+            # rows shipped zero routes from causes with nothing in common, and
+            # the check written from the first correctly stayed silent on the
+            # second. This asks the question directly: a web_api that declares
+            # no route serves nothing, whatever the reason. Three corpus builds
+            # fail it, and `runtime_smoke` independently fails all three.
+            ("route_presence", check_route_presence),
             # The suite the build ships. Row 2 shipped one in which every test
             # errored at fixture setup and was still recorded `verified: yes`,
             # because no other check executes the tests — a suite that cannot
@@ -1059,6 +1068,9 @@ class Pipeline:
                     outcome.evidence.get("repair_targets") or {})
             elif outcome.check == "sql_schema":
                 self._sql_schema_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "route_presence":
+                self._route_targets = dict(
                     outcome.evidence.get("repair_targets") or {})
             elif outcome.check == "dead_events":
                 # The only one of the four whose target is the file the finding
@@ -1826,6 +1838,19 @@ class Pipeline:
                 f"{', '.join(sorted(dead_events)[:4])}"
             ]
 
+        # And an application that declares no routes at all. The file that must
+        # gain the handlers is the one holding a bare router, which no traceback
+        # names — such a file imports perfectly.
+        missing_routes = dict(getattr(self, "_route_targets", {}) or {})
+        for path in missing_routes:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if missing_routes:
+            issues = list(issues) + [
+                f"the application declares no routes; "
+                f"{', '.join(sorted(missing_routes)[:4])} must gain them"
+            ]
+
         if not issues and not advisory:
             logger.info("✅ Verification clean — no remediation needed")
             report.manual_checks = list(getattr(self, "_manual_checks", []) or [])
@@ -1955,6 +1980,7 @@ class Pipeline:
                         missing_fields=missing_fields,
                         missing_tables=missing_tables,
                         dead_events=dead_events,
+                        missing_routes=missing_routes,
                     )
                     # Merge the fresh results over the stale ones so the DB
                     # scores reflect the repaired state, not the pre-repair one.
@@ -2099,6 +2125,28 @@ class Pipeline:
                         ]
                 except Exception as e:
                     logger.warning(f"  ⚠️  dead_events re-check skipped: {e}")
+
+            if missing_routes:
+                try:
+                    from tools.route_presence_check import check_route_presence
+                    root = result.architecture.get("root_folder", "")
+                    rp_again = check_route_presence(root) if root else None
+                    missing_routes = dict(
+                        (rp_again.evidence.get("repair_targets") or {})
+                        if rp_again is not None else {}
+                    )
+                    self._route_targets = dict(missing_routes)
+                    if not missing_routes:
+                        logger.info("  ✅ The application declares routes now")
+                    else:
+                        for path in missing_routes:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            "the application still declares no routes"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  route_presence re-check skipped: {e}")
 
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the

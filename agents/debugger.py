@@ -577,6 +577,67 @@ def _accept_definitions(current: str, fragment: str, wanted: list) -> tuple:
     # reply containing the file re-defines what the file already defines.
     return True, "", text
 
+def _accept_routes(current: str, fragment: str) -> tuple:
+    """
+    Should this fragment of route handlers be appended? `(accept, why_not, text)`.
+
+    `_accept_definitions` cannot answer it: that one requires the reply to define
+    names from a `wanted` list, and a route repair has no such list — the finding
+    says "this application declares no routes", not which handlers are missing.
+    Passing an empty `wanted` made it reject every reply with "none of which were
+    asked for", which is how this channel was inert when first driven at a clone
+    on 2026-09-05, before it had ever run live.
+
+    What replaces the name check is the property that actually matters here: the
+    fragment must **declare at least one route**. A reply full of helper
+    functions is not a fix for "there are no routes".
+
+    The clash rule is kept exactly as it is, and it is doing the same job: a
+    reply that re-emits the whole file re-defines what the file already defines,
+    which is how a "rewrite" is told apart from an append without a size rule.
+    """
+    if not fragment or not fragment.strip():
+        return False, "empty reply", ""
+    text = fragment.strip()
+    if text.startswith("```") or "```" in text:
+        text = re.sub(r"^```[a-zA-Z]*\n?|```", "", text).strip()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as e:
+        return False, f"does not parse ({e.msg})", ""
+
+    defined = [
+        n.name for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    if not defined:
+        return False, "no definition in the reply", ""
+
+    try:
+        from tools.route_presence_check import count_routes
+        routes = count_routes(text)
+    except Exception:
+        routes = 0
+    if routes <= 0:
+        return False, f"defines {defined[:3]} but declares no route", ""
+
+    # The clash rule has to cover ASSIGNMENTS here, not just def/class, and that
+    # is not a refinement — it is the difference between a fix and a fake one.
+    # Driven at a clone on 2026-09-05, a reply that re-emitted the whole file
+    # plus one handler was ACCEPTED, because row 4's `routes.py` defines no
+    # functions at all: it is nothing but `x = APIRouter()` assignments, so
+    # there was no def to clash on. Appending it rebinds every router name, the
+    # `include_router` calls above have already run against the OLD objects, and
+    # the new handlers hang off routers nothing includes. `count_routes` then
+    # reads 1 and the check goes green over an app that still serves nothing.
+    frag_syms = top_level_symbols(text, defined_only=True)
+    cur_syms = top_level_symbols(current, defined_only=True)
+    clashes = sorted(frag_syms & cur_syms)
+    if clashes:
+        return False, f"redefines {clashes[:3]}, which the file already has", ""
+    return True, "", text
+
+
 # Below this, repairing one block COSTS more than rewriting the file: the block
 # prompt carries extra rules and a digest of the rest of the file, and on a
 # 322-character module that scaffolding outweighs the body it saves (measured:
@@ -645,6 +706,7 @@ class Debugger(BaseAgent):
         missing_fields: dict | None = None,
         missing_tables: dict | None = None,
         dead_events: dict | None = None,
+        missing_routes: dict | None = None,
     ) -> list[FileDebugResult]:
         """
         `runtime_errors` maps a file to a failure the *running* app produced —
@@ -675,12 +737,19 @@ class Debugger(BaseAgent):
         application it builds still serves nothing. Row 3's third run on
         2026-09-03 shipped `unusable` with four checks verified and
         `feature_coverage` reporting 6/6 against zero live routes.
+
+        `missing_routes` maps a file holding bare `APIRouter()` objects to the
+        fact that the application declares no route at all (`route_presence`'s
+        finding). It is the symptom `dead_events` catches one cause of, and it
+        needs the same kind of channel for the same reason — such a file imports
+        perfectly, so nothing else here looks at it.
         """
         runtime_errors = runtime_errors or {}
         missing_definitions = missing_definitions or {}
         missing_fields = missing_fields or {}
         missing_tables = missing_tables or {}
         dead_events = dead_events or {}
+        missing_routes = missing_routes or {}
         py_files = [
             f for f in file_paths
             if f.endswith(".py")
@@ -722,6 +791,7 @@ class Debugger(BaseAgent):
                 missing_flds=missing_fields.get(fp, ()),
                 missing_tbls=missing_tables.get(fp, ()),
                 dead_evts=dead_events.get(fp, ()),
+                no_routes=bool(missing_routes.get(fp)),
             )
             results[fp] = r
             logger.info(str(r))
@@ -1786,7 +1856,8 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                     missing_defs: tuple = (),
                     missing_flds: tuple = (),
                     missing_tbls: tuple = (),
-                    dead_evts: tuple = ()) -> FileDebugResult:
+                    dead_evts: tuple = (),
+                    no_routes: bool = False) -> FileDebugResult:
         result     = FileDebugResult(file_path=file_path, success=False, attempts=0)
         error_text = ""
 
@@ -1812,6 +1883,9 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             # the app, and it must act on whatever the earlier repairs left
             # behind rather than being overwritten by them.
             _try_dead_event_repair()
+            # Last of all: this one APPENDS handlers, so it must run after every
+            # repair that rewrites the file, or its work is overwritten.
+            _try_route_repair()
 
         def _try_definition_repair() -> None:
             nonlocal definition_repair_tried
@@ -1834,6 +1908,12 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
                 self._repair_missing_tables(
                     file_path, list(missing_tbls), result)
 
+        def _try_route_repair() -> None:
+            nonlocal route_repair_tried
+            if no_routes and not route_repair_tried:
+                route_repair_tried = True
+                self._repair_missing_routes(file_path, result)
+
         def _try_dead_event_repair() -> None:
             nonlocal dead_event_repair_tried
             if dead_evts and not dead_event_repair_tried:
@@ -1846,6 +1926,7 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
         field_repair_tried = False
         table_repair_tried = False
         dead_event_repair_tried = False
+        route_repair_tried = False
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             result.attempts = attempt
@@ -2182,6 +2263,153 @@ Return ONLY the complete rewritten Python code. No markdown, no explanation."""
             f"  ✅ [{file_path}] Definition repair applied: "
             f"{len(added_total)}/{len(wanted)} name(s)")
         return True
+
+    def _repair_missing_routes(
+        self, file_path: str, result: FileDebugResult
+    ) -> bool:
+        """
+        Give an application that declares no routes some routes.
+
+        APPENDS, one router at a time, for exactly the reasons
+        `_repair_missing_definitions` does — and this is the repair that proved
+        those reasons on a live row. On `9733027d` the BackendDeveloper
+        diagnosed this defect itself ("this file creates an APIRouter but
+        defines no route handlers") and its whole-file repair was thrown away by
+        `accept_generated_fix` as *"an oversized rewrite"*. An empty router
+        gaining a full CRUD set can only grow, and the guard forbids growth.
+
+        So: one call per router, appending, each batch import-checked, and the
+        landing check is a **re-count of the declared routes** — not "the file
+        changed", which a reply full of comments would satisfy.
+        """
+        try:
+            original = read_file(file_path)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for route repair: {e}")
+            return False
+
+        try:
+            from tools.route_presence_check import router_names, count_routes
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] route_presence unavailable: {e}")
+            return False
+
+        routers = router_names(original)
+        if not routers:
+            logger.warning(
+                f"  ⚠️  [{file_path}] No APIRouter to hang handlers on — "
+                f"not guessing")
+            return False
+
+        # A parent router that only aggregates others gets no handlers of its
+        # own. Row 4's `router` existed solely to `include_router` the other
+        # five, and writing CRUD onto it would have produced a second, duplicate
+        # set of paths.
+        aggregators = {
+            m.group(1) for m in re.finditer(
+                r"(\w+)\.include_router\s*\(", original)
+        }
+        targets = [r for r in routers if r not in aggregators] or routers
+
+        logger.info(
+            f"  🛣️  [{file_path}] Declaring routes on {len(targets)} router(s): "
+            f"{', '.join(targets)}"
+        )
+
+        current = original
+        before_total = count_routes(current)
+
+        for n, router in enumerate(targets, 1):
+            fragment = self._generate_missing_routes_fix(
+                file_path, current, router)
+            ok, why, cleaned = _accept_routes(current, fragment)
+            if not ok:
+                logger.warning(
+                    f"  ⚠️  [{file_path}] Router {n}/{len(targets)} "
+                    f"({router}) rejected: {why}")
+                continue
+
+            candidate = current.rstrip() + "\n\n\n" + cleaned + "\n"
+            # The reply is only worth writing if it actually declares routes.
+            if count_routes(candidate) <= count_routes(current):
+                logger.warning(
+                    f"  ⚠️  [{file_path}] Router {n}/{len(targets)} ({router}) "
+                    f"added no route — discarding the batch")
+                continue
+
+            create_file(file_path, candidate)
+            self._preflight_fix(file_path)
+            self._inject_syspath(file_path)
+
+            verify = run_python(file_path)
+            if not verify.success and not any(p in verify.stderr for p in IGNORE_ERRORS):
+                logger.warning(
+                    f"  ↩️  [{file_path}] Router {n}/{len(targets)} ({router}) "
+                    f"broke the import check — restoring what worked")
+                create_file(file_path, current)
+                continue
+
+            current = read_file(file_path)
+            logger.info(
+                f"  ✅ [{file_path}] Router {n}/{len(targets)} ({router}): "
+                f"{count_routes(current)} route(s) declared so far")
+
+        added = count_routes(current) - before_total
+        if added <= 0:
+            logger.warning(
+                f"  ⚠️  [{file_path}] Route repair declared no routes — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+
+        result.fixes_applied.append(
+            f"Declared {added} route(s) in {file_path}")
+        logger.info(f"  ✅ [{file_path}] Route repair applied: {added} route(s)")
+        return True
+
+    def _generate_missing_routes_fix(
+        self, file_path: str, current_code: str, router: str
+    ) -> str | None:
+        """
+        Ask for one router's handlers ONLY — never the file back.
+
+        The same stance as `_generate_missing_definitions_fix`: the file goes in
+        for context and must not come back out, because a reply that re-emits it
+        is a rewrite, and a rewrite of a file that must grow is what the guard
+        refuses.
+        """
+        project_map = self._scan_project_structure(file_path)
+        resource = re.sub(r"_?router$", "", router) or "resource"
+        prompt = f"""This file builds an APIRouter called `{router}` and declares NO
+route handlers on it, so the application serves nothing and every requested
+endpoint is missing.
+
+FILE: {file_path}
+CURRENT CONTENT OF THAT FILE (for context — do NOT return it):
+{current_code}
+
+{project_map}
+
+WRITE THE ROUTE HANDLERS FOR `{router}` ONLY — the "{resource}" resource.
+
+RULES:
+- Return ONLY new `@{router}.get/post/put/delete(...)` handler functions. Do NOT
+  return the file, do NOT repeat anything already in it, and do NOT re-declare
+  `{router}` — it already exists above your code.
+- A full CRUD set for this one resource: list, get one, create, update, delete.
+  Nothing for any other router.
+- Use the request/response models and the DB session dependency this project
+  already defines — the map above names them. Import nothing that does not
+  exist; a name this project does not have is a new failure, not a fix.
+- The parameters must match the models. A handler taking fields the schema does
+  not declare is the same defect one level down.
+- No placeholders, no `pass`, no `TODO`, no `raise NotImplementedError`. A
+  handler that does not work is worse than one that is missing, because it
+  reports as present.
+
+Return ONLY the handler functions, as plain Python."""
+        logger.info(f"  🧠 LLM declaring routes for {router}: {file_path}")
+        return self.think(prompt, max_tokens=_rewrite_budget(self, current_code))
 
     def _repair_missing_fields(
         self, file_path: str, findings: list, result: FileDebugResult
