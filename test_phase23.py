@@ -8577,6 +8577,205 @@ check("...and both are re-asked after the repair pass",
 check("...and their targets are cleared before every build",
       "self._call_targets = {}" in _pipe65 and "self._await_targets = {}" in _pipe65)
 
+# ── 65b. A carried row must survive being carried twice ─────────────────────
+# The report writes a carried row's ZIP cell as `yes *(earlier run)*`, and the
+# merge pattern required the cell to be a bare word. So a row carried once was
+# dropped the NEXT time the driver ran — silently, because a line that does not
+# match is skipped rather than raised on. On 2026-09-08 that erased row 3, a
+# PASSING row, from the matrix; the criterion is ">= 3 of 4", so a lost row is
+# re-earned with a 130,000-token rebuild that had already been paid for.
+from api_platform.runner import TERMINAL_STATUSES as _runner_terminal65
+
+_carry65 = Path(config.OUTPUT_DIR) / "_carry65.md"
+_carry65.write_text(
+    "| Row | Shape | Status | Verified | Tokens | Duration | Files | ZIP |\n"
+    "|-----|-------|--------|----------|--------|----------|-------|-----|\n"
+    "| 1 | simple | `done` | yes | 69,236 | 471s | 20 | yes |\n"
+    "| 3 | complex | `done_with_context` | yes | 128,676 | 965s | 29 | "
+    "yes *(earlier run)* |\n",
+    encoding="utf-8")
+try:
+    _kept65 = _m28.merge_previous([], _carry65)
+    check("a row already marked as an earlier run is carried again, not dropped",
+          [r["row"] for r in _kept65] == [1, 3],
+          str([r["row"] for r in _kept65]))
+    check("...and it keeps the verdict the run that produced it earned",
+          all(r["carried_verified"] for r in _kept65),
+          str([(r["row"], r["carried_verified"]) for r in _kept65]))
+    check("...and a re-run row still wins over the carried record",
+          [(r["row"], r.get("carried", False))
+           for r in _m28.merge_previous(
+               [{"row": 3, "shape": "complex", "status": "done",
+                 "total_tokens": 1, "duration_seconds": 1.0, "file_count": "1",
+                 "zip": {"ok": True, "status": 200, "content_type": None,
+                         "bytes": 1},
+                 "build_id": "new", "completion_reason": "",
+                 "progress_percent": 100, "tokens_by_model": None,
+                 "expect_boot": True, "verification": [],
+                 "smoke_summary": "", "build_shape": ""}], _carry65)]
+          == [(1, True), (3, False)])
+finally:
+    _carry65.unlink(missing_ok=True)
+
+# `unusable` is the status a build reaches when the artifact does not run, which
+# is precisely the row you most want to iterate on. The driver hardcoded four of
+# the server's five terminal statuses and omitted it, so row 2 finished in 28
+# minutes and the driver polled a completed build for the full 45-minute
+# timeout before writing its report.
+check("the driver agrees with the server about when a build is over",
+      tuple(_m28.TERMINAL_STATUSES) == tuple(_runner_terminal65),
+      f"{_m28.TERMINAL_STATUSES} vs {_runner_terminal65}")
+check("...and `unusable` is one of them",
+      "unusable" in _m28.TERMINAL_STATUSES, str(_m28.TERMINAL_STATUSES))
+
+
+# ── 66. The schema and the queries must name the same DATABASE ──────────────
+# Row 2 on 2026-09-08 created its tables in `bookmark.db` and served every
+# request out of `bookmarks.db`. Every file imported, every table in the schema
+# was queried, every column matched — and `sql_schema` reported "3 table(s)
+# created, 3 queried — verified" while all nine endpoints answered 500
+# `no such table`. The column analysis compares statements; two statements can
+# agree perfectly and still run against different files.
+from tools.sql_schema_check import check_project_db_paths as _cdb66
+
+_MAIN66 = (
+    'import os, sqlite3\n'
+    'DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./bookmark.db")\n'
+    'if DATABASE_URL.startswith("sqlite:///"):\n'
+    '    DB_PATH = DATABASE_URL.replace("sqlite:///", "", 1)\n'
+    'app = FastAPI()\n'
+    'def init():\n'
+    '    conn = sqlite3.connect(DB_PATH)\n'
+    '    conn.execute("CREATE TABLE IF NOT EXISTS bookmarks (id INTEGER, url TEXT)")\n'
+)
+_SVC66_BAD = (
+    'import os, sqlite3\n'
+    'DB_PATH = os.getenv("DB_PATH", "bookmarks.db")\n'
+    'def get_all(conn):\n'
+    '    conn = sqlite3.connect(DB_PATH)\n'
+    '    return conn.execute("SELECT id, url FROM bookmarks").fetchall()\n'
+)
+_mk60("app66bad", {"main.py": _MAIN66, "services.py": _SVC66_BAD})
+_r66 = _under60(_cdb66, "app66bad", ["app66bad/main.py"])
+
+check("the sqlite-URL idiom resolves to the file it names",
+      _r66.by_file.get("app66bad/main.py") == ["bookmark.db"],
+      str(_r66.by_file))
+check("...and a getenv default resolves too",
+      _r66.by_file.get("app66bad/services.py") == ["bookmarks.db"],
+      str(_r66.by_file))
+check("...so a one-character database mismatch is reported",
+      len(_r66.issues) == 1, str(_r66.issues))
+check("...and the repair is aimed at the module with the WRONG path, "
+      "not at the schema, which is correct",
+      list(_r66.repair_targets) == ["app66bad/services.py"],
+      str(list(_r66.repair_targets)))
+
+# The half that keeps it honest: agreement must be silent. A check that cannot
+# stay quiet on a working project is a defect generator, and four of the six
+# verifiers written for this phase first reported defects that did not exist.
+_mk60("app66ok", {
+    "main.py": _MAIN66,
+    "services.py": _SVC66_BAD.replace('"bookmarks.db"', '"bookmark.db"'),
+})
+check("...and a project whose modules agree on one database says nothing",
+      _under60(_cdb66, "app66ok", ["app66ok/main.py"]).issues == [],
+      str(_under60(_cdb66, "app66ok", ["app66ok/main.py"]).issues))
+
+# Tests get their own database on purpose.
+_mk60("app66test", {
+    "main.py": _MAIN66,
+    "tests/test_api.py": 'import sqlite3\nc = sqlite3.connect("test.db")\n',
+    "tests/conftest.py": 'import sqlite3\nc = sqlite3.connect("fixture.db")\n',
+})
+check("...and a test's own database is not a mismatch",
+      _under60(_cdb66, "app66test", ["app66test/main.py"]).issues == [],
+      str(_under60(_cdb66, "app66test", ["app66test/main.py"]).issues))
+
+# Precision: what cannot be resolved is not evidence.
+_mk60("app66unknown", {
+    "main.py": _MAIN66,
+    "services.py": ('import os, sqlite3\n'
+                    'def get(c):\n'
+                    '    return sqlite3.connect(os.environ["DB"])\n'),
+    "memory.py": 'import sqlite3\nc = sqlite3.connect(":memory:")\n',
+})
+_r66u = _under60(_cdb66, "app66unknown", ["app66unknown/main.py"])
+check("...and an env var with no literal default is skipped, not guessed",
+      "app66unknown/services.py" not in _r66u.by_file, str(_r66u.by_file))
+check("...and :memory: is not a second database",
+      _r66u.issues == [], str(_r66u.issues))
+
+# And with no single entry database to anchor against, which path is wrong is a
+# guess — so it says nothing rather than rewriting correct code.
+_mk60("app66noanchor", {
+    "cli.py": 'import sqlite3\nc = sqlite3.connect("one.db")\n',
+    "web.py": 'import sqlite3\nc = sqlite3.connect("two.db")\n',
+})
+check("...and two databases with no entry module to anchor them is silent",
+      _under60(_cdb66, "app66noanchor", []).issues == [],
+      str(_under60(_cdb66, "app66noanchor", []).issues))
+
+# The whole point: it must reach the verification surface, with a repair target.
+# `sql_schema` existed for months without ever running during a build.
+_o66 = _under60(_css60, "app66bad")
+check("...and the mismatch reaches the sql_schema outcome as a failure",
+      _o66.status.value == "failed", str(_o66.status))
+check("...and carries its repair target to the remediation pass",
+      "app66bad/services.py" in (_o66.evidence.get("repair_targets") or {}),
+      str(list((_o66.evidence.get("repair_targets") or {}))))
+check("...and the detail names both databases, so the reader sees the cause",
+      "bookmark.db" in _o66.detail and "bookmarks.db" in _o66.detail,
+      _o66.detail)
+
+# ── 67. The CLI check must not fail a tool over its own console ─────────────
+# Row 4 on 2026-09-08 was recorded `unusable` — "the command-line tool fails on
+# `--help` (exit 1)" — because its argparse description contained a
+# non-breaking hyphen (U+2011) and Windows handed the child a cp1252 stdout, so
+# `print_help()` raised UnicodeEncodeError inside argparse. Under a UTF-8 stdout
+# the same tool exits 0 and prints correct help. The artifact was sound and the
+# harness was measuring its own locale — the second time this defect has been
+# found here, after `tools/assert_row.py` died mid-report on a `→`.
+from tools.cli_smoke import smoke_test_cli as _cli67
+
+_mk60("app67cli", {
+    "tool.py": (
+        "import argparse\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(\n"
+        "        prog='tool',\n"
+        # The character itself, in the help text argparse must print.
+        "        description='Rename files with optional dry‑run support.')\n"
+        "    p.add_argument('directory')\n"
+        "    p.add_argument('--dry-run', action='store_true',\n"
+        "                   help='Show what would change ‑ change nothing.')\n"
+        "    return p.parse_args()\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    ),
+})
+_o67 = _under60(_cli67, "app67cli")
+check("a CLI whose help text needs UTF-8 is not failed for the harness's locale",
+      _o67.status.value in ("verified", "not_applicable"),
+      f"{_o67.status} — {_o67.detail} {_o67.findings}")
+check("...and no finding blames it for a UnicodeEncodeError",
+      not any("UnicodeEncodeError" in str(f) for f in _o67.findings),
+      str(_o67.findings))
+
+# A tool that is genuinely broken must still be reported. A harness that cannot
+# fail anything is worth exactly as much as one that fails everything.
+_mk60("app67broken", {
+    "tool.py": ("import argparse\n"
+                "from nowhere import missing\n"
+                "def main():\n"
+                "    argparse.ArgumentParser().parse_args()\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"),
+})
+_o67b = _under60(_cli67, "app67broken")
+check("...and a CLI that really does fail on --help is still reported",
+      _o67b.status.value == "failed", f"{_o67b.status} — {_o67b.detail}")
+
 shutil.rmtree(_W60, ignore_errors=True)
 
 

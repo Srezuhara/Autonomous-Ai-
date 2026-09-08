@@ -35,6 +35,7 @@ resolves the table unambiguously.
 """
 from __future__ import annotations
 
+import ast
 import logging
 import re
 from dataclasses import dataclass, field
@@ -443,6 +444,216 @@ def check_project_sql(root: str, file_paths: list[str]) -> SchemaReport:
     return report
 
 
+# ── Which database file the project actually opens ────────────────────────────
+#
+# WHY THIS EXISTS
+# ---------------
+# Row 2 on 2026-09-08 created its three tables in `bookmark.db` and served every
+# request out of `bookmarks.db`:
+#
+#     main.py      DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./bookmark.db")
+#                  ... CREATE TABLE bookmarks / tags / bookmark_tags
+#     services.py  DB_PATH = os.getenv("DB_PATH", "bookmarks.db")
+#                  ... SELECT ... FROM bookmarks
+#
+# Every file imports. Every table in the schema is queried, and every column
+# matches — the check above is entirely correct to pass it. The two modules
+# simply address two different SQLite files, and SQLite creates the missing one,
+# empty, on connect. All nine endpoints answered 500 `no such table: bookmarks`
+# while this module reported "3 table(s) created, 3 queried — verified".
+#
+# That is the same shape as the defect the module docstring opens with: two
+# files written by separate LLM calls, drifting. The column check catches drift
+# WITHIN a database; this catches drift BETWEEN databases.
+#
+# PRECISION OVER RECALL, as everywhere else here. Only literal, statically
+# resolvable paths are compared. A path built at runtime, joined from parts, or
+# read from an environment variable with no literal default is skipped — an
+# unknown path is not evidence of a mismatch, and a false positive here spends
+# an LLM call rewriting code that was right.
+
+#: Suffixes that make a string recognisably a database file rather than any
+#: other literal that happens to reach `connect()`.
+_DB_SUFFIXES = (".db", ".sqlite", ".sqlite3")
+
+
+@dataclass
+class DbPathReport:
+    #: file -> the database file(s) that module opens, as basenames
+    by_file: dict = field(default_factory=dict)
+    issues: list = field(default_factory=list)
+    #: file -> findings, for `_refine_and_remediate`
+    repair_targets: dict = field(default_factory=dict)
+
+
+def _resolve_str(node, consts: dict, depth: int = 0):
+    """
+    Best-effort literal value of an AST node, or None when it is not statically
+    known. Only evaluates string operations on values already known to be
+    literals — it never executes project code.
+    """
+    if depth > 6:                      # cyclic or pathological nesting
+        return None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return consts.get(node.id)
+    if isinstance(node, ast.Call):
+        fn = node.func
+        if isinstance(fn, ast.Attribute):
+            # os.getenv("X", "default") / os.environ.get("X", "default").
+            # With no default the value is unknown at rest, so skip it.
+            if fn.attr in ("getenv", "get") and len(node.args) >= 2:
+                return _resolve_str(node.args[1], consts, depth + 1)
+            # "sqlite:///./x.db".replace("sqlite:///", "", 1) — the idiom every
+            # generated project uses to turn a SQLAlchemy URL into a file path.
+            if fn.attr == "replace" and len(node.args) >= 2:
+                base = _resolve_str(fn.value, consts, depth + 1)
+                old = _resolve_str(node.args[0], consts, depth + 1)
+                new = _resolve_str(node.args[1], consts, depth + 1)
+                if base is not None and old is not None and new is not None:
+                    return base.replace(old, new)
+    return None
+
+
+def _db_basename(value):
+    """
+    The database file a path or URL names, or None when it is not one.
+
+    Compared by basename deliberately: `./bookmark.db` and `bookmark.db` are the
+    same file addressed two ways, while `bookmark.db` and `bookmarks.db` are
+    two files that differ by one character — which is exactly how this defect
+    presents, and why it survives a reading.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    v = value.strip()
+    if ":memory:" in v:
+        return None                    # legitimately per-connection
+    if "://" in v:                     # a URL that was never split apart
+        v = v.split("://", 1)[1].lstrip("/")
+    v = v.replace("\\", "/").rstrip("/")
+    base = v.rsplit("/", 1)[-1]
+    if not base.lower().endswith(_DB_SUFFIXES):
+        return None
+    return base
+
+
+def _module_db_paths(source: str) -> set:
+    """The database file(s) a single module opens, as far as they are literal."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    # Module-level string constants, including ones assigned inside an `if`,
+    # which is where the sqlite-URL idiom above always lands.
+    consts: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                value = _resolve_str(node.value, consts)
+                if value is not None:
+                    consts.setdefault(target.id, value)
+
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+        if name not in ("connect", "create_engine"):
+            continue
+        base = _db_basename(_resolve_str(node.args[0], consts))
+        if base:
+            found.add(base)
+    return found
+
+
+def _is_test_file(rel: str) -> bool:
+    """
+    Tests get their own database on purpose. Comparing them against the
+    application's would report a mismatch on every well-written project.
+    """
+    parts = rel.lower().split("/")
+    return any(p in ("test", "tests") for p in parts) or \
+        parts[-1].startswith("test_") or parts[-1] == "conftest.py"
+
+
+def check_project_db_paths(root: str, schema_files=None) -> DbPathReport:
+    """
+    Whether the project creates its tables in the same database it queries.
+    Never raises.
+    """
+    report = DbPathReport()
+    try:
+        base = Path(config.OUTPUT_DIR)
+        project = base / root
+        if not project.is_dir():
+            return report
+        candidates = [p for p in project.rglob("*.py")
+                      if "__pycache__" not in p.parts and "venv" not in p.parts]
+    except Exception:
+        return report
+
+    entry_files: list = []
+    for path in sorted(candidates):
+        try:
+            rel = str(path.relative_to(base)).replace("\\", "/")
+            if _is_test_file(rel):
+                continue
+            source = path.read_text(encoding="utf-8", errors="ignore")
+            paths = _module_db_paths(source)
+        except Exception:
+            continue
+        # The module the process starts in: it builds the app (and so owns the
+        # lifespan that creates the schema), or it is the conventional entry
+        # point for a CLI, which has no app to look for.
+        if "FastAPI(" in source or rel.rsplit("/", 1)[-1] == "main.py":
+            entry_files.append(rel)
+        if paths:
+            report.by_file[rel] = sorted(paths)
+
+    distinct = sorted({p for ps in report.by_file.values() for p in ps})
+    if len(distinct) < 2:
+        return report                  # one database, or none it can resolve
+
+    # Which database is the real one. Not "the file with a CREATE TABLE" — row 2
+    # had a CREATE TABLE in BOTH modules, one of them in a `init_db()` nothing
+    # ever calls, and anchoring on the schema made this check fall silent on the
+    # very build it was written for. The database that actually exists at
+    # request time is the one the ENTRY module opens, because that is the module
+    # whose startup path runs.
+    entry_paths: set = set()
+    for rel, paths in report.by_file.items():
+        if rel in entry_files:
+            entry_paths.update(paths)
+    if len(entry_paths) != 1:
+        # No single entry database to compare against: which path is the wrong
+        # one is then a guess, and a guess here rewrites correct code.
+        return report
+
+    anchor = next(iter(entry_paths))
+    for rel, paths in sorted(report.by_file.items()):
+        if rel in entry_files:
+            continue
+        for other in [p for p in paths if p != anchor]:
+            report.issues.append(
+                f"`{rel}` opens `{other}`, but the application initialises "
+                f"`{anchor}` at startup. SQLite creates a missing file empty on "
+                f"connect, so every query through this module raises `no such "
+                f"table` at request time while the schema itself is perfectly "
+                f"correct. Point this module at `{anchor}` so it reads the "
+                f"database the app actually creates — do NOT add a CREATE TABLE "
+                f"here, which leaves the project with two live databases that "
+                f"drift apart."
+            )
+            report.repair_targets.setdefault(rel, []).append(
+                report.issues[-1])
+    return report
+
+
 def check_sql_schema(root: str) -> VerificationOutcome:
     """The same check as a VerificationOutcome, for the verification surface.
 
@@ -471,9 +682,21 @@ def check_sql_schema(root: str) -> VerificationOutcome:
                     "schema here to check SQL against"),
         )
 
+    # Whether the schema and the queries address the same database FILE. The
+    # column analysis above cannot see this: it compares statements, and two
+    # statements can agree perfectly while running against different files.
+    db_paths = check_project_db_paths(root, report.schema_files)
+
     detail = (f"{len(report.tables)} table(s) created, "
               f"{len(report.queried)} queried")
-    findings = [str(i) for i in report.issues] + [str(m) for m in report.missing]
+    if db_paths.by_file:
+        opened = sorted({p for ps in db_paths.by_file.values() for p in ps})
+        detail += f", in {len(opened)} database file(s) ({', '.join(opened)})"
+    findings = (
+        [str(i) for i in report.issues]
+        + [str(m) for m in report.missing]
+        + list(db_paths.issues)
+    )
     if not findings:
         return VerificationOutcome.verified("sql_schema", detail=detail)
 
@@ -483,12 +706,18 @@ def check_sql_schema(root: str) -> VerificationOutcome:
     if report.missing and report.schema_files:
         where = report.schema_files[0]
         targets[where] = [str(m) for m in report.missing]
+    # A path mismatch is repaired in the module that opens the WRONG file, not
+    # in the one that holds the schema — the schema is right.
+    for where, issues in db_paths.repair_targets.items():
+        targets.setdefault(where, []).extend(issues)
 
     return VerificationOutcome.failed(
         "sql_schema", findings, detail=detail,
         evidence={
             "missing_tables": [m.table for m in report.missing],
             "column_mismatches": [f"{i.table}.{i.column}" for i in report.issues],
+            "database_files": sorted(
+                {p for ps in db_paths.by_file.values() for p in ps}),
             "repair_targets": targets,
         },
     )

@@ -81,10 +81,31 @@ def _run(argv: list[str], import_root: Path, sandbox: Path) -> tuple[int, str, s
     env["PYTHONPATH"] = (
         f"{import_root}{os.pathsep}{existing}" if existing else str(import_root)
     )
+    # Run the child under UTF-8, and decode its output as UTF-8.
+    #
+    # Without this the check reports defects that belong to its own console.
+    # Row 4 on 2026-09-08 was marked `unusable` — "the command-line tool fails
+    # on `--help` (exit 1)" — because its argparse description contained a
+    # non-breaking hyphen (U+2011) and Windows gave the child a cp1252 stdout,
+    # so `print_help()` raised UnicodeEncodeError inside argparse. The same tool
+    # exits 0 and prints correct help under a UTF-8 stdout. The artifact was
+    # sound; the harness was measuring its own locale.
+    #
+    # `tools/assert_row.py` had this exact bug and was fixed the same way, after
+    # it died mid-report on a `→` in a finding.
+    #
+    # NOTE this makes the check blind to a genuine portability defect: a tool
+    # whose help text cannot be printed on a default Windows console is broken
+    # for those users. That is a real finding, but it belongs to whatever
+    # decides what the generator may emit — not to a smoke test whose question
+    # is "does this program run", and not as a verdict of `unusable` on a
+    # program that runs.
+    env["PYTHONIOENCODING"] = "utf-8"
     try:
         proc = subprocess.run(
             argv,
             capture_output=True, text=True, timeout=CLI_TIMEOUT,
+            encoding="utf-8", errors="replace",
             cwd=str(sandbox), env=env,
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""

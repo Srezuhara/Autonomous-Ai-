@@ -70,6 +70,21 @@ MIN_TOKENS_TO_START = MIN_HEAVY_TOKENS_TO_START
 POLL_SECONDS = 15
 BUILD_TIMEOUT_SECONDS = 45 * 60
 
+#: The statuses a build can end on. Imported from the runner so this file and
+#: the server cannot drift into two different ideas of when a build is over.
+#:
+#: They HAD drifted: the driver hardcoded four of the five and omitted
+#: `unusable`, which is the status a build reaches precisely when the artifact
+#: does not run. Row 2 on 2026-09-08 finished `unusable` in 28 minutes and the
+#: driver went on polling a finished build until BUILD_TIMEOUT_SECONDS — 45
+#: wasted minutes on the one row shape you most want to iterate on, and the
+#: report was written 17 minutes after the build was already recorded.
+try:
+    from api_platform.runner import TERMINAL_STATUSES
+except Exception:  # the driver must still run if the import path is odd
+    TERMINAL_STATUSES = ("done", "done_with_context", "unusable",
+                         "failed", "cancelled")
+
 # The four shapes, and what each one is here to exercise. Row 2 and row 4 have
 # never run: between them they hold every unknown this matrix exists to remove.
 MATRIX = [
@@ -273,7 +288,7 @@ def run_row(entry: dict) -> dict:
             last_step = step
 
         state = (status.get("status") or "").lower()
-        if state in ("done", "done_with_context", "failed", "cancelled"):
+        if state in TERMINAL_STATUSES:
             break
         if time.time() - began > BUILD_TIMEOUT_SECONDS:
             print(f"  ! giving up after {BUILD_TIMEOUT_SECONDS}s")
@@ -435,8 +450,17 @@ def merge_previous(results: list, path: Path) -> list:
             # verification record: it was earned by a run this one did not
             # watch, and inventing outcomes for it would let a carried row
             # claim evidence nobody has.
+            # The ZIP cell of a carried row is written as `yes *(earlier run)*`,
+            # so the pattern has to accept the marker this file itself emits.
+            # It did not: a row carried once was dropped the NEXT time the
+            # driver ran, silently and with no exception to report, because a
+            # non-matching line is simply skipped. On 2026-09-08 that erased
+            # row 3 — a passing row — from the matrix, which is how a phase
+            # criterion gets re-earned with a 130,000-token rebuild that had
+            # already been paid for once.
             m = re.match(r"^\| (\d+) \| ([^|]+)\| `([^`]+)` \| (\w+) \| ([\d,]+) \|"
-                         r" ([\d.]+)s \| ([^|]+)\| (\w+) \|$", line.strip())
+                         r" ([\d.]+)s \| ([^|]+)\| (\w+)"
+                         r"(?: \*\(earlier run\)\*)? \|$", line.strip())
             if not m or int(m.group(1)) in fresh:
                 continue
             kept.append({
