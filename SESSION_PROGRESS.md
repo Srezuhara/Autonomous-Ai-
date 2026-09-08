@@ -8,12 +8,28 @@ different reasons: row 2 earned it, row 4 did not.
 
 > ## ▶ Next session: re-run row 4, then row 2
 >
+> **RESTART THE SERVER FIRST, and confirm it is newer than the code.** The row 4
+> re-run (`fd473b61`, **78,530 tokens**) was spent for nothing: the server began
+> at 21:05, `tools/cli_smoke.py` was fixed at 22:27, and `--no-reload` means the
+> process was still running the pre-fix check. It failed for the identical
+> reason the fix addressed. The tell: the build recorded `cli_smoke: failed`
+> while running the fixed check by hand against that same artifact returned
+> `verified`. **When a live build and a hand-run of the same check disagree,
+> suspect the server's code age first.** This is trap #2 in
+> `PHASE23_QUOTA_RUNBOOK.md` §5 — read that session and violated anyway.
+>
 > ```bash
 > venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
+> # then prove the server is newer than every file you edited:
+> ls -la --time-style=+%m-%d\ %H:%M tools/ agents/ llm_client.py | sort -k6
 > venv/Scripts/python.exe run_live_matrix.py --dry-run
 > venv/Scripts/python.exe run_live_matrix.py --rows 4      # ~88K — do this first
 > venv/Scripts/python.exe run_live_matrix.py --rows 2      # ~129K
 > ```
+>
+> **Quota at hand-off: the fast model is at 0**, heavy at ~75,000. From empty
+> the fast model needs ~10.8h to clear its 90,000 floor, so this session opens
+> with a real wait. The server has been restarted and IS holding the fixed code.
 >
 > **Row 4 first: its artifact is already known to be sound.** Every check was
 > verified or correctly not-applicable and `generated_tests` **passed** — the
@@ -47,6 +63,35 @@ different reasons: row 2 earned it, row 4 did not.
 > the order typed — row 2 went first and its 93K on the fast model then blocked
 > row 4 at the 90,000 floor. And `--dry-run` printing "no daily figures
 > available" means **no spend in the window** (a full bucket), not missing data.
+
+### §0.-19 The row 4 re-run, and what it did and did not prove
+
+`fd473b61` — **78,530 tokens, wasted.** See the restart warning above. The
+artifact itself is sound: running the fixed `cli_smoke` against it returns
+`verified`, and every other check was verified or correctly not-applicable.
+`generated_tests` failed here (3 failed / 9 passed) where the earlier build
+passed 12 — so that check is not reliably green on this shape, and it does not
+decide the row either way.
+
+**What it did prove, and this is worth keeping.** The fast->heavy fallback now
+has a demonstration under *real* exhaustion rather than near-exhaustion. Both
+earlier instances began with 73-76K on the fast model; this row began with
+**29,053 fast / 114,183 heavy**, deliberately far below the floor, and the
+fallback fired mid-build:
+
+```
+23:01:48 WARNING llm_client: Fast model [openai/gpt-oss-20b] is quota-exhausted
+         for [Tester]; retrying on heavy model [openai/gpt-oss-120b], which has
+         its own daily budget.
+```
+
+Twice, both for the **Tester** as predicted, and the build completed on heavy:
+37,479 fast / 41,051 heavy, the fast model ending at literally 0.
+`llm_client.py:2166` is the branch. The rule that follows: starting below the
+fast floor is survivable when the heavy model holds more than the row's FULL
+two-model cost, because heavy can absorb all of it — that is the number to
+check, not the fast shortfall. It stays an informed exception, since the run
+still ends the day's fast budget.
 
 ### §0.-18 What the fourteenth session fixed — commit `4308acc`
 
