@@ -13,6 +13,19 @@ Pass criterion (fixed before any build ran): **>= 3 of 4** reach `done` or `done
 | 1 | simple FastAPI + SQLite CRUD | `done` | yes | 69,236 | 471s | 20 | yes *(earlier run)* |
 | 2 | medium FastAPI + JS frontend | `unusable` | NO | 128,769 | 959s | 27 | yes |
 | 3 | complex / multi-entity | `done_with_context` | yes | 128,676 | 965s | 29 | yes *(earlier run)* |
+| 4 | non-FastAPI (CLI) | `unusable` | NO | 87,800 | 631s | 21 | yes *(earlier run)* |
+
+> **Row 4's verdict belongs to the harness, not the build** (2026-09-08).
+> `cli_smoke` ran the tool under a cp1252 stdout, so a non-breaking hyphen
+> (U+2011) in its argparse description raised `UnicodeEncodeError` inside
+> `print_help()` and the row was recorded "fails on `--help` (exit 1)". The same
+> unmodified tool exits 0 under a UTF-8 stdout, every other check was verified
+> or correctly not-applicable, and `generated_tests` **passed** — the first time
+> in this phase. `cli_smoke` is fixed and now returns `verified` on that
+> artifact, but a build record cannot be edited into a pass: the row is left as
+> recorded and needs one clean re-run (~88K) to count. Row 3's line was restored
+> by hand from `GET /projects/1134f369-…` after a merge defect, fixed in the
+> same commit, dropped it.
 
 ## Per-row detail
 

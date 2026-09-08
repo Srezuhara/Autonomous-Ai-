@@ -1,5 +1,80 @@
 # Session Progress — start here
 
+**Last session: 2026-09-08 (Phase 23 — the fourteenth session).**
+`test_phase23.py` is **1049/1049**. **All four rows have now run against this
+code.** The matrix stands at **2 of 4** — rows 1 (`156f73a3`, `done`, 5/5) and 3
+(`1134f369`, 21/21). Rows 2 and 4 both recorded `unusable`, for entirely
+different reasons: row 2 earned it, row 4 did not.
+
+> ## ▶ Next session: re-run row 4, then row 2
+>
+> ```bash
+> venv/Scripts/python.exe start_server.py --no-reload --host 127.0.0.1 --log-file row.log
+> venv/Scripts/python.exe run_live_matrix.py --dry-run
+> venv/Scripts/python.exe run_live_matrix.py --rows 4      # ~88K — do this first
+> venv/Scripts/python.exe run_live_matrix.py --rows 2      # ~129K
+> ```
+>
+> **Row 4 first: its artifact is already known to be sound.** Every check was
+> verified or correctly not-applicable and `generated_tests` **passed** — the
+> first time in this phase. It was recorded `unusable` only because `cli_smoke`
+> ran it under a cp1252 stdout and a non-breaking hyphen (U+2011) in its
+> argparse description crashed `print_help()`. Fixed; re-running `cli_smoke` on
+> the untouched artifact returns **verified**. The build record cannot be edited
+> into a pass, so the row needs one clean run to count.
+>
+> **Row 2's cause is now detectable and its repair is unproven.** It created its
+> tables in `bookmark.db` and served every request from `bookmarks.db`, so all
+> nine endpoints answered 500 `no such table` while `sql_schema` reported
+> "3 table(s) created, 3 queried — verified". `sql_schema` now compares the
+> database each module opens as well. Whether the repair *lands* is exactly what
+> the re-run measures.
+>
+> **Two things in row 2 have no repair channel at all**, so expect them to
+> survive the re-run:
+> - `static_smoke`/`web_assets` publish no `repair_targets`. The `/static/*`
+>   404s come from `os.path.abspath("../frontend/static")` resolving against the
+>   CWD, in a file that computes `_parent` two lines above.
+> - `delete_tag` was targeted-repaired twice without converging. The cause is
+>   not the arity channel: `module_ref` generated the three missing service
+>   functions from their **call sites** (`get_all_tags(db)`) while every
+>   original function in that module opens its own connection
+>   (`delete_tag(tag_id)`), leaving one file with two calling conventions.
+>   `module_ref` was deliberately left alone — it works, and validating a change
+>   to it needs a live build.
+>
+> **Operational, learned this session.** `--rows 4,2` runs in MATRIX order, not
+> the order typed — row 2 went first and its 93K on the fast model then blocked
+> row 4 at the 90,000 floor. And `--dry-run` printing "no daily figures
+> available" means **no spend in the window** (a full bucket), not missing data.
+
+### §0.-18 What the fourteenth session fixed — commit `4308acc`
+
+1. **`cli_smoke` judged a working CLI by its own console.** It ran
+   `subprocess.run(text=True)` with no encoding and no `PYTHONIOENCODING`, so
+   both the child's stdout and the parent's decoding defaulted to cp1252.
+   `tools/assert_row.py` had the identical bug. Now UTF-8 on both sides. Corpus
+   after the fix: 5 CLIs still fail (one hand-checked — a real
+   `ModuleNotFoundError`), 5 verified, 38 not applicable.
+2. **`sql_schema` compares databases, not just statements.** Anchored on the
+   entry module, because row 2 had a `CREATE TABLE` in *both* files and
+   anchoring on the schema fell silent on the very build it was written for.
+   Falsified across 47 projects: exactly 1 flagged, the true positive.
+3. **The driver polled finished builds for 45 minutes.** It omitted `unusable`
+   from its copy of the server's terminal statuses; it imports
+   `api_platform.runner.TERMINAL_STATUSES` now.
+4. **The driver silently deleted rows it had carried.** Its merge pattern could
+   not read back the `yes *(earlier run)*` marker it writes itself, and a
+   non-matching line is skipped rather than raised on. This had already erased
+   row 3 — a passing row — from the matrix. Restored from the API record.
+
+**The corpus baseline is 149 diffs stale and was deliberately not re-recorded.**
+All but two are `route_presence`/`call_arity`/`await_sync` never baselined after
+an earlier session added them; the two real ones are the documented
+`feature_coverage: verified -> not_run` pair. Re-record only after reading them.
+
+---
+
 **Last session: 2026-09-06 (Phase 23 — the thirteenth session).**
 `test_phase23.py` is **1029/1029**. Four rows ran. The last one is the **first
 row in this project's history to PASS its own criterion**: `1134f369`,
