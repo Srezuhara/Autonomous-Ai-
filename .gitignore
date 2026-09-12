@@ -95,3 +95,23 @@ Thumbs.db
 *.docx
 *CONTEXT*.md
 PROGRESS3rdphase.md
+
+# ---------------------------------------------------------------------------
+# Untracked 2026-09-12: regenerable state, one-off visual artefacts, and
+# superseded phase docs. All still present on disk, just not versioned.
+# ---------------------------------------------------------------------------
+platform.db
+frontend-screenshots/
+motion-audits/
+IMPLEMENTATION_PLAN.md
+FRONTEND_COMPLETION_PLAN.md
+FRONTEND_LANDING_PLAN.md
+FRONTEND_REDESIGN_HANDOFF.md
+PHASE21_HANDOFF.md
+PHASE22_HANDOFF.md
+PHASE23_PLAN.md
+PHASE23_LIVE_VALIDATION.md
+PHASE23_NEXT_SESSION_PLAN.md
+test_phase17.py
+test_phase21.py
+test_phase22.py

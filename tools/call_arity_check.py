@@ -70,10 +70,23 @@ class ArityIssue:
     hi: int            # accepted positional parameters
     defined_in: str
     signature: str
+    keyword: str = ""   # set when the mismatch is a keyword, not a count
+    duplicate: bool = False
 
     def __str__(self) -> str:
         want = (f"{self.lo}" if self.lo == self.hi
                 else f"{self.lo} to {self.hi}")
+        if self.keyword:
+            what = ("a value for `{k}` both positionally and by keyword"
+                    if self.duplicate else
+                    "the keyword argument `{k}=`, which the definition does "
+                    "not accept").format(k=self.keyword)
+            return (
+                f"`{self.callee}(...)` at {self.file}:{self.line} passes "
+                f"{what} — `{self.signature}` in {self.defined_in}. The call "
+                f"raises TypeError every time it runs. Fix the CALL to match "
+                f"the definition, or the definition to match its callers."
+            )
         return (
             f"`{self.callee}(...)` at {self.file}:{self.line} passes "
             f"{self.given} positional argument(s) to a function that takes "
@@ -99,7 +112,8 @@ def _is_test(rel: str) -> bool:
 
 
 def _signature(node) -> tuple | None:
-    """`(lo, hi, names, text)` for a definition whose arity can be judged.
+    """`(lo, hi, names, keywords, text)` for a definition whose arity can be
+    judged; `keywords` is every name a keyword argument may use.
 
     `None` when it cannot be: varargs, kwargs, or any decorator.
     """
@@ -112,11 +126,12 @@ def _signature(node) -> tuple | None:
     names = [p.arg for p in positional]
     hi = len(positional)
     lo = hi - len(a.defaults)
+    keywords = {p.arg for p in a.args} | {p.arg for p in a.kwonlyargs}
     try:
         text = f"def {node.name}({ast.unparse(a)})"
     except Exception:
         text = f"def {node.name}(...)"
-    return lo, hi, names, text
+    return lo, hi, names, keywords, text
 
 
 def _module_signatures(tree: ast.AST) -> dict:
@@ -220,16 +235,29 @@ def check_project_arity(root: str) -> ArityReport:
                 continue
 
             report.calls += 1
-            lo, hi, names, text = sig
+            lo, hi, names, keywords, text = sig
             given = len(node.args)
             kw = {k.arg for k in node.keywords}
             # A keyword may satisfy a positional parameter.
             supplied = given + len({n for n in names[given:]} & kw)
+            issue = dict(file=rel, line=getattr(node, "lineno", 0),
+                         callee=written, given=given, lo=lo, hi=hi,
+                         defined_in=f"{mod}.py", signature=text)
             if given > hi or supplied < lo:
+                report.issues.append(ArityIssue(**issue))
+                continue
+            # A keyword the definition has no parameter for, or one naming a
+            # parameter already filled positionally. Both raise TypeError on
+            # every call, and counting positionals alone passed them: row 2's
+            # `crud.list_bookmarks(db, tag_name=tag)` against
+            # `def list_bookmarks(conn)` was recorded verified (2026-09-10)
+            # while GET /bookmarks/ answered 500 on every request.
+            unexpected = sorted(kw - keywords)
+            dup = sorted(set(names[:given]) & kw)
+            if unexpected or dup:
                 report.issues.append(ArityIssue(
-                    file=rel, line=getattr(node, "lineno", 0), callee=written,
-                    given=given, lo=lo, hi=hi, defined_in=f"{mod}.py",
-                    signature=text))
+                    **issue, keyword=(unexpected or dup)[0],
+                    duplicate=not unexpected))
 
     if report.issues:
         logger.info(

@@ -153,6 +153,7 @@ Use the actual endpoint paths, env vars, and file names from the project files a
         review_results:   list        = None,
         test_results:     list        = None,
         error_detail:     str         = "",
+        verification_outcomes: list = None,
     ) -> str:
         """
         Write SESSION_CONTEXT.md (+ BUILD_CONTEXT.md alias) into the project root.
@@ -194,6 +195,7 @@ Use the actual endpoint paths, env vars, and file names from the project files a
                 review_results   = review_results or [],
                 test_results     = test_results   or [],
                 error_detail     = error_detail,
+                verification_outcomes = verification_outcomes or [],
             )
         except Exception as e:
             logger.error(f"SESSION_CONTEXT.md build failed: {e}", exc_info=True)
@@ -213,6 +215,232 @@ Use the actual endpoint paths, env vars, and file names from the project files a
 
         return written
 
+    # ── A clean build owes the reader a report too ────────────────────────────
+
+    def generate_build_report(
+        self,
+        intent:                dict,
+        architecture:          dict,
+        backend_files:         list,
+        frontend_files:        list = None,
+        verification_outcomes: list = None,
+        remediation:           Any  = None,
+    ) -> str:
+        """
+        Write BUILD_REPORT.md for a build that finished CLEAN (`done`).
+
+        SESSION_CONTEXT.md exists for builds that admit they are degraded, and
+        every word of it is framed that way — "this build did not finish
+        cleanly", "Stopped because", "How to Finish This Build". A `done` build
+        used to get no document at all, which left the honesty machinery
+        inverted: the builds that FAILED explained themselves, and the build
+        that passed every check while serving a 500 said nothing.
+
+        `3aea19e3` is the case this exists for. Status `done`, 11/11 routes,
+        every check verified — and by hand, `POST /bookmarks/` returned 500
+        whenever the optional `tags` field was supplied, the frontend was not
+        served at all, and 4 of its 9 shipped tests failed. None of that reached
+        the user, because a clean build shipped only README.md and SETUP.md.
+
+        This is deliberately NOT SESSION_CONTEXT.md: telling someone their
+        working build "did not finish cleanly" would be a new lie in the other
+        direction. It answers a different question — what was checked, what was
+        NOT, and what is worth a look by hand.
+
+        Never raises; never makes an LLM call.
+        """
+        app_name = intent.get("app_name", "project")
+        root     = architecture.get("root_folder", app_name)
+        try:
+            content = self._build_build_report(
+                app_name              = app_name,
+                root                  = root,
+                intent                = intent,
+                backend_files         = backend_files or [],
+                frontend_files        = frontend_files or [],
+                verification_outcomes = verification_outcomes or [],
+                remediation           = remediation,
+            )
+        except Exception as e:
+            logger.error(f"BUILD_REPORT.md build failed: {e}", exc_info=True)
+            return ""
+
+        path = f"{root}/BUILD_REPORT.md"
+        try:
+            create_file(path, content)
+            logger.info(f"  📄 BUILD_REPORT.md written ({len(content)} chars)")
+            return path
+        except Exception as e:
+            logger.warning(f"Could not write BUILD_REPORT.md: {e}")
+            return ""
+
+    def _build_build_report(
+        self,
+        app_name:              str,
+        root:                  str,
+        intent:                dict,
+        backend_files:         list,
+        frontend_files:        list,
+        verification_outcomes: list,
+        remediation:           Any,
+    ) -> str:
+        """Pure string building for BUILD_REPORT.md. No LLM, never raises."""
+        stamp     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        endpoints = self._extract_endpoints(root, backend_files)
+        packages  = self._extract_requirements(root)
+        has_tests = self._has_tests(root)
+        tree      = self._build_file_tree(root)
+
+        # Only checks that EXECUTED the artifact go under "verified".
+        # not_applicable and not_run are reported separately and deliberately:
+        # a check that did not look at something is not evidence that the
+        # something works, and collapsing the two is how a hole reads as a pass.
+        checked, not_checked = [], []
+        for o in (verification_outcomes or []):
+            try:
+                status = (o.get("status") or "").lower()
+                name   = o.get("check")
+                detail = (o.get("detail") or "").strip()
+                if status == "verified" and detail:
+                    checked.append(f"- **`{name}`** — {detail}")
+                elif status in ("not_applicable", "not_run"):
+                    why = "did not apply" if status == "not_applicable" else "DID NOT RUN"
+                    not_checked.append(f"- **`{name}`** — {why}: {detail}")
+            except Exception:
+                continue
+
+        checked_block = "\n".join(checked) if checked else (
+            "_No check reported executing this build. Treat everything below "
+            "as unverified._")
+        not_checked_block = "\n".join(not_checked) if not_checked else (
+            "_Every check had something to say about this build._")
+
+        manual = []
+        if remediation is not None:
+            try:
+                manual = self._drop_stale_issues(
+                    getattr(remediation, "manual_checks", []) or [], root)
+            except Exception:
+                manual = []
+        manual_block = (
+            "\n".join(f"- [ ] {m}" for m in manual) if manual else
+            "_Nothing was routed to manual testing._")
+
+        test_line = ("```bash\npytest tests/ -v\n```" if has_tests
+                     else "_No test suite was generated._")
+        endpoint_block = (f"```\n{endpoints}\n```" if endpoints
+                          else "_No HTTP endpoints detected._")
+        packages_block = (f"```\n{packages.strip()}\n```" if packages
+                          else "_No requirements.txt found._")
+
+        return f"""# ✅ Build Report — {app_name}
+
+> This build completed and passed its automated checks. That is not the same as
+> "finished". This document says what was checked, what was **not**, and what is
+> worth a few minutes of your own time before you trust it.
+
+| | |
+|---|---|
+| **Project** | {app_name} |
+| **Type** | {intent.get('app_type', '—')} |
+| **Files** | {len(backend_files)} backend, {len(frontend_files)} frontend |
+| **Generated** | {stamp} |
+
+---
+
+## ✅ What was verified
+
+These checks executed this build and passed.
+
+{checked_block}
+
+---
+
+## ⚪ What was NOT checked
+
+This is not a defect list. These checks had nothing to say — which is not the
+same as a pass. Anything here is unverified, and yours to confirm.
+
+{not_checked_block}
+
+---
+
+## 🧑‍🔬 Worth checking by hand
+
+{manual_block}
+
+---
+
+## ⚠️ Known limits of these checks
+
+Read this before treating a green report as a guarantee. These are **structural
+gaps in the checker**, not findings about your code:
+
+- **Endpoints are probed with required fields only.** The smoke test sends the
+  smallest body each model accepts, so a bug reachable only through an
+  *optional* field is invisible to it. If a request fails for you while this
+  report is green, an optional field is the first place to look.
+- **A command-line tool that exits 0 is assumed to have worked.** Nothing
+  checks that it changed anything, so a run that silently does nothing looks
+  identical to a successful one. Run it once on throwaway files and confirm
+  the result yourself.
+- **Frontend JavaScript is never executed.** Pages are served and assets are
+  fetched, but no script runs. A broken `app.js` looks identical to a working one
+  here.
+- **A passing check means "it did not error", not "it did what you asked."**
+  Nothing compares the delivered behaviour against your original prompt.
+- **The generated test suite is not a reliable signal** and does not decide this
+  report either way. Run it, but read its failures before believing them.
+
+---
+
+## 📁 Project structure
+
+```
+{tree}
+```
+
+---
+
+## 🚀 Running it
+
+**1. Install**
+
+{packages_block}
+
+```bash
+python -m venv venv
+# Windows: venv\\Scripts\\Activate.ps1    macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
+```
+
+**2. Start the backend**
+
+```bash
+cd backend
+uvicorn main:app --reload --port 8000
+```
+
+Then open **http://localhost:8000/docs**.
+
+> If this project ships a `frontend/` folder, check whether the backend mounts
+> it. When it does not, `/` returns 404 and you serve that folder yourself:
+> `cd frontend && python -m http.server 3000`.
+
+**3. Endpoints detected**
+
+{endpoint_block}
+
+**4. Tests**
+
+{test_line}
+
+---
+
+*Generated by AI App Builder · build report · {stamp}*
+"""
+
+
     def _build_session_context(
         self,
         app_name:         str,
@@ -231,6 +459,7 @@ Use the actual endpoint paths, env vars, and file names from the project files a
         review_results:   list,
         test_results:     list,
         error_detail:     str,
+        verification_outcomes: list = None,
     ) -> str:
         """Assemble the markdown body. Pure string building — no LLM, no raising."""
         all_files = list(backend_files) + list(frontend_files)
@@ -266,6 +495,7 @@ Use the actual endpoint paths, env vars, and file names from the project files a
 
         # ── 🛠️ Remaining work ─────────────────────────────────────────────────
         todos: list[str] = []
+        unresolved: list[str] = []
         if remediation is not None:
             unresolved = self._drop_stale_issues(
                 getattr(remediation, "unresolved", []) or [], root
@@ -277,6 +507,37 @@ Use the actual endpoint paths, env vars, and file names from the project files a
         if not has_tests and backend_files:
             todos.append("- [ ] Add a pytest suite under `tests/` — none was generated")
         todos_block = "\n".join(todos) or "_No outstanding issues were recorded._"
+
+        # ── What already works ──────────────────────────────────────
+        # A handoff that lists only defects cannot tell the reader whether the
+        # thing runs at all. Row 2 shipped with all five CRUD endpoints serving
+        # correctly and a document that mentioned none of it, so the only
+        # readable conclusion was "broken". These lines come from the checks
+        # that ACTUALLY EXECUTED the artifact and passed, so this is a record
+        # of what was observed, never a claim about code that merely parses.
+        # not_applicable and not_run are both excluded: a check that did not
+        # look at something is not evidence that the something works.
+        works: list[str] = []
+        for outcome in (verification_outcomes or []):
+            try:
+                if (outcome.get("status") or "").lower() != "verified":
+                    continue
+                detail = (outcome.get("detail") or "").strip()
+                if detail:
+                    works.append(f"- **`{outcome.get('check')}`** — {detail}")
+            except Exception:
+                continue
+        works_block = (
+            "These were checked against the running artifact and passed. Use "
+            "them as your starting point — they are the parts you can build "
+            "on right now.\n\n" + "\n".join(works)
+            if works else ""
+        )
+        works_section = (
+            f"\n---\n\n## ✅ What Already Works\n\n{works_block}\n"
+            if works_block else ""
+        )
+
 
         # ── 🧑\u200d🔬 Worth checking by hand ──────────────────────────────────
         # Real findings that are NOT defects in the delivered application: the
@@ -292,10 +553,30 @@ Use the actual endpoint paths, env vars, and file names from the project files a
                 getattr(remediation, "manual_checks", []) or [], root
             )
         if manual_items:
+            # The preamble has to match what actually happened. It used to claim
+            # "executed and verified" unconditionally, so an `unusable` build
+            # whose every endpoint returned 500 shipped a document asserting the
+            # app ran — two inches below a Remaining Work list saying it did not.
+            # `unresolved` is the pipeline's own signal that the artifact carries
+            # defects it could not repair. Missing tests are deliberately NOT
+            # part of this condition: a build can be verified working and still
+            # ship no suite, and that must not read as "the app is broken".
+            if unresolved:
+                manual_preamble = (
+                    "**The application has unresolved issues — see Remaining "
+                    "Work above, and start there.** The items below are "
+                    "separate: things the automated checks could not confirm "
+                    "either way, and which are worth a few minutes by hand "
+                    "once the app runs."
+                )
+            else:
+                manual_preamble = (
+                    "The application itself was executed and verified — "
+                    "these are things the automated checks could not confirm "
+                    "for you, and which are worth a few minutes by hand."
+                )
             manual_block = (
-                "The application itself was executed and verified — these are "
-                "things the automated checks could not confirm for you, and "
-                "which are worth a few minutes by hand.\n\n"
+                manual_preamble + "\n\n"
                 + "\n".join(f"- [ ] {item}" for item in manual_items)
             )
         else:
@@ -371,6 +652,7 @@ Use the actual endpoint paths, env vars, and file names from the project files a
 
 {missing_block}
 
+{works_section}
 ---
 
 ## 🛠️ Remaining Work

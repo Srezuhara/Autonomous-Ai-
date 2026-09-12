@@ -356,6 +356,40 @@ def check_project_sql(root: str, file_paths: list[str]) -> SchemaReport:
     except Exception:
         return report
 
+    # ── Generated tests are not the application's schema ──────────────────
+    # `check_project_db_paths` has excluded test files since it was written,
+    # for the reason `_is_test_file` states: tests get their own database on
+    # purpose. This scan did not, so a CREATE TABLE in a generated fixture
+    # counted as "the project creates this table" — masking a table the
+    # application never creates.
+    #
+    # Row 2's `464da0fb` is the proof. Its `tests/test_routes.py` appeared in
+    # `schema_files`, and because the Tester REWRITES those fixtures on every
+    # remediation pass, the mask lifted and fell between passes: the build
+    # logged "Every table the code queries now exists" at 12:29:48 and failed
+    # on `bookmarks_tags` at 12:31:01 with no application file changed in
+    # between — by which time both repair passes were spent.
+    #
+    # Filtering here covers all three uses of `sources` at once: the schema in
+    # pass 1, the queried literals in pass 2, and `schema_files`, which decides
+    # WHERE a repair is written. A test that queries a table the application
+    # does not create is a test defect, and belongs to `generated_tests`.
+    #
+    # `_schema_lives_elsewhere` deliberately still sees the FILTERED set. It is
+    # a suppression heuristic, so the conservative direction would be to let a
+    # test's `import sqlalchemy` keep silencing findings — but an app that
+    # creates tables inline while only its tests import an ORM is a shape no
+    # corpus project has, and measured across the corpus this choice changed
+    # nothing: zero sql_schema diffs. Revisit if a false positive ever traces
+    # here.
+    def _rel_posix(p) -> str:
+        try:
+            return p.relative_to(base).as_posix()
+        except Exception:
+            return p.as_posix()
+
+    candidates = [p for p in candidates if not _is_test_file(_rel_posix(p))]
+
     for path in candidates:
         try:
             sources[path] = path.read_text(encoding="utf-8", errors="ignore")
@@ -704,8 +738,14 @@ def check_sql_schema(root: str) -> VerificationOutcome:
     # never the file the traceback names — that one is wherever the query runs.
     targets: dict = {}
     if report.missing and report.schema_files:
-        where = report.schema_files[0]
-        targets[where] = [str(m) for m in report.missing]
+        # `schema_files` is built from rglob order, and this entry decides
+        # WHERE the missing CREATE TABLE gets written. A test file reaching
+        # here would send an application repair into a fixture. The scan above
+        # already excludes tests, so this cannot happen — the guard is here so
+        # it stays that way, and skips publishing rather than pick a test.
+        app_files = [f for f in report.schema_files if not _is_test_file(f)]
+        if app_files:
+            targets[app_files[0]] = [str(m) for m in report.missing]
     # A path mismatch is repaired in the module that opens the WRONG file, not
     # in the one that holds the schema — the schema is right.
     for where, issues in db_paths.repair_targets.items():

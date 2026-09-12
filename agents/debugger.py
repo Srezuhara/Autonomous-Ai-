@@ -125,6 +125,49 @@ def _is_framework_script(file_path: str) -> bool:
     parts = [p.lower() for p in Path(str(file_path).replace("\\", "/")).parts]
     return any(p in FRAMEWORK_SCRIPT_DIRS for p in parts[:-1])
 
+def _resolves_from(file_path: str, module: str) -> bool:
+    """Can `file_path` import `module` through the directories its sys.path
+    shim adds -- its own, its parent's, its grandparent's, within the project?
+
+    Case-exact on every segment: `Path.is_file()` is case-insensitive on
+    Windows and macOS, and `Supplier.py` "existing" when only `supplier.py`
+    does has already produced one wrong rewrite here.
+    """
+    try:
+        rel = Path(str(file_path).replace("\\", "/"))
+        project = (Path(config.OUTPUT_DIR) / rel.parts[0]).resolve()
+        here = (Path(config.OUTPUT_DIR) / rel).resolve().parent
+    except Exception:
+        return False
+    parts = [p for p in module.split(".") if p]
+    if not parts:
+        return False
+
+    def _exact(base: Path, names: list) -> bool:
+        cur = base
+        for i, name in enumerate(names):
+            try:
+                entries = set(os.listdir(cur))
+            except OSError:
+                return False
+            last = i == len(names) - 1
+            if last and f"{name}.py" in entries:
+                return True
+            if name not in entries or not (cur / name).is_dir():
+                return False
+            cur = cur / name
+        return True                        # a package directory
+
+    d = here
+    for _ in range(3):
+        if d != project and project not in d.parents:
+            break
+        if _exact(d, parts):
+            return True
+        d = d.parent
+    return False
+
+
 def _is_sibling_pkg_head(module: str) -> bool:
     """True for `backend`, a project-root package name, or any single segment.
 
@@ -392,6 +435,22 @@ def _missing_fields(findings) -> list:
 #: `test_phase23.py` against the real dataclass.
 _MISSING_TABLE_RE = re.compile(
     r"^SQL in .* queries table `(?P<table>\w+)`, which this project never creates")
+
+
+#: `check_project_db_paths` in `tools/sql_schema_check.py`, pinned by a test.
+_DB_PATH_RE = re.compile(
+    r"^`[^`]+` opens `(?P<wrong>[^`]+)`, but the application initialises "
+    r"`(?P<right>[^`]+)` at startup")
+
+
+def _db_path_mismatches(findings) -> dict:
+    """`{wrong basename: right basename}` from `sql_schema` path findings."""
+    out: dict = {}
+    for finding in findings or ():
+        m = _DB_PATH_RE.match(str(finding).strip())
+        if m:
+            out[m.group("wrong")] = m.group("right")
+    return out
 
 
 def _missing_tables(findings) -> list:
@@ -1243,6 +1302,17 @@ class Debugger(BaseAgent):
                 clean_parts = [parts[-1]]
             new_module = ".".join(clean_parts)
             if new_module == module_path:
+                return match.group(0)
+            # Never trade an import that resolves for one that does not.
+            # `inventory_system_1134f369` -- row 3's passing build -- has
+            # `from services.stock import get_stock_levels` in
+            # app/routers/warehouse.py; flattened to `from stock import ...`
+            # it names a module in app/services/, which is not on that file's
+            # path, and app/main.py stopped importing (verify_repairs,
+            # 2026-09-10). "services" being a folder name says nothing about
+            # where the flattened module would be found.
+            if (_resolves_from(file_path, module_path)
+                    and not _resolves_from(file_path, new_module)):
                 return match.group(0)
             fixes.append(f"from {module_path} → from {new_module}")
             return f"{prefix}{new_module}{rest}"
@@ -2763,6 +2833,83 @@ THE ATTEMPT BEFORE THIS ONE FAILED. Do not repeat it:
             f"  ✅ [{file_path}] Field repair applied: {len(landed)}/{len(wanted)}")
         return True
 
+    def _repair_db_paths(
+        self, file_path: str, findings: list, result: FileDebugResult
+    ) -> bool:
+        """Point a module at the database file the app actually initialises.
+
+        Deterministic, because the finding already states the whole fix: this
+        module's literal names `bookmarks.db`, the entry module creates the
+        schema in `bookmark_manager.db`. Each string literal whose database
+        basename is the wrong one gets the right basename, directory part
+        kept. Landed only if the path check stops naming this file and the
+        file still imports; otherwise the original is restored.
+        """
+        import ast
+        from tools.sql_schema_check import _db_basename, check_project_db_paths
+
+        pairs = _db_path_mismatches(findings)
+        try:
+            original = read_file(file_path)
+            tree = ast.parse(original)
+        except Exception as e:
+            logger.warning(f"  ⚠️  [{file_path}] Cannot read for db-path repair: {e}")
+            return False
+
+        lines = original.splitlines(keepends=True)
+        edits = []          # (line index, start col, end col, new literal)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if node.lineno != getattr(node, "end_lineno", node.lineno):
+                continue                      # a multi-line string: leave it
+            base = _db_basename(node.value)
+            right = pairs.get(base)
+            if not right:
+                continue
+            new_value = node.value[: len(node.value) - len(base)] + right
+            edits.append((node.lineno - 1, node.col_offset,
+                          node.end_col_offset, repr(new_value)))
+        if not edits:
+            logger.warning(
+                f"  ⚠️  [{file_path}] Database-path finding, but no literal here "
+                f"names {', '.join(sorted(pairs))} — nothing to point elsewhere")
+            return False
+
+        for idx, start, end, lit in sorted(edits, reverse=True):
+            # `col_offset` counts UTF-8 bytes; convert on the line's own bytes.
+            raw = lines[idx].encode("utf-8")
+            lines[idx] = (raw[:start] + lit.encode("utf-8")
+                          + raw[end:]).decode("utf-8")
+        fixed = "".join(lines)
+
+        logger.info(
+            f"  🗄️  [{file_path}] Pointing {len(edits)} database path(s) at "
+            f"{', '.join(sorted(set(pairs.values())))}, the file the app "
+            f"initialises")
+        create_file(file_path, fixed)
+
+        verify = run_python(file_path)
+        norm = file_path.replace("\\", "/")
+        try:
+            still = norm.split("/", 1)[-1] in {
+                r.split("/", 1)[-1] for r in
+                check_project_db_paths(norm.split("/")[0]).repair_targets}
+        except Exception:
+            still = False
+        if still or (not verify.success
+                     and not any(p in verify.stderr for p in IGNORE_ERRORS)):
+            logger.warning(
+                f"  ↩️  [{file_path}] Database-path repair did not land — "
+                f"restoring the original")
+            create_file(file_path, original)
+            return False
+        result.fixes_applied.append(
+            f"Pointed {len(edits)} database path(s) in {file_path} at the "
+            f"database the app initialises")
+        logger.info(f"  ✅ [{file_path}] Database-path repair applied")
+        return True
+
     def _repair_missing_tables(
         self, file_path: str, findings: list, result: FileDebugResult
     ) -> bool:
@@ -2776,6 +2923,16 @@ THE ATTEMPT BEFORE THIS ONE FAILED. Do not repeat it:
         """
         wanted = _missing_tables(findings)
         if not wanted:
+            # `sql_schema` files two kinds of finding against this channel, and
+            # this one used to return here, silently, for the second: a module
+            # that opens a different database FILE than the app initialises.
+            # Row 2 `01cde425` (2026-09-10) went `unusable` 0/6 with that
+            # finding in hand for two passes and not one line of log about it.
+            if _db_path_mismatches(findings):
+                return self._repair_db_paths(file_path, findings, result)
+            logger.warning(
+                f"  ⚠️  [{file_path}] {len(findings)} schema finding(s) match "
+                f"no schema repair — nothing was attempted")
             return False
         try:
             original = read_file(file_path)

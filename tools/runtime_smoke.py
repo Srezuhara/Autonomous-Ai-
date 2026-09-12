@@ -73,9 +73,12 @@ class RouteProbe:
     status: int | None = None
     error:  str = ""
     constraint: bool = False
+    swallowed: bool = False     # a 4xx whose body is a caught server exception
 
     @property
     def ok(self) -> bool:
+        if self.swallowed:
+            return False
         # A route that answers at all is working: 4xx is a valid answer to an
         # unauthenticated / unparameterised probe. 5xx is the app breaking.
         #
@@ -356,6 +359,54 @@ try:
             "duplicate key", "unique failed", "foreign key failed",
         ))
 
+    # Messages only the interpreter or the database driver produce. No handler
+    # validating its input writes "object has no attribute" on purpose; a
+    # handler forwarding str(exc) of an exception it did not expect does.
+    # Constraint violations ("UNIQUE constraint failed") are deliberately
+    # absent: a 400 for a duplicate the probe invented is a correct answer.
+    _SWALLOWED = (
+        r"sqlite objects created in a thread",
+        r"no such (table|column)",
+        r"cannot operate on a closed (database|cursor)",
+        r"'\w+' object has no attribute '\w+'",
+        r"module '[\w.]+' has no attribute '\w+'",
+        r"name '\w+' is not defined",
+        r"got an unexpected keyword argument",
+        r"missing \d+ required (positional|keyword-only) argument",
+        r"takes \d+ positional arguments? but \d+ (was|were) given",
+        r"'\w+' object is not (subscriptable|callable|iterable)",
+        r"unhashable type",
+        r"cannot unpack non-iterable",
+        r"unsupported operand type",
+        r"not supported between instances of",
+        r"incorrect number of bindings supplied",
+        # sqlite3's InterfaceError for a value it cannot store. Row 2
+        # `01cde425` (2026-09-10) passed `List[Tag]` models where the service
+        # wanted strings, caught this, and answered POST with a 400.
+        r"error binding parameter \d+",
+    )
+
+    def _swallowed(text):
+        import re as _re
+        t = (text or "").lower()
+        return any(_re.search(p, t) for p in _SWALLOWED)
+
+    def _handler_frame(route_obj):
+        """`rel.py:line in name` for the route's own handler, or "".
+
+        A caught exception leaves no traceback; the handler is the file that
+        caught it, and where a repair has to look first.
+        """
+        try:
+            code = getattr(route_obj, "endpoint").__code__
+            fn = os.path.abspath(code.co_filename)
+            if not fn.startswith(project_root):
+                return ""
+            rel = os.path.relpath(fn, project_root).replace("\\", "/")
+            return "{}:{} in {}".format(rel, code.co_firstlineno, code.co_name)
+        except Exception:
+            return ""
+
     # raise_server_exceptions=True so the real exception reaches us. A bare
     # "500 Internal Server Error" tells the user nothing they can act on; the
     # AttributeError and the generated line that raised it tell them exactly
@@ -412,6 +463,25 @@ try:
                 except Exception:
                     pass
                 entry["constraint"] = _is_constraint(entry["error"])
+            elif 400 <= resp.status_code < 500 and resp.status_code != 422:
+                # A 4xx whose body is an interpreter or database-driver error
+                # is a 500 the handler caught and relabelled -- `except
+                # Exception as e: raise HTTPException(400, str(e))`. Row 2 on
+                # 2026-09-10 answered POST /bookmarks/ with 400 "SQLite objects
+                # created in a thread can only be used in that same thread",
+                # and it was scored as a route that works. 422 is excluded:
+                # that is FastAPI's own validation answer, never the handler's.
+                try:
+                    text = resp.text[:300]
+                except Exception:
+                    text = ""
+                if _swallowed(text):
+                    entry["swallowed"] = True
+                    where = _handler_frame(route_obj)
+                    entry["error"] = (
+                        "the handler caught a server-side exception and "
+                        "returned it as HTTP {}: {}".format(resp.status_code, text)
+                        + (" (at {})".format(where) if where else ""))
         except Exception as e:
             # An unhandled exception in a handler IS a 500 — record it as one,
             # with the detail the HTTP response would have thrown away.
@@ -579,6 +649,7 @@ def smoke_test_app(root: str, timeout: int = SMOKE_TIMEOUT) -> SmokeResult:
                     path=p.get("path", ""), method=p.get("method", ""),
                     status=p.get("status"), error=p.get("error", ""),
                     constraint=bool(p.get("constraint", False)),
+                    swallowed=bool(p.get("swallowed", False)),
                 ))
         else:
             err = (proc.stderr or "").strip()

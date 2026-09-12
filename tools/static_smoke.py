@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import http.server
 import logging
+import re
 import socket
 import threading
 import urllib.error
@@ -113,6 +114,52 @@ def _asset_refs(html: str) -> list:
     return out
 
 
+_MOUNT = re.compile(
+    r"""\.mount\(\s*['"](/[^'"]*)['"]\s*,\s*StaticFiles\(\s*directory\s*=\s*"""
+    r"""([^)]*?['"]([^'"]+)['"][^)]*)\)""")
+
+
+def _mounted_file(project_dir: Path, path: str) -> str:
+    """The project file a backend `StaticFiles` mount serves for `path`, or "".
+
+    A page the BACKEND renders -- a Jinja template -- is not rooted at its own
+    directory, and `/static/styles.css` in it is the app's `/static` mount to
+    answer. `bookmark_manager_e1266aab` mounts `../frontend/static`, has
+    `frontend/static/styles.css` on disk, and this check reported the file as
+    "not in the project -- `web_assets` names it in full" while `web_assets`
+    said verified. Two checks disagreeing about one file is how a harness
+    fails a sound page.
+
+    Resolved by the directory literal's tail (`frontend/static`), because the
+    expression around it -- `os.path.abspath(...)`, `Path(__file__).parent /`
+    -- is resolved at runtime. That is safe for one reason: `StaticFiles`
+    checks its directory exists when it is constructed and raises at import
+    if not, so an app `runtime_smoke` could load had every mounted directory.
+    """
+    for py in project_dir.rglob("*.py"):
+        if "venv" in py.parts or "site-packages" in py.parts:
+            continue
+        try:
+            src = py.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for prefix, _expr, literal in _MOUNT.findall(src):
+            prefix = "/" + prefix.strip("/")
+            if not path.startswith(prefix.rstrip("/") + "/"):
+                continue
+            rest = path[len(prefix.rstrip("/")) + 1:]
+            tail = "/".join(p for p in literal.replace("\\", "/").split("/")
+                            if p not in ("", ".", ".."))
+            if not tail or not rest:
+                continue
+            hits = [f for f in project_dir.rglob(rest.split("/")[-1])
+                    if f.is_file() and f.relative_to(project_dir).as_posix()
+                    .endswith(f"{tail}/{rest}")]
+            if len(hits) == 1:
+                return hits[0].relative_to(project_dir).as_posix()
+    return ""
+
+
 def smoke_test_static(root: str) -> VerificationOutcome:
     """
     Serve this project's pages and fetch them. Never raises.
@@ -143,6 +190,7 @@ def smoke_test_static(root: str) -> VerificationOutcome:
     evidence: dict = {"pages": [], "skipped_remote": 0}
     pages_served = 0
     assets_checked = 0
+    mounted = 0
 
     for rel_page in shapes.html_files:
         page_abs = (Path(config.OUTPUT_DIR) / rel_page).resolve()
@@ -188,6 +236,14 @@ def smoke_test_static(root: str) -> VerificationOutcome:
                     {"ref": ref, "status": a_status, "bytes": a_len})
                 if a_status == 200:
                     continue
+
+                # A root-absolute reference the backend serves from a mount.
+                if path.startswith("/"):
+                    served = _mounted_file(project_dir, path)
+                    if served:
+                        record["assets"][-1]["mounted"] = served
+                        mounted += 1
+                        continue
 
                 # `web_asset_check` already reports an asset that is absent from
                 # the project, and reports it better — it names the page and the
@@ -238,6 +294,11 @@ def smoke_test_static(root: str) -> VerificationOutcome:
 
     detail = (f"served {pages_served} page(s) over HTTP and fetched "
               f"{assets_checked} local asset(s)")
+    if mounted:
+        # Said, not buried: these were NOT fetched from this server. They are
+        # on disk where the app's StaticFiles mount serves them from.
+        detail += (f"; {mounted} of them are served by the backend's "
+                   f"StaticFiles mount and were found on disk under it")
 
     if findings:
         return VerificationOutcome.failed(

@@ -5941,6 +5941,40 @@ check("a file that exists but is outside the served root is reported",
 check("...and is described as unreachable, not as absent",
       any("exists in the project" in f for f in _o.findings), str(_o.findings))
 
+# A template the BACKEND renders asks its app's StaticFiles mount for
+# `/static/...`, not the template's own directory. `bookmark_manager_e1266aab`
+# was failed for three assets that sit exactly where its mount serves them —
+# "not in the project", said the finding, while `web_assets` said verified.
+_MOUNT32 = ('from fastapi import FastAPI\n'
+            'from fastapi.staticfiles import StaticFiles\nimport os\n'
+            'app = FastAPI()\n'
+            'app.mount("/static", StaticFiles(directory=os.path.abspath('
+            '"../frontend/static")), name="static")\n')
+_s32_project("mounted", {
+    "backend/main.py": _MOUNT32,
+    "frontend/static/styles.css": "body{}",
+    "frontend/templates/index.html":
+        '<html><head><link rel="stylesheet" href="/static/styles.css">'
+        '</head><body>hi</body></html>',
+})
+_o = _s32_run("mounted")
+check("an asset the backend's StaticFiles mount serves is not 'missing'",
+      _o.status is Status.VERIFIED, f"{_o.status} {_o.findings}")
+check("...and the record says it was found under the mount, not fetched",
+      "StaticFiles mount" in (_o.detail or ""), _o.detail)
+
+_s32_project("mounted_absent", {
+    "backend/main.py": _MOUNT32,
+    "frontend/static/other.css": "body{}",
+    "frontend/templates/index.html":
+        '<html><head><link rel="stylesheet" href="/static/styles.css">'
+        '</head><body>hi</body></html>',
+})
+_o = _s32_run("mounted_absent")
+check("...but a mounted prefix does not excuse a file that is not there",
+      _o.status is Status.FAILED
+      and any("styles.css" in f for f in _o.findings), str(_o.findings))
+
 # Applicability and network hygiene.
 _s32_project("nopage", {"main.py": "print(1)"})
 check("a project with no HTML page is not applicable",
@@ -8466,6 +8500,32 @@ check("a keyword argument that is not a parameter name is reported",
       _under60(_cca65, "app65kw").status.name == "FAILED",
       str(_under60(_cca65, "app65kw").status))
 
+# ...even when every REQUIRED parameter is filled, so the count looks right.
+# Row 2 on 2026-09-10 shipped `crud.list_bookmarks(db, tag_name=tag)` against
+# `def list_bookmarks(conn)`; call_arity said verified, GET /bookmarks/ was 500.
+_mk60("app65extra", {
+    "crud.py": "def list_bookmarks(conn):\n    return []\n",
+    "routes.py": "import crud\n\ncrud.list_bookmarks(None, tag_name='x')\n",
+})
+_o65x = _under60(_cca65, "app65extra")
+check("an extra keyword the definition does not accept FAILS",
+      _o65x.status.name == "FAILED"
+      and "tag_name" in (_o65x.findings or [""])[0], str(_o65x.findings))
+_mk60("app65dup", {
+    "crud.py": "def get(conn, item_id):\n    return None\n",
+    "routes.py": "import crud\n\ncrud.get(None, 1, conn=None)\n",
+})
+check("a keyword naming a parameter already given positionally FAILS",
+      _under60(_cca65, "app65dup").status.name == "FAILED",
+      str(_under60(_cca65, "app65dup").findings))
+_mk60("app65kwonly", {
+    "crud.py": "def get(conn, *, limit=10, offset=0):\n    return None\n",
+    "routes.py": "import crud\n\ncrud.get(None, limit=5)\ncrud.get(conn=None, offset=1)\n",
+})
+check("...while keyword-only and keyword-named parameters still pass",
+      _under60(_cca65, "app65kwonly").status.name == "VERIFIED",
+      str(_under60(_cca65, "app65kwonly").findings))
+
 # ── The guards. Each is code that WORKS. ─────────────────────────────────────
 _mk60("app65ok", {
     "services.py": "def make(a, b=2):\n    return a + b\n",
@@ -8776,7 +8836,910 @@ _o67b = _under60(_cli67, "app67broken")
 check("...and a CLI that really does fail on --help is still reported",
       _o67b.status.value == "failed", f"{_o67b.status} — {_o67b.detail}")
 
+# ── 68. The CLI check must RUN the tool, not just ask it for help ───────────
+# Row 4 on 2026-09-10 was recorded `done_with_context` with `cli_smoke:
+# verified` while every `rename` it shipped died with
+# `TypeError: cannot unpack non-iterable WindowsPath object`. The check ran
+# `--help` and each subcommand's `--help`, all of which exit 0, and concluded
+# the tool worked. Describing itself only proves argparse built its parsers.
+# All three row-4 artifacts ever built turned out to be broken this way.
+from tools.cli_smoke import _walk_usage as _wu68
+
+_p68, _r68, _s68 = _wu68("tool rename [-h] [-r ROOT] -p PATTERN -R REPLACE dir")
+check("a usage line's option metavar is not mistaken for a positional",
+      _p68 == ["rename", "dir"], str(_p68))
+check("...and its required options are read WITH their metavars",
+      _r68 == [("-p", "PATTERN"), ("-R", "REPLACE")], str(_r68))
+check("...and a bracketed option group is skipped whole",
+      not any(f == "-r" for f, _ in _r68), str(_r68))
+
+# The defect itself: a subcommand that exits 0 for `--help` and raises when run.
+_mk60("app68crash", {
+    "tool.py": (
+        "import argparse, pathlib\n"
+        "def _iter_files(d, pattern, use_regex):\n"
+        "    for f in pathlib.Path(d).iterdir():\n"
+        "        if f.is_file():\n"
+        "            yield f\n"
+        "def rename(d, pattern, replacement):\n"
+        # Yields one Path; unpacked as a pair. Exactly row 4's defect.
+        "    for old, new in _iter_files(d, pattern, replacement):\n"
+        "        pass\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(prog='tool')\n"
+        "    sub = p.add_subparsers(dest='cmd')\n"
+        "    r = sub.add_parser('rename')\n"
+        "    r.add_argument('directory')\n"
+        "    r.add_argument('pattern')\n"
+        "    r.add_argument('replacement')\n"
+        "    a = p.parse_args()\n"
+        "    if a.cmd == 'rename':\n"
+        "        rename(a.directory, a.pattern, a.replacement)\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    ),
+})
+_o68 = _under60(_cli67, "app68crash")
+check("a subcommand that raises when actually invoked is reported",
+      _o68.status.value == "failed", f"{_o68.status} — {_o68.detail}")
+check("...and the finding names the exception, not just the exit code",
+      any("TypeError" in str(f) for f in _o68.findings), str(_o68.findings))
+check("...and it publishes a repair target, so something can fix it",
+      "app68crash/tool.py" in (_o68.evidence.get("repair_targets") or {}),
+      str(list((_o68.evidence.get("repair_targets") or {}))))
+
+# A tool that RAISES ON PURPOSE is a tool that works. `test_coverage_tool`,
+# handed a directory of invented files, said "Failed to run pytest" and was
+# flagged for it — a repair call spent on correct code.
+_mk60("app68deliberate", {
+    "tool.py": (
+        "import argparse\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(prog='tool')\n"
+        "    sub = p.add_subparsers(dest='cmd')\n"
+        "    r = sub.add_parser('run')\n"
+        "    r.add_argument('directory')\n"
+        "    a = p.parse_args()\n"
+        "    if a.cmd == 'run':\n"
+        "        raise RuntimeError('no configuration file in ' + a.directory)\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    ),
+})
+_o68d = _under60(_cli67, "app68deliberate")
+check("...but a tool that raises deliberately is not a defect",
+      _o68d.status.value in ("verified", "not_applicable"),
+      f"{_o68d.status} — {_o68d.findings}")
+
+# Arguments spelled as REQUIRED OPTIONS are still required arguments. This
+# shape used to reach the end of the check having executed none of its own
+# code: `_parse_help` read `PATTERN` as a positional, the probe passed a stray
+# argument, and argparse exited 2.
+_mk60("app68opts", {
+    "tool.py": (
+        "import argparse\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(prog='tool')\n"
+        "    p.add_argument('-p', '--pattern', required=True)\n"
+        "    p.add_argument('-r', '--replace', required=True)\n"
+        "    p.parse_args()\n"
+        "    value = None\n"
+        "    value.strip()\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    ),
+})
+_o68o = _under60(_cli67, "app68opts")
+check("a tool whose arguments are required OPTIONS is invoked, not just helped",
+      _o68o.status.value == "failed", f"{_o68o.status} — {_o68o.detail}")
+check("...and the defect it hides is reported",
+      any("AttributeError" in str(f) for f in _o68o.findings),
+      str(_o68o.findings))
+
+# A metavar is not always an UPPERCASE word. `-p SEARCH=REPLACE` was read as a
+# valueless flag, which then swallowed the `directory` positional printed after
+# it, and `bulk_file_renamer_a3cd2a11` was recorded verified having exited 2.
+_p69, _r69, _ = _wu68("tool [-h] -p SEARCH=REPLACE [--dry-run] directory")
+check("a metavar with punctuation is still read as the option's value",
+      _r69 == [("-p", "SEARCH=REPLACE")], str(_r69))
+check("...so the positional after it is not swallowed",
+      _p69 == ["directory"], str(_p69))
+
+# The defect that has no traceback at all: a tool that catches its own
+# exception, logs it and exits 1. `bulk_file_renamer_a3cd2a11` previewed two
+# renames under --dry-run and then answered `unhashable type: 'list'`. Exit
+# codes are not judged anywhere else in this check — a tool may exit 1 because
+# nothing matched — but a tool may not promise the work and then fail it.
+_mk60("app69dryrun", {
+    "tool.py": (
+        "import argparse, sys\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(prog='tool')\n"
+        "    p.add_argument('-p', '--pattern', required=True,\n"
+        "                   metavar='SEARCH=REPLACE')\n"
+        "    p.add_argument('--dry-run', action='store_true')\n"
+        "    p.add_argument('directory', help='Root directory of files.')\n"
+        "    a = p.parse_args()\n"
+        "    if a.dry_run:\n"
+        "        print('would rename 2 files')\n"
+        "        return 0\n"
+        "    try:\n"
+        "        {}[[1]] = 1\n"
+        "    except Exception as e:\n"
+        # Caught, logged, exit 1 — no traceback for the other rule to see.
+        "        print('Rename operation failed: %s' % e)\n"
+        "        return 1\n"
+        "if __name__ == '__main__':\n"
+        "    sys.exit(main())\n"
+    ),
+})
+_o69 = _under60(_cli67, "app69dryrun")
+check("a tool that previews work and then fails to do it is reported",
+      _o69.status.value == "failed", f"{_o69.status} — {_o69.detail}")
+check("...and the finding carries the tool's own error text",
+      any("unhashable" in str(f) for f in _o69.findings), str(_o69.findings))
+
+# ...but a tool that simply exits non-zero is NOT a defect. Nothing matched is
+# a normal answer to arguments this module invented.
+_mk60("app69nomatch", {
+    "tool.py": (
+        "import argparse, sys\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(prog='tool')\n"
+        "    p.add_argument('--dry-run', action='store_true')\n"
+        "    p.add_argument('directory', help='Root directory of files.')\n"
+        "    p.parse_args()\n"
+        "    print('no files matched')\n"
+        "    return 1\n"
+        "if __name__ == '__main__':\n"
+        "    sys.exit(main())\n"
+    ),
+})
+_o69n = _under60(_cli67, "app69nomatch")
+check("...but a plain non-zero exit is not, in either invocation",
+      _o69n.status.value in ("verified", "not_applicable"),
+      f"{_o69n.status} — {_o69n.findings}")
+
+# ── 70. Click CLIs are read as Click, not as argparse ───────────────────────
+# `bulk_file_renamer_111cf8e7` is a Click group and was recorded verified
+# having invoked `-m <dir> sample`: the three-token program name
+# `python -m pkg.cli` lost only one token, `-m` became a required option, and
+# Click's brace-less `Commands:` block named no subcommands at all. Click
+# exited 2 and none of the tool ran.
+from tools.cli_smoke import (_click_commands as _cc70,           # noqa: E402
+                             _click_required as _cr70)
+
+_p70, _r70, _ = _wu68("python -m pkg.cli rename [OPTIONS] DIRECTORY PATTERN "
+                      "REPLACEMENT")
+check("Click's `python -m pkg.cli` program name is dropped whole",
+      _r70 == [] and _p70 == ["rename", "DIRECTORY", "PATTERN", "REPLACEMENT"],
+      f"{_p70} {_r70}")
+check("...and a required variadic `FILES...` is still a positional",
+      _wu68("cli.py [OPTIONS] FILES...")[0] == ["FILES"],
+      str(_wu68("cli.py [OPTIONS] FILES...")))
+
+_help70 = (
+    "Usage: cli.py [OPTIONS] COMMAND [ARGS]...\n\n"
+    "Options:\n"
+    "  -p, --pattern TEXT  Pattern to match.  [required]\n"
+    "  --limit INTEGER     How many files to touch, at most, before stopping\n"
+    "                      [required]\n"
+    "  --verbose           Say more.\n"
+    "  --help              Show this message and exit.\n\n"
+    "Commands:\n"
+    "  rename  Rename files in DIRECTORY matching PATTERN to\n"
+    "          REPLACEMENT.\n"
+    "  undo    Revert the last rename.\n"
+)
+check("Click's `Commands:` block names the subcommands",
+      _cc70(_help70) == ["rename", "undo"], str(_cc70(_help70)))
+check("...and a wrapped description line is not read as a command",
+      "REPLACEMENT" not in _cc70(_help70), str(_cc70(_help70)))
+check("options Click marks [required] are read, even when the mark wraps",
+      _cr70(_help70) == [("--pattern", "TEXT"), ("--limit", "INTEGER")],
+      str(_cr70(_help70)))
+
+_CLICK70 = (
+    "import click\n"
+    "@click.group()\n"
+    "def cli():\n"
+    "    '''Tool.'''\n"
+    "@cli.command()\n"
+    "@click.argument('directory', type=click.Path(exists=True))\n"
+    "@click.argument('pattern')\n"
+    "@click.argument('replacement')\n"
+    "@click.option('--dry-run', is_flag=True)\n"
+    "def rename(directory, pattern, replacement, dry_run):\n"
+    "    '''Rename files in DIRECTORY matching PATTERN to REPLACEMENT.'''\n"
+    "    import pathlib\n"
+    "    for f in pathlib.Path(directory).iterdir():\n"
+    "        {BODY}\n"
+    "@cli.command()\n"
+    "@click.option('--name', required=True)\n"
+    "def greet(name):\n"
+    "    '''Greet NAME.'''\n"
+    "    {GREET}\n"
+    "if __name__ == '__main__':\n"
+    "    cli()\n"
+)
+# Run as `python -m pkg70.cli`, which is what prints the three-token name.
+_mk60("app70crash", {
+    "pkg70/__init__.py": "",
+    "pkg70/cli.py": _CLICK70.replace(
+        "{BODY}", "old, new = f  # one Path, unpacked as a pair"
+    ).replace("{GREET}", "click.echo('hi ' + name)"),
+})
+_o70 = _under60(_cli67, "app70crash")
+check("a Click subcommand that raises when invoked is reported",
+      _o70.status.value == "failed", f"{_o70.status} — {_o70.detail}")
+check("...naming the exception, from the subcommand that has it",
+      any("rename" in str(f) and "cannot unpack" in str(f)
+          for f in _o70.findings), str(_o70.findings))
+
+_mk60("app70opt", {
+    "pkg70b/__init__.py": "",
+    "pkg70b/cli.py": _CLICK70.replace("{BODY}", "pass").replace(
+        "{GREET}", "click.echo(name.upper() + None)"),
+})
+_o70o = _under60(_cli67, "app70opt")
+check("a Click subcommand's REQUIRED OPTION is supplied, so its code runs",
+      _o70o.status.value == "failed"
+      and any("greet" in str(f) and "TypeError" in str(f)
+              for f in _o70o.findings),
+      f"{_o70o.status} — {_o70o.findings}")
+
+_mk60("app70ok", {
+    "pkg70c/__init__.py": "",
+    "pkg70c/cli.py": _CLICK70.replace("{BODY}", "click.echo(f.name)").replace(
+        "{GREET}", "click.echo('hi ' + name)"),
+})
+_o70k = _under60(_cli67, "app70ok")
+_inv70 = [i for e in _o70k.evidence.get("entries", [])
+          for i in e.get("invocations", [])]
+# Braces inside an argument's DESCRIPTION are not subcommands. `912f9b22`'s
+# `pattern` help mentions the placeholder `{index}`; the probe invoked a
+# subcommand `index` that does not exist, argparse exited 2, and a real
+# `get_logger()` TypeError in `main.py` went unreached.
+from tools.cli_smoke import _parse_help as _ph70                     # noqa: E402
+_hb70 = ("usage: tool [-h] [--dry-run] directory pattern\n\n"
+         "positional arguments:\n"
+         "  directory   Path to the target directory.\n"
+         "  pattern     Rename pattern using placeholders: {index} for\n"
+         "              sequential number and {ext} for extension.\n\n"
+         "options:\n  -h, --help  show this help message and exit\n")
+check("a brace group inside a description is not a subcommand",
+      _ph70(_hb70) == (["directory", "pattern"], []), str(_ph70(_hb70)))
+# (A usage line WITHOUT the braces, so the block is what gets read.)
+_hs70 = ("usage: tool [-h] COMMAND ...\n\n"
+         "positional arguments:\n"
+         "  {rename,undo}\n"
+         "    rename    Rename files.\n\n")
+check("...while one that starts an entry still is",
+      _ph70(_hs70)[1] == ["rename", "undo"], str(_ph70(_hs70)))
+
+# The general form of every silent pass above: the probe ran the tool and its
+# argument parser turned the invocation away, so none of the tool's code ran.
+# That is NOT_RUN — a hole the row driver fails — never VERIFIED.
+_mk60("app70refused", {
+    "tool.py": (
+        "import argparse\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser(prog='tool')\n"
+        "    p.add_argument('count', type=int)\n"
+        "    a = p.parse_args()\n"
+        "    None.boom  # unreachable with an invented, non-integer count\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    ),
+})
+_o70r = _under60(_cli67, "app70refused")
+check("a CLI whose every invocation is refused by its parser is NOT_RUN",
+      _o70r.status.value == "not_run", f"{_o70r.status} — {_o70r.detail}")
+check("...and a tool's own deliberate exit 2 is not mistaken for a refusal",
+      __import__("tools.cli_smoke", fromlist=["_refused"])._refused(
+          2, "no files matched\n", "") is False)
+
+check("a working Click CLI is verified...",
+      _o70k.status.value == "verified", f"{_o70k.status} — {_o70k.findings}")
+check("...having actually run each subcommand, not been refused by Click",
+      sorted(i["sub"] for i in _inv70 if i.get("exit") == 0)
+      == ["greet", "rename"], str(_inv70))
+
+# A subcommand the probe could not reach is named, not hidden in a pass.
+# `111cf8e7`'s `undo` needs the log `rename` wrote; handed an invented path,
+# Click refuses it, and its `'src'` KeyError stays out of sight.
+_mk60("app70partial", {
+    "pkg70d/__init__.py": "",
+    "pkg70d/cli.py": _CLICK70.replace("{BODY}", "click.echo(f.name)").replace(
+        "@click.option('--name', required=True)",
+        "@click.argument('name', type=click.Path(exists=True))").replace(
+        "{GREET}", "click.echo('hi ' + name)"),
+})
+_o70p = _under60(_cli67, "app70partial")
+check("a subcommand refused by its parser is named in a verified detail",
+      _o70p.status.value == "verified" and "greet" in _o70p.detail
+      and "refused" in _o70p.detail, f"{_o70p.status} — {_o70p.detail}")
+
+# ── 71. An undo must undo a rename that really happened ────────────────────
+# `111cf8e7` renamed correctly and wrote `{"original", "new"}` entries; its
+# undo read `entry["src"]`, caught the KeyError and exited 1. Run alone, undo
+# is handed an invented log path and refused, so no single invocation can see
+# this. The probe runs rename for real, hands undo the file rename wrote, and
+# judges whether the files came back.
+_UNDO71 = (
+    "import argparse, json, pathlib, sys\n"
+    "def main():\n"
+    "    p = argparse.ArgumentParser(prog='tool')\n"
+    "    sub = p.add_subparsers(dest='cmd')\n"
+    "    r = sub.add_parser('rename')\n"
+    "    r.add_argument('directory')\n"
+    "    r.add_argument('pattern')\n"
+    "    r.add_argument('replacement')\n"
+    "    u = sub.add_parser('undo')\n"
+    "    u.add_argument('log')\n"
+    "    a = p.parse_args()\n"
+    "    if a.cmd == 'rename':\n"
+    "        moves = []\n"
+    "        for f in sorted(pathlib.Path(a.directory).iterdir()):\n"
+    "            if a.pattern in f.name:\n"
+    "                new = f.with_name(f.name.replace(a.pattern, a.replacement))\n"
+    "                f.rename(new)\n"
+    "                moves.append({'original': str(f), 'new': str(new)})\n"
+    "        pathlib.Path('undo_log.json').write_text(json.dumps(moves))\n"
+    "    elif a.cmd == 'undo':\n"
+    "        try:\n"
+    "            for m in json.loads(pathlib.Path(a.log).read_text()):\n"
+    "                pathlib.Path({NEW}).rename({OLD})\n"
+    "        except Exception as e:\n"
+    "            print('Undo failed: %s' % e, file=sys.stderr)\n"
+    "            return 1\n"
+    "if __name__ == '__main__':\n"
+    "    sys.exit(main())\n"
+)
+_mk60("app71ok", {"tool.py": _UNDO71.replace("{NEW}", "m['new']")
+                                     .replace("{OLD}", "m['original']")})
+_o71k = _under60(_cli67, "app71ok")
+_wf71k = [w for e in _o71k.evidence.get("entries", [])
+          for w in e.get("workflow", [])]
+check("a rename whose undo really puts the files back is verified",
+      _o71k.status.value == "verified", f"{_o71k.status} — {_o71k.findings}")
+check("...having run undo on the log rename wrote, and seen them restored",
+      any(w.get("ran") and w.get("restored") for w in _wf71k), str(_wf71k))
+check("...so undo is no longer reported as unreached",
+      "refused" not in _o71k.detail, _o71k.detail)
+
+_mk60("app71key", {"tool.py": _UNDO71.replace("{NEW}", "m['dst']")
+                                      .replace("{OLD}", "m['src']")})
+_o71b = _under60(_cli67, "app71key")
+check("an undo that cannot read the log its own rename wrote FAILS",
+      _o71b.status.value == "failed", f"{_o71b.status} — {_o71b.detail}")
+check("...with the tool's own error and the log's real keys in the finding",
+      any("'dst'" in str(f) and '"original"' in str(f)
+          for f in _o71b.findings), str(_o71b.findings))
+check("...and the repair target is the file that reads the key",
+      list((_o71b.evidence.get("repair_targets") or {})) == ["app71key/tool.py"],
+      str(_o71b.evidence.get("repair_targets")))
+
+# The repair that silences the crash: undo exits 0 and restores nothing. Exit
+# codes cannot see it; the files still being renamed can.
+_mk60("app71noop", {"tool.py": _UNDO71.replace(
+    "                pathlib.Path({NEW}).rename({OLD})\n", "                pass\n")})
+_o71n = _under60(_cli67, "app71noop")
+check("an undo that exits 0 and restores nothing FAILS",
+      _o71n.status.value == "failed"
+      and any("not put back" in str(f) for f in _o71n.findings),
+      f"{_o71n.status} — {_o71n.findings}")
+check("...and, with no key to locate a reader, publishes no repair target",
+      not _o71n.evidence.get("repair_targets"),
+      str(_o71n.evidence.get("repair_targets")))
+
+# An undo that takes the DIRECTORY the log lives in, not the log file.
+# `bulk_file_renamer_15bd514f`'s says "Base directory where the undo log
+# resides"; handing it the log file would be this module's mistake reported as
+# the tool's. Every plausible argument is tried before undo is blamed.
+_mk60("app71dir", {"tool.py": _UNDO71.replace(
+    "u.add_argument('log')",
+    "u.add_argument('directory', help='Base directory where the log resides.')"
+).replace("pathlib.Path('undo_log.json').write_text",
+          "(pathlib.Path(a.directory) / '.undo.json').write_text"
+).replace("pathlib.Path(a.log).read_text()",
+          "(pathlib.Path(a.directory) / '.undo.json').read_text()"
+).replace("{NEW}", "m['new']").replace("{OLD}", "m['original']")})
+_o71d = _under60(_cli67, "app71dir")
+check("an undo that takes the log's DIRECTORY is handed one, and verified",
+      _o71d.status.value == "verified"
+      and any(w.get("restored") for e in _o71d.evidence.get("entries", [])
+              for w in e.get("workflow", [])),
+      f"{_o71d.status} — {_o71d.findings} "
+      f"{[e.get('workflow') for e in _o71d.evidence.get('entries', [])]}")
+
+# A pattern its help calls a glob gets a glob. `sample` matches no seeded file
+# as a glob, so `15bd514f`'s rename printed "No files matched" and exited 0
+# having run none of its renaming code.
+from tools.cli_smoke import _value_for as _vf71                     # noqa: E402
+check("a pattern described as a glob is given one that matches the seeds",
+      _vf71("PATTERN", "--pattern", None, 0,
+            "Glob pattern to match files (e.g., '*.txt').") == "sample*",
+      _vf71("PATTERN", "--pattern", None, 0, "Glob pattern to match files."))
+check("...while a plain pattern keeps the plain word",
+      _vf71("PATTERN", "--pattern", None, 0, "Substring to replace.")
+      == "sample")
+
+# ── 72. Two repair channels must not act on one defect in one pass ─────────
+# Row 2 `1218816f`: the runtime channel rewrote `routes.get_db` around
+# `crud.get_connection` being missing — to `main.get_connection()`, which
+# lacks `check_same_thread=False` — 41s before `module_ref` added the correct
+# `crud.get_connection`. Five routes then died on sqlite3's thread check.
+from agents.pipeline import Pipeline as _P72                        # noqa: E402
+_md72 = {"bm/backend/crud.py": [
+    "`backend.crud.get_connection` is read at line 18: `backend.crud` "
+    "defines init_db, list_tags"]}
+_rt72 = {"bm/backend/routes.py": (
+    "GET /bookmarks/ → 500: AttributeError: module 'crud' has no attribute "
+    "'get_connection' (at backend/routes.py:18 in get_db)\n"
+    "GET /tags/ → 500: TypeError: list_tags() takes 0 positional arguments "
+    "but 1 was given (at backend/routes.py:40)")}
+_k72, _d72 = _P72._defer_to_definitions(_rt72, _md72)
+check("a runtime failure that is only a name module_ref will add is deferred",
+      _d72 == 1 and "get_connection" not in _k72.get(
+          "bm/backend/routes.py", ""), f"{_d72} {_k72}")
+check("...while an unrelated failure in the same file stays with the runtime "
+      "channel", "list_tags() takes" in _k72.get("bm/backend/routes.py", ""),
+      str(_k72))
+_k72b, _d72b = _P72._defer_to_definitions(
+    {"bm/backend/routes.py": _rt72["bm/backend/routes.py"].split("\n")[0]},
+    _md72)
+check("...and a file whose only failure is deferred leaves the channel",
+      _d72b == 1 and _k72b == {}, str(_k72b))
+check("...a missing name module_ref did NOT file is not deferred",
+      _P72._defer_to_definitions(
+          {"x.py": "AttributeError: module 'crud' has no attribute 'other'"},
+          _md72)[1] == 0)
+check("...nor the same name on a DIFFERENT module",
+      _P72._defer_to_definitions(
+          {"x.py": "AttributeError: module 'main' has no attribute "
+                   "'get_connection'"}, _md72)[1] == 0)
+check("...and with nothing pending, runtime errors pass through untouched",
+      _P72._defer_to_definitions(_rt72, {}) == (_rt72, 0))
+# The fallback: a pass whose every runtime failure was deferred must still
+# re-run the app, or a definition repair that failed to land is never seen.
+check("the app is re-run after a pass even when every failure was deferred",
+      "if runtime_errors or runtime_raw:"
+      in Path("agents/pipeline.py").read_text(encoding="utf-8"))
+
+# ── 73. A 4xx that is a caught server exception is a failing route ─────────
+# Row 2 `1218816f` answered POST /bookmarks/ with 400 "SQLite objects created
+# in a thread can only be used in that same thread": the handler caught the
+# ProgrammingError and relabelled it. The smoke test scored it as working.
+from tools.runtime_smoke import smoke_test_app as _sta73              # noqa: E402
+_mk60("app73", {
+    "backend/main.py": (
+        "from fastapi import FastAPI, HTTPException\n"
+        "from pydantic import BaseModel\n"
+        "app = FastAPI()\n"
+        "class Item(BaseModel):\n"
+        "    title: str\n"
+        "@app.post('/items/')\n"
+        "def create(item: Item):\n"
+        "    try:\n"
+        "        return None.save(item)\n"
+        "    except Exception as e:\n"
+        "        raise HTTPException(status_code=400, detail=str(e))\n"
+        "@app.get('/items/{item_id}')\n"
+        "def get(item_id: int):\n"
+        "    raise HTTPException(status_code=404, detail='Item not found')\n"
+        "@app.put('/items/{item_id}')\n"
+        "def update(item_id: int, item: Item):\n"
+        "    raise HTTPException(status_code=400,\n"
+        "                        detail='Title must not be blank')\n"
+    ),
+})
+_o73 = _under60(_sta73, "app73")
+_p73 = {(p.method, p.path): p for p in _o73.probes}
+_post73 = _p73.get(("POST", "/items/"))
+check("a 400 whose body is an interpreter error counts as a failing route",
+      _post73 is not None and _post73.status == 400 and not _post73.ok,
+      f"{[(p.method, p.path, p.status, p.ok) for p in _o73.probes]} "
+      f"{_o73.error}")
+check("...and is blamed on the handler that swallowed it",
+      _post73 is not None and _post73.blame_file == "backend/main.py",
+      _post73.error if _post73 else "")
+check("...while a deliberate 404 and a deliberate 400 are still answers",
+      all(_p73[k].ok for k in (("GET", "/items/{item_id}"),
+                               ("PUT", "/items/{item_id}")) if k in _p73)
+      and len(_p73) == 3, str([(p.method, p.path, p.ok) for p in _o73.probes]))
+
+# sqlite3's own binding error, relabelled 400, is the same disguised failure.
+_mk60("app73bind", {
+    "backend/main.py": (
+        "import sqlite3\n"
+        "from fastapi import FastAPI, HTTPException\n"
+        "from pydantic import BaseModel\n"
+        "app = FastAPI()\n"
+        "class Item(BaseModel):\n"
+        "    title: str\n"
+        "@app.post('/items/')\n"
+        "def create(item: Item):\n"
+        "    try:\n"
+        "        c = sqlite3.connect(':memory:')\n"
+        "        c.execute('CREATE TABLE t (x)')\n"
+        "        c.execute('INSERT INTO t VALUES (?)', (item,))\n"
+        "    except Exception as e:\n"
+        "        raise HTTPException(status_code=400, detail=str(e))\n"
+    ),
+})
+_ob73 = _under60(_sta73, "app73bind")
+check("a 400 carrying sqlite3's 'Error binding parameter' is a failing route",
+      any(p.status == 400 and not p.ok for p in _ob73.probes),
+      str([(p.method, p.status, p.error[:80]) for p in _ob73.probes]))
+
+# ── 74. A database-path finding reaches a repair that can act on it ────────
+# `sql_schema` files "module opens X.db, but the app initialises Y.db" into the
+# table channel, whose parser only knows "table T is never created" — so for
+# row 2 `01cde425` it returned, silently, for two passes. Clone-probed: this
+# repair took that build from 0/6 to 6/6 routes without a server error.
+from agents.debugger import (_db_path_mismatches as _dpm74,         # noqa: E402
+                             Debugger as _Dbg74, FileDebugResult as _FDR74)
+from tools.sql_schema_check import (                                 # noqa: E402
+    check_project_db_paths as _cdp74)
+_mk60("app74", {
+    "backend/main.py": (
+        "import os, sqlite3\n"
+        "from fastapi import FastAPI\n"
+        "DB_PATH = os.getenv('DB_PATH', 'bookmark_manager.db')\n"
+        "app = FastAPI()\n"
+        "def init():\n"
+        "    sqlite3.connect(DB_PATH).execute('CREATE TABLE b (id INT)')\n"),
+    "backend/routes.py": (
+        "import os, sqlite3\n"
+        "def get_db():\n"
+        "    db_path = os.getenv('DB_PATH', 'data/bookmarks.db')\n"
+        "    return sqlite3.connect(db_path, check_same_thread=False)\n"),
+})
+_f74 = _under60(lambda r: _cdp74(r).repair_targets, "app74")
+check("the database-path finding is parsed into wrong -> right basenames",
+      _dpm74(sum(_f74.values(), [])) == {"bookmarks.db": "bookmark_manager.db"},
+      str(_f74))
+_r74 = _FDR74(file_path="app74/backend/routes.py", success=False, attempts=0)
+_real74 = config.OUTPUT_DIR
+try:
+    config.OUTPUT_DIR = str(_W60_OUT)
+    _ok74 = _Dbg74()._repair_missing_tables(
+        "app74/backend/routes.py", sum(_f74.values(), []), _r74)
+    _src74 = (_W60_OUT / "app74/backend/routes.py").read_text(encoding="utf-8")
+    _left74 = _cdp74("app74").repair_targets
+finally:
+    config.OUTPUT_DIR = _real74
+check("...and the table channel hands it to the db-path repair, which lands",
+      _ok74 is True and _left74 == {}, f"{_ok74} {_left74}")
+check("...keeping the directory part and changing only the basename",
+      "'data/bookmark_manager.db'" in _src74 and "bookmarks.db" not in _src74,
+      _src74)
+
+# The generator was TAUGHT the thread defect: backend_developer.txt's own
+# "✅ RIGHT" dependency opened `sqlite3.connect(DB_PATH)` with no
+# check_same_thread=False, which FastAPI then uses across threads.
+_bd73 = Path("prompts/backend_developer.txt").read_text(encoding="utf-8")
+_right73 = _bd73.split("✅ RIGHT — FastAPI manages the generator itself:")[1]
+check("the prompt's RIGHT dependency example is safe across threads",
+      "check_same_thread=False" in _right73.split("THREAD RULE")[0])
+check("...and the prompt states the thread rule and why",
+      "THREAD RULE" in _bd73 and "same thread" in _bd73)
+
+# A repair can introduce an arity mismatch, so the pipeline must re-check
+# call_arity after every remediation pass, not only when it failed before.
+_pl71 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("call_arity is re-checked after every remediation pass",
+      "if bad_calls:\n                try:\n                    from "
+      "tools.call_arity_check" not in _pl71
+      and 'if result.architecture.get("root_folder"):\n                try:\n'
+          '                    from tools.call_arity_check' in _pl71)
+
 shutil.rmtree(_W60, ignore_errors=True)
+
+
+
+# ── The handoff document must not claim a verification that did not happen ──
+# SESSION_CONTEXT.md's "Worth Checking By Hand" preamble asserted "the
+# application itself was executed and verified" for every build that had any
+# manual-check item. An `unusable` build with 6 of 6 endpoints returning 500
+# shipped that sentence directly beneath a Remaining Work list saying the
+# opposite. The claim is now conditional on the pipeline's own `unresolved`
+# signal. Missing tests must NOT trip it: a verified build can ship no suite.
+def _render_ctx(unresolved, manual):
+    from agents.documenter import Documenter
+    from agents.pipeline import RemediationReport
+    _r = RemediationReport()
+    _r.unresolved    = list(unresolved)
+    _r.manual_checks = list(manual)
+    return Documenter.__new__(Documenter)._build_session_context(
+        app_name="demo", root="demo", intent={}, architecture={},
+        backend_files=[], frontend_files=[], completed_steps=[],
+        pending_steps=[], reason="unresolved_issues", quota_snapshot={},
+        remediation=_r, progress_percent=100.0, debug_results=[],
+        review_results=[], test_results=[], error_detail="",
+    )
+
+def _manual_section(doc):
+    key = "Worth Checking By Hand"
+    return doc.split(key)[1][:500] if key in doc else ""
+
+_MANUAL_ITEM = ["the project's own test suite fails: 2 failed, 11 passed"]
+
+_ctx_broken = _render_ctx(["6 of 6 endpoint(s) return a server error"], _MANUAL_ITEM)
+check("a build with unresolved issues does not claim it was verified",
+      "executed and verified" not in _manual_section(_ctx_broken))
+check("...and it points the reader at Remaining Work instead",
+      "Remaining Work above" in _manual_section(_ctx_broken))
+
+_ctx_ok = _render_ctx([], _MANUAL_ITEM)
+check("a build with no unresolved issues still says it was verified",
+      "executed and verified" in _manual_section(_ctx_ok))
+
+# The two sections stay distinct: a manual check is never silently promoted
+# into the defect list, which is what made them worth separating.
+check("the manual item stays under Worth Checking By Hand in both cases",
+      _MANUAL_ITEM[0] in _manual_section(_ctx_broken)
+      and _MANUAL_ITEM[0] in _manual_section(_ctx_ok))
+
+
+
+# ── The handoff must say what works, not only what is broken ─────────────
+# Row 2 shipped serving all five CRUD endpoints with a document that mentioned
+# none of it, so the only readable conclusion was "broken". The section is built
+# ONLY from checks that executed the artifact and passed: not_applicable,
+# not_run and failed are all excluded, because a check that did not look at
+# something is not evidence that the something works.
+_OUTCOMES = [
+    {"check": "runtime_smoke",  "status": "verified",
+     "detail": "6/6 routes responded without a server error"},
+    {"check": "static_smoke",   "status": "verified",
+     "detail": "served 1 page(s) over HTTP and fetched 2 local asset(s)"},
+    {"check": "cli_smoke",      "status": "not_applicable",
+     "detail": "this project declares no command-line entry point"},
+    {"check": "sql_schema",     "status": "failed",
+     "detail": "queries a table that is never created"},
+    {"check": "package_smoke",  "status": "not_run", "detail": "never executed"},
+]
+
+def _ctx_with_outcomes(outcomes):
+    from agents.documenter import Documenter
+    from agents.pipeline import RemediationReport
+    _r = RemediationReport()
+    _r.unresolved = ["SQL queries a table that is never created"]
+    return Documenter.__new__(Documenter)._build_session_context(
+        app_name="demo", root="demo", intent={}, architecture={},
+        backend_files=[], frontend_files=[], completed_steps=[],
+        pending_steps=[], reason="unresolved_issues", quota_snapshot={},
+        remediation=_r, progress_percent=100.0, debug_results=[],
+        review_results=[], test_results=[], error_detail="",
+        verification_outcomes=outcomes,
+    )
+
+_works_doc = _ctx_with_outcomes(_OUTCOMES)
+_works_sec = (_works_doc.split("What Already Works")[1].split("---")[0]
+              if "What Already Works" in _works_doc else "")
+
+check("the handoff reports what already works",
+      "runtime_smoke" in _works_sec and "6/6 routes" in _works_sec)
+check("...and a check that did not apply is not called working",
+      "cli_smoke" not in _works_sec)
+check("...nor is a check that failed",
+      "sql_schema" not in _works_sec)
+check("...nor is a check that never ran",
+      "package_smoke" not in _works_sec)
+
+# No executed-and-passed check means no section at all, rather than an empty
+# heading that reads as "nothing works".
+_none_doc = _ctx_with_outcomes([
+    {"check": "cli_smoke", "status": "not_applicable", "detail": "n/a"},
+])
+check("no verified check means the section is omitted entirely",
+      "What Already Works" not in _none_doc)
+
+# The section must not displace the defect list.
+check("the remaining-work list survives alongside it",
+      "Remaining Work" in _works_doc
+      and "never created" in _works_doc.split("Remaining Work")[1])
+
+
+
+# ── A generated test fixture is not the application's schema ──────────────────
+# check_project_sql scanned every .py file for CREATE TABLE, tests included, so
+# a table created only in a generated fixture counted as one the project
+# creates. That masked a table the APPLICATION never creates — and because the
+# Tester rewrites those fixtures on every remediation pass, the mask lifted and
+# fell between passes. Row 2's `464da0fb` logged "Every table the code queries
+# now exists" at 12:29:48 and failed on `bookmarks_tags` at 12:31:01 with no
+# application file changed in between, both repair passes already spent.
+print("\n[63] a test fixture is not the application's schema")
+
+from tools.sql_schema_check import (
+    check_project_sql as _cps63, check_sql_schema as _css63,
+    _is_test_file as _itf63)
+
+_r63 = "_test_sql_test_mask"
+_d63 = Path(config.OUTPUT_DIR) / _r63
+shutil.rmtree(_d63, ignore_errors=True)
+try:
+    (_d63 / "backend").mkdir(parents=True)
+    (_d63 / "tests").mkdir(parents=True)
+    # The app creates ONE table and queries TWO.
+    (_d63 / "backend" / "main.py").write_text(
+        'import sqlite3\n'
+        'def init():\n'
+        '    conn = sqlite3.connect("app.db")\n'
+        '    conn.executescript("""\n'
+        '        CREATE TABLE IF NOT EXISTS bookmarks (\n'
+        '            id INTEGER PRIMARY KEY, url TEXT\n'
+        '        );\n'
+        '    """)\n',
+        encoding="utf-8")
+    (_d63 / "backend" / "routes.py").write_text(
+        'def by_tag(db):\n'
+        '    return db.execute(\n'
+        '        "SELECT b.id FROM bookmarks b JOIN bookmarks_tags bt ON b.id = bt.bookmark_id"\n'
+        '    ).fetchall()\n',
+        encoding="utf-8")
+    # The fixture creates the missing table. This must NOT count.
+    (_d63 / "tests" / "test_routes.py").write_text(
+        'import sqlite3\n'
+        'def setup_db():\n'
+        '    conn = sqlite3.connect(":memory:")\n'
+        '    conn.execute("CREATE TABLE bookmarks_tags (bookmark_id INTEGER, tag_id INTEGER)")\n'
+        '    return conn\n',
+        encoding="utf-8")
+
+    _rep63 = _cps63(_r63, [])
+    _missing63 = {m.table for m in _rep63.missing}
+
+    check("a CREATE TABLE in tests/ does not count as the app creating it",
+          "bookmarks_tags" in _missing63, _missing63)
+    check("...and no test file contributes to schema_files",
+          not any(_itf63(f) for f in _rep63.schema_files), _rep63.schema_files)
+    check("a table the app really does create is still found",
+          "bookmarks" in _rep63.tables and "bookmarks" not in _missing63,
+          sorted(_rep63.tables))
+
+    _out63 = _css63(_r63)
+    _tgt63 = (_out63.evidence or {}).get("repair_targets") or {}
+    check("the missing table is published as a repair target",
+          any("bookmarks_tags" in str(v) for v in _tgt63.values()), _tgt63)
+    check("...and the repair is never targeted at a test file",
+          _tgt63 and not any(_itf63(k) for k in _tgt63), list(_tgt63))
+finally:
+    shutil.rmtree(_d63, ignore_errors=True)
+
+# The mirror case: an app that creates every table it queries must stay clean,
+# even when a test fixture creates extra tables of its own. Excluding tests must
+# not invent findings — 4 of 6 new verifiers have reported defects that did not
+# exist, so the no-false-positive direction is tested explicitly.
+_r63b = "_test_sql_test_mask_clean"
+_d63b = Path(config.OUTPUT_DIR) / _r63b
+shutil.rmtree(_d63b, ignore_errors=True)
+try:
+    (_d63b / "backend").mkdir(parents=True)
+    (_d63b / "tests").mkdir(parents=True)
+    (_d63b / "backend" / "main.py").write_text(
+        'import sqlite3\n'
+        'def init():\n'
+        '    conn = sqlite3.connect("app.db")\n'
+        '    conn.executescript("""\n'
+        '        CREATE TABLE IF NOT EXISTS bookmarks (id INTEGER PRIMARY KEY, url TEXT);\n'
+        '    """)\n',
+        encoding="utf-8")
+    (_d63b / "backend" / "routes.py").write_text(
+        'def listing(db):\n'
+        '    return db.execute("SELECT id, url FROM bookmarks").fetchall()\n',
+        encoding="utf-8")
+    (_d63b / "tests" / "conftest.py").write_text(
+        'import sqlite3\n'
+        'def fixture():\n'
+        '    conn = sqlite3.connect(":memory:")\n'
+        '    conn.execute("CREATE TABLE scratch_only_for_tests (id INTEGER)")\n'
+        '    conn.execute("SELECT id FROM scratch_only_for_tests")\n'
+        '    return conn\n',
+        encoding="utf-8")
+
+    _rep63b = _cps63(_r63b, [])
+    check("an app that creates what it queries stays clean",
+          not _rep63b.missing, [str(m)[:70] for m in _rep63b.missing])
+    check("...and a test-only table is neither created nor queried by the app",
+          "scratch_only_for_tests" not in _rep63b.tables
+          and "scratch_only_for_tests" not in _rep63b.queried,
+          (sorted(_rep63b.tables), sorted(_rep63b.queried)))
+finally:
+    shutil.rmtree(_d63b, ignore_errors=True)
+
+# The between-pass gate printed success off an EMPTY repair-target list rather
+# than the check's own verdict, so a FAILED check that published no target read
+# as a pass. Silence is not a pass.
+_pl63 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("the between-pass table gate reads the check's verdict, not its targets",
+      '_sql_ok' in _pl63
+      and 'if not missing_tables and _sql_ok:' in _pl63)
+check("...and a failing check with no target is reported, not silently passed",
+      'no repair target' in _pl63)
+
+
+
+# ── A clean build ships a handoff document too ────────────────────────────────
+# Only DEGRADED builds used to explain themselves. `done` shipped README.md and
+# SETUP.md alone, so `3aea19e3` — status `done`, 11/11 routes, every check
+# verified — handed over a project whose POST 500s through an optional field,
+# whose frontend is not mounted, and whose own suite fails 4 of 9, saying none
+# of it. BUILD_REPORT.md is that missing document. It is deliberately NOT
+# SESSION_CONTEXT.md: telling someone their working build "did not finish
+# cleanly" would be a new lie in the other direction.
+print("\n[64] a clean build ships a build report")
+
+_OUT64 = [
+    {"check": "runtime_smoke", "status": "verified",
+     "detail": "11/11 routes responded without a server error"},
+    {"check": "cli_smoke", "status": "not_applicable",
+     "detail": "this project declares no command-line entry point"},
+    {"check": "package_smoke", "status": "not_run",
+     "detail": "the entry point could not be located"},
+]
+
+def _report64(outcomes, manual=()):
+    from agents.documenter import Documenter
+    from agents.pipeline import RemediationReport
+    _r = RemediationReport()
+    _r.manual_checks = list(manual)
+    return Documenter.__new__(Documenter)._build_build_report(
+        app_name="demo", root="demo", intent={"app_type": "web_api"},
+        backend_files=["a"], frontend_files=[],
+        verification_outcomes=outcomes, remediation=_r,
+    )
+
+_rep64 = _report64(_OUT64, ["the project's own test suite fails: 4 failed, 5 passed"])
+_ver64 = _rep64.split("What was verified")[1].split("---")[0]
+_not64 = _rep64.split("What was NOT checked")[1].split("---")[0]
+
+check("a passing check is reported as verified",
+      "runtime_smoke" in _ver64 and "11/11 routes" in _ver64)
+check("a check that did not apply is NOT reported as verified",
+      "cli_smoke" not in _ver64 and "cli_smoke" in _not64)
+check("a check that never ran is separated from one that did not apply",
+      "DID NOT RUN" in _not64 and "package_smoke" in _not64)
+check("...and a check that never ran is never called verified",
+      "package_smoke" not in _ver64)
+check("what was routed to manual reaches the reader",
+      "4 failed, 5 passed" in _rep64)
+
+# The report must not borrow SESSION_CONTEXT.md's framing. A clean build did
+# finish cleanly, and saying otherwise is the same defect mirrored.
+check("a clean build is not told it failed",
+      "did not finish cleanly" not in _rep64
+      and "Stopped because" not in _rep64)
+
+# The holes that made 3aea19e3 look clean must be stated in the artifact the
+# user actually receives, not only in this repo's notes.
+check("the report states the optional-field blind spot",
+      "optional" in _rep64.lower() and "required fields only" in _rep64.lower())
+check("...and that frontend JavaScript is never executed",
+      "never executed" in _rep64.lower())
+# `e93af820` is why this next line exists: cli_smoke reported VERIFIED for a
+# renamer whose own --help example dies on re.error, because its probe pattern
+# happened to exit 0 while renaming nothing.
+check("...and that a CLI exiting 0 is not proof it did anything",
+      "exits 0" in _rep64)
+check("...and that a green check is not a guarantee it did what was asked",
+      "did what you asked" in _rep64)
+
+# With nothing verified, the report must say so rather than render an empty
+# heading that reads as "all clear".
+_empty64 = _report64([])
+check("a report with no executed check says so plainly",
+      "Treat everything below" in _empty64)
+
+# The clean-success branch of the pipeline has to actually call it.
+_pl64 = Path("agents/pipeline.py").read_text(encoding="utf-8")
+check("the pipeline writes a build report on the clean path",
+      "generate_build_report(" in _pl64)
+check("...passing the verification record it renders from",
+      "verification_outcomes = getattr(" in _pl64)
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

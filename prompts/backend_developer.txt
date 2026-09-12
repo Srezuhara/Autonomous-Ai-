@@ -66,7 +66,7 @@ decorate it with @contextmanager, and never wrap it in a helper that returns it.
 
   ✅ RIGHT — FastAPI manages the generator itself:
       def get_db():
-          conn = sqlite3.connect(DB_PATH)
+          conn = sqlite3.connect(DB_PATH, check_same_thread=False)
           try:
               yield conn
           finally:
@@ -74,6 +74,15 @@ decorate it with @contextmanager, and never wrap it in a helper that returns it.
 
       @router.get("/tasks")
       def list_tasks(db = Depends(get_db)): ...
+
+THREAD RULE: every sqlite3.connect(...) that a request will use must pass
+check_same_thread=False. FastAPI runs a plain `def` dependency in a worker
+thread and the handler on another (always, for an `async def` handler), and
+sqlite3 refuses a connection from a thread that did not create it: every such
+request raises "SQLite objects created in a thread can only be used in that
+same thread". This shipped: row 2 (2026-09-10) lost five of eight endpoints to
+it. It applies to EVERY helper that opens a connection — if two modules each
+define a get_connection(), both need it; better, define it once and import it.
 
 Define the dependency once, in the module that owns the database, and import it
 where it is used. Do not import it inside a function body, and do not write a

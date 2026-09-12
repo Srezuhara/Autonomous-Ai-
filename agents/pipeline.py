@@ -945,6 +945,7 @@ class Pipeline:
         self._route_targets = {}
         self._call_targets = {}
         self._await_targets = {}
+        self._cli_targets = {}
 
         root = result.architecture.get("root_folder", "")
         if not root:
@@ -1091,6 +1092,14 @@ class Pipeline:
                     outcome.evidence.get("repair_targets") or {})
             elif outcome.check == "call_arity":
                 self._call_targets = dict(
+                    outcome.evidence.get("repair_targets") or {})
+            elif outcome.check == "cli_smoke":
+                # A CLI that crashes when actually invoked. It published no
+                # target at all until 2026-09-10, so row 4 shipped a renamer
+                # that raised on every rename with nothing to repair it — and
+                # before that the check never ran a subcommand, so there was
+                # not even a finding to carry.
+                self._cli_targets = dict(
                     outcome.evidence.get("repair_targets") or {})
             elif outcome.check == "await_sync":
                 self._await_targets = dict(
@@ -1555,6 +1564,42 @@ class Pipeline:
         self._smoke_outcome = outcome
         return [finding]
 
+    @staticmethod
+    def _defer_to_definitions(runtime_errors: dict,
+                              missing_definitions: dict) -> tuple:
+        """`(runtime_errors without superseded lines, lines deferred)`.
+
+        A line is superseded when its error is a missing attribute or import
+        of a name `module_ref` has already filed against the same module --
+        the definition channel adds it, and the runtime channel acting too
+        rewrites the caller around a name about to exist.
+        """
+        pending = set()
+        for findings in (missing_definitions or {}).values():
+            for f in findings:
+                m = re.search(r"`([\w.]+)\.(\w+)` is read", str(f))
+                if m:
+                    pending.add((m.group(1).split(".")[-1], m.group(2)))
+        if not pending:
+            return dict(runtime_errors or {}), 0
+        kept, deferred = {}, 0
+        for path, text in (runtime_errors or {}).items():
+            lines = []
+            for line in str(text).split("\n"):
+                hit = re.search(
+                    r"module '([\w.]+)' has no attribute '(\w+)'"
+                    r"|cannot import name '(\w+)' from '([\w.]+)'", line)
+                if hit:
+                    mod = (hit.group(1) or hit.group(4)).split(".")[-1]
+                    name = hit.group(2) or hit.group(3)
+                    if (mod, name) in pending:
+                        deferred += 1
+                        continue
+                lines.append(line)
+            if any(ln.strip() for ln in lines):
+                kept[path] = "\n".join(lines)
+        return kept, deferred
+
     def _redirect_blame_to_definition(
         self, root: str, blame: str, error: str
     ) -> tuple:
@@ -1820,6 +1865,22 @@ class Pipeline:
                 f"other modules read are not defined in "
                 f"{', '.join(sorted(missing_definitions)[:4])}"
             ]
+        # A request-time failure that is ONLY "module X has no attribute N",
+        # where N is a name the definition channel is about to add to X, is
+        # that channel's to fix. Both used to act in the same pass: row 2 on
+        # 2026-09-10 had its runtime repair rewrite `routes.get_db` to call
+        # `main.get_connection()` (no `check_same_thread=False`) 41 seconds
+        # before `module_ref` added the correct `crud.get_connection()`, and
+        # five routes died on sqlite3's thread check. Deferred, not dropped:
+        # the app is re-run after the pass, and a name the definition repair
+        # failed to add comes back to the runtime channel then.
+        runtime_raw = bool(runtime_errors)
+        runtime_errors, deferred = self._defer_to_definitions(
+            runtime_errors, missing_definitions)
+        if deferred:
+            logger.info(
+                f"  \U0001f9ed {deferred} request-time failure(s) are missing "
+                f"names the definition repair adds — deferred to it this pass")
 
         # And the same for a field the model does not declare. Row 3 on
         # 2026-09-03 failed on `product.price` with the finding naming both the
@@ -1917,6 +1978,18 @@ class Pipeline:
                 f"{sum(len(v) for v in bad_calls.values())} call(s) cannot "
                 f"match the definition they name in "
                 f"{', '.join(sorted(bad_calls)[:4])}"
+            ]
+        # A command-line tool that builds its help text and then raises when
+        # it is asked to do its job. The file to repair is the one the
+        # traceback blames, which `cli_smoke` resolves for us.
+        crashing_cli = dict(getattr(self, "_cli_targets", {}) or {})
+        for path in crashing_cli:
+            if path not in failed_paths:
+                failed_paths.append(path)
+        if crashing_cli:
+            issues = list(issues) + [
+                f"the command-line tool raises when it is run: "
+                f"{', '.join(sorted(crashing_cli)[:4])}"
             ]
 
         if not issues and not advisory:
@@ -2041,9 +2114,24 @@ class Pipeline:
 
             try:
                 if failed_paths:
+                    # A crashing CLI rides the runtime-error channel rather
+                    # than getting one of its own. That channel exists for "a
+                    # failure the RUNNING program produced, with its
+                    # traceback", repairs the file the traceback names, and is
+                    # already proven — which is exactly the shape of a CLI that
+                    # imports cleanly and then raises when invoked. A file that
+                    # somehow has both keeps both, concatenated, because
+                    # dropping either would repair half a defect.
+                    repair_errors = dict(runtime_errors)
+                    for path, notes in crashing_cli.items():
+                        text = "\n".join(str(n) for n in notes)
+                        repair_errors[path] = (
+                            f"{repair_errors[path]}\n{text}"
+                            if repair_errors.get(path) else text
+                        )
                     fresh = self.debugger.run(
                         failed_paths,
-                        runtime_errors=runtime_errors,
+                        runtime_errors=repair_errors,
                         missing_definitions=missing_definitions,
                         missing_fields=missing_fields,
                         missing_tables=missing_tables,
@@ -2157,8 +2245,24 @@ class Pipeline:
                         if sql_again is not None else {}
                     )
                     self._sql_schema_targets = dict(missing_tables)
-                    if not missing_tables:
+                    # The message must follow the CHECK's verdict, not the
+                    # emptiness of its repair-target list. Keying off targets
+                    # meant a FAILED check that published nothing printed as a
+                    # pass — which is what row 2's `464da0fb` did at 12:29:48,
+                    # two minutes before failing on the table it had just
+                    # declared present. A defect with no repair channel has to
+                    # be visible; silence is not a pass.
+                    # not_applicable is a complete answer; not_run and failed
+                    # are not, and neither may print as a pass.
+                    _sql_ok = (sql_again is None
+                               or getattr(sql_again.status, "value", "")
+                               in ("verified", "not_applicable"))
+                    if not missing_tables and _sql_ok:
                         logger.info("  ✅ Every table the code queries now exists")
+                    elif not missing_tables:
+                        logger.warning(
+                            "  ⚠️  sql_schema still reports a problem but published "
+                            "no repair target — it will be documented, not retried")
                     else:
                         for path in missing_tables:
                             if path not in failed_paths:
@@ -2217,7 +2321,14 @@ class Pipeline:
                 except Exception as e:
                     logger.warning(f"  ⚠️  route_presence re-check skipped: {e}")
 
-            if bad_calls:
+            # Re-checked after EVERY pass, not only when it failed before: a
+            # repair can introduce the mismatch. `bulk_file_renamer_15bd514f`
+            # (2026-09-10) had `from main import run` fixed in pass 1 into
+            # `rename_files(...)` with 7 arguments for a 4-parameter function.
+            # call_arity had passed, so it was not asked again; pass 2 got only
+            # the runtime error text, without the definition this channel
+            # shows the LLM, and shipped the same broken call. Static, so free.
+            if result.architecture.get("root_folder"):
                 try:
                     from tools.call_arity_check import check_call_arity
                     root = result.architecture.get("root_folder", "")
@@ -2240,12 +2351,40 @@ class Pipeline:
                 except Exception as e:
                     logger.warning(f"  ⚠️  call_arity re-check skipped: {e}")
 
+            if crashing_cli:
+                try:
+                    from tools.cli_smoke import smoke_test_cli
+                    root = result.architecture.get("root_folder", "")
+                    cli_again = smoke_test_cli(root) if root else None
+                    crashing_cli = dict(
+                        (cli_again.evidence.get("repair_targets") or {})
+                        if cli_again is not None else {}
+                    )
+                    self._cli_targets = dict(crashing_cli)
+                    if not crashing_cli:
+                        logger.info("  ✅ The command-line tool runs now")
+                    else:
+                        for path in crashing_cli:
+                            if path not in failed_paths:
+                                failed_paths.append(path)
+                        issues = list(issues) + [
+                            "the command-line tool still raises when it is run"
+                        ]
+                except Exception as e:
+                    logger.warning(f"  ⚠️  cli_smoke re-check skipped: {e}")
+
             # Re-run the app. It costs no tokens and it is the only thing that
             # can say whether a request-time repair actually worked — the
             # import check passed before the repair too.
-            if runtime_errors:
+            # `runtime_raw`, not `runtime_errors`: a pass whose every runtime
+            # failure was deferred to the definition channel must still re-run
+            # the app, or a definition repair that did not land goes unseen.
+            if runtime_errors or runtime_raw:
                 smoke_advisory = self._smoke_test_runtime(result)
                 runtime_errors = dict(getattr(self, "_smoke_runtime_errors", {}) or {})
+                runtime_raw = bool(runtime_errors)
+                runtime_errors, _ = self._defer_to_definitions(
+                    runtime_errors, missing_definitions)
                 if runtime_errors:
                     for path in runtime_errors:
                         if path not in failed_paths:
@@ -2624,6 +2763,26 @@ class Pipeline:
 
             else:
                 result.completion_reason = ""
+                # A clean build owes the reader a report too. Until this, only
+                # DEGRADED builds explained themselves: `done` shipped README
+                # and SETUP alone, so a build that passed every check while
+                # serving a 500 through an optional field said nothing at all.
+                # BUILD_REPORT.md states what was checked, what was not, and
+                # the known limits of the checks themselves.
+                try:
+                    result.session_context_path = (
+                        self.documenter.generate_build_report(
+                            intent                = result.intent,
+                            architecture          = result.architecture,
+                            backend_files         = result.backend_files,
+                            frontend_files        = result.frontend_files,
+                            verification_outcomes = getattr(
+                                result, "verification_outcomes", []),
+                            remediation           = result.remediation,
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️  BUILD_REPORT.md skipped: {e}")
                 result.complete(success=True)
 
         except PipelineCancelledError:
@@ -2713,6 +2872,7 @@ class Pipeline:
                 review_results   = result.review_results,
                 test_results     = result.test_results,
                 error_detail     = error_detail,
+                verification_outcomes = getattr(result, "verification_outcomes", []),
             )
             result.session_context_path = path
             self._emit_progress(9, "session_context", "done", {

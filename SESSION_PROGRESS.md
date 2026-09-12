@@ -1,5 +1,99 @@
 # Session Progress — start here
 
+**UPDATE 2026-09-12, later the same day — the matrix is 3 of 4 and row 2 is
+`done`.** `test_phase23.py` is **1131/1131**. A checker bug, not a model, was
+the blocker. Full detail in `PHASE23_CLOSEOUT.md` §5.
+
+> ## ▶ What changed, and the one thing that is still wrong
+>
+> **`sql_schema` counted generated TEST fixtures as application schema.** A
+> table created only in a fixture masked a table the app never creates, and
+> because the Tester rewrites fixtures every remediation pass, the mask lifted
+> and fell between passes — so row 2's `bookmarks_tags` defect only became
+> visible after both repair passes were spent. Fixed by applying the existing
+> `_is_test_file` to the schema scan. Falsified: with the guard off the mask
+> returns. Corpus: **zero** `sql_schema` diffs; rows 1 and 3 unchanged.
+>
+> **Row 2 `3aea19e3`: 0/11 routes -> 11/11 after ONE remediation pass**, status
+> `done`, 93,797 tokens. First time row 2 has reached `done`. It declares 11
+> routes including the `by_tag` filter the previous build omitted entirely, and
+> its responses now carry `id` and `tags`, which the previous build dropped.
+>
+> **But `done` + verified OVERSTATES this artifact, and the reason is new.**
+> Hand-run: `POST /bookmarks/` with the optional `tags` field returns **500**.
+> Two causes, both worth carrying forward:
+>
+> 1. The `schema_attr` repair declared `tags: List[TagRead]` on
+>    `BookmarkCreate` to satisfy the checker, while the handler iterates those
+>    entries as tag NAMES (`SELECT id FROM tags WHERE name = ?`). Every shape a
+>    caller can send is rejected or 500s. **The repair made the finding go away
+>    rather than the defect** — the standing first-order defect, again.
+> 2. **`runtime_smoke` sends REQUIRED FIELDS ONLY**, by design
+>    (`_example_model`: "the smallest body the model will accept"). A defect
+>    reachable only through an optional field is structurally invisible to it.
+>    That is a real hole, and it is why an 11/11 build ships a 500.
+>
+> Also still true of this build: `description` is accepted and silently
+> dropped — `INSERT INTO bookmarks (url, title)` never stores it.
+
+---
+
+
+**Last session: 2026-09-12 (Phase 23 — the SEVENTEENTH session). PHASE 23 IS
+CLOSED.** `test_phase23.py` is **1122/1122**. Read **`PHASE23_CLOSEOUT.md`**
+first — it is the judgement on the phase and supersedes the ▶ block below,
+which described work that is now done.
+
+> ## ▶ Phase 23 closed — what a next session needs to know
+>
+> **The phase closed on the bar the user set on 2026-09-12**: the generated app
+> need not be perfect, but the structure must be there and the handoff must say
+> honestly what to do by hand. **All four rows meet that.** Under the driver's
+> stricter criterion the matrix is 2 of 4 (rows 1 and 3); under the written
+> criterion read literally it is 4 of 4. All three readings are recorded in
+> `PHASE23_CLOSEOUT.md` §0 — do not re-derive them.
+>
+> **Both re-run rows improved, and both were hand-verified against the running
+> artifact, not just read off the record.**
+>
+> * **Row 4** (`bc9d1317`, `done_with_context`, 80,093 tokens) is the **first
+>   row-4 build ever to satisfy the whole prompt** — rename, pattern, dry-run
+>   and undo all work through `cli.py`. It still ships a second, redundant
+>   `main.py` that crashes (`'str' object has no attribute 'rglob'`), which is
+>   why `cli_smoke` failed it, correctly.
+> * **Row 2** (`464da0fb`, `done_with_context`, 90,937 tokens) went from
+>   `unusable` at 0/6 routes to **6/6 responding**. The prompt thread rule and
+>   `_repair_db_paths` both landed live. Tag filtering was never wired to a
+>   route, and its one open `sql_schema` finding is **latent dead code** — real,
+>   but nothing calls it.
+>
+> **The blocker remains generation quality, not verification.** Every check that
+> fired this session was correct and none fired on working code.
+>
+> **The next concrete task, with the clearest evidence it has ever had:**
+> `call_arity` compares argument COUNTS, not TYPES. Row 4's `main.py` passed it
+> with the right count and the wrong type. Falsify on the corpus first — 4 of 6
+> new verifiers have reported defects that did not exist.
+
+### §0.-20 The handoff document lied in two directions, and both are fixed
+
+Found by reading what a real build shipped, not by reasoning about the code.
+
+1. It asserted *"The application itself was executed and verified"* for every
+   build with any manual-check item — including `01cde425`, whose every endpoint
+   returned 500. Now conditional on `unresolved`. Missing tests deliberately do
+   not trip it. **Confirmed live** on row 2's new build.
+2. It listed only defects, so a build serving all five CRUD endpoints read as
+   broken. A **What Already Works** section is now built from
+   `verification_outcomes`, using only checks that EXECUTED the artifact and
+   passed — `not_applicable`, `not_run` and `failed` excluded, section omitted
+   entirely when nothing qualifies. **Takes effect on the next build**; the two
+   builds above predate the wiring and their docs were deliberately not
+   hand-edited.
+
+---
+
+
 **Last session: 2026-09-08 (Phase 23 — the fourteenth session).**
 `test_phase23.py` is **1049/1049**. **All four rows have now run against this
 code.** The matrix stands at **2 of 4** — rows 1 (`156f73a3`, `done`, 5/5) and 3
